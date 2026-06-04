@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS refresh_tokens;
+
+DROP TABLE IF EXISTS team_members;
+
+DROP TABLE IF EXISTS users;
+
+DROP TABLE IF EXISTS teams;
+
+DROP TYPE IF EXISTS team_role;
