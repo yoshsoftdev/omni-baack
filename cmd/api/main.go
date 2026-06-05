@@ -107,9 +107,9 @@ func main() {
 	conversationHandler := conversation.NewHandler(conversationService)
 
 	messageRepo := message.NewRepository(db)
-	messageService := message.NewService(messageRepo, conversationService, contactService, deviceRepo, teamRepo, metaClient, wsHub)
+	messageService := message.NewService(messageRepo, conversationService, contactService, deviceRepo, teamRepo, userRepo, metaClient, wsHub)
 	messageHandler := message.NewHandler(messageService)
-	metaHandler := metahandler.NewHandler(cfg.Meta, messageService, log)
+	metaHandler := metahandler.NewHandler(cfg.Meta, messageService)
 
 	app := api.NewRouter(api.Deps{
 		Config:              cfg,

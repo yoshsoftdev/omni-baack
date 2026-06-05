@@ -12,6 +12,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
 	"github.com/omnichannel/omni-chan-v2/internal/device"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
+	"github.com/omnichannel/omni-chan-v2/internal/user"
 	"github.com/omnichannel/omni-chan-v2/internal/websocket/hub"
 	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
 	"github.com/omnichannel/omni-chan-v2/pkg/phone"
@@ -30,6 +31,7 @@ type Service struct {
 	contacts      *contact.Service
 	devices       device.Repository
 	teams         team.Repository
+	users         user.Repository
 	meta          *metaclient.Client
 	ws            *hub.Hub
 }
@@ -40,6 +42,7 @@ func NewService(
 	contacts *contact.Service,
 	devices device.Repository,
 	teams team.Repository,
+	users user.Repository,
 	meta *metaclient.Client,
 	wsHub *hub.Hub,
 ) *Service {
@@ -49,6 +52,7 @@ func NewService(
 		contacts:      contacts,
 		devices:       devices,
 		teams:         teams,
+		users:         users,
 		meta:          meta,
 		ws:            wsHub,
 	}
@@ -111,11 +115,20 @@ func (s *Service) Send(ctx context.Context, teamID, userID, conversationID uuid.
 		return nil, err
 	}
 
+	sender, err := s.users.FindByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
 	now := time.Now().UTC()
 	deviceID := dev.ID
 	contactID := detail.ContactID
 	wamidStr := wamid
 	senderPhone := deref(dev.PhoneNumber, "system")
+	senderName := sender.Name
+	if strings.TrimSpace(senderName) == "" {
+		senderName = sender.Email
+	}
 
 	msg := &Message{
 		ID:             uuid.New(),
@@ -123,10 +136,12 @@ func (s *Service) Send(ctx context.Context, teamID, userID, conversationID uuid.
 		ConversationID: conversationID,
 		DeviceID:       &deviceID,
 		ContactID:      &contactID,
+		SentBy:         &userID,
 		WAMID:          &wamidStr,
 		Direction:      DirectionOutbound,
 		Content:        content,
 		SenderPhone:    senderPhone,
+		SenderName:     senderName,
 		SentAt:         now,
 		CreatedAt:      now,
 		UpdatedAt:      now,
@@ -180,6 +195,7 @@ func (s *Service) HandleMetaInbound(ctx context.Context, inbound metaclient.Inbo
 		Direction:      DirectionInbound,
 		Content:        inbound.Content,
 		SenderPhone:    normalizedPhone,
+		SenderName:     contactEntity.Name,
 		SentAt:         now,
 		CreatedAt:      now,
 		UpdatedAt:      now,
