@@ -10,10 +10,13 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/api"
 	"github.com/omnichannel/omni-chan-v2/internal/auth"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
+	"github.com/omnichannel/omni-chan-v2/internal/contact"
+	"github.com/omnichannel/omni-chan-v2/internal/conversation"
 	"github.com/omnichannel/omni-chan-v2/internal/device"
-	"github.com/omnichannel/omni-chan-v2/internal/inbox"
+	"github.com/omnichannel/omni-chan-v2/internal/message"
 	metahandler "github.com/omnichannel/omni-chan-v2/internal/meta"
 	"github.com/omnichannel/omni-chan-v2/internal/storage"
+	"github.com/omnichannel/omni-chan-v2/internal/tag"
 	wsserver "github.com/omnichannel/omni-chan-v2/internal/websocket"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
 	"github.com/omnichannel/omni-chan-v2/internal/user"
@@ -91,21 +94,36 @@ func main() {
 	deviceService := device.NewService(deviceRepo, teamRepo, metaClient)
 	deviceHandler := device.NewHandler(deviceService)
 
-	inboxRepo := inbox.NewRepository(db)
-	inboxService := inbox.NewService(inboxRepo, deviceRepo, metaClient, wsHub)
-	inboxHandler := inbox.NewHandler(inboxService)
-	metaHandler := metahandler.NewHandler(cfg.Meta, inboxService, log)
+	tagRepo := tag.NewRepository(db)
+	tagService := tag.NewService(tagRepo, teamRepo)
+	tagHandler := tag.NewHandler(tagService)
+
+	contactRepo := contact.NewRepository(db)
+	contactService := contact.NewService(contactRepo, tagRepo, teamRepo)
+	contactHandler := contact.NewHandler(contactService)
+
+	conversationRepo := conversation.NewRepository(db)
+	conversationService := conversation.NewService(conversationRepo, teamRepo, wsHub)
+	conversationHandler := conversation.NewHandler(conversationService)
+
+	messageRepo := message.NewRepository(db)
+	messageService := message.NewService(messageRepo, conversationService, contactService, deviceRepo, teamRepo, metaClient, wsHub)
+	messageHandler := message.NewHandler(messageService)
+	metaHandler := metahandler.NewHandler(cfg.Meta, messageService, log)
 
 	app := api.NewRouter(api.Deps{
-		Config:        cfg,
-		Logger:        log,
-		DB:            db,
-		AuthHandler:   authHandler,
-		TeamHandler:   teamHandler,
-		DeviceHandler: deviceHandler,
-		InboxHandler:  inboxHandler,
-		MetaHandler:   metaHandler,
-		JWT:           jwt,
+		Config:              cfg,
+		Logger:              log,
+		DB:                  db,
+		AuthHandler:         authHandler,
+		TeamHandler:         teamHandler,
+		DeviceHandler:       deviceHandler,
+		MetaHandler:         metaHandler,
+		ContactHandler:      contactHandler,
+		TagHandler:          tagHandler,
+		ConversationHandler: conversationHandler,
+		MessageHandler:      messageHandler,
+		JWT:                 jwt,
 	})
 
 	wsserver.Register(app, wsHub, jwt, log)

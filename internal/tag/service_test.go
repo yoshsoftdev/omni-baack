@@ -1,0 +1,83 @@
+package tag
+
+import (
+	"context"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/omnichannel/omni-chan-v2/internal/team"
+)
+
+type mockTagRepo struct {
+	tags map[uuid.UUID]*Tag
+}
+
+func (m *mockTagRepo) Create(ctx context.Context, tag *Tag) error {
+	m.tags[tag.ID] = tag
+	return nil
+}
+func (m *mockTagRepo) FindByID(ctx context.Context, teamID, tagID uuid.UUID) (*Tag, error) {
+	t, ok := m.tags[tagID]
+	if !ok || t.TeamID != teamID {
+		return nil, ErrNotFound
+	}
+	return t, nil
+}
+func (m *mockTagRepo) ListByTeam(ctx context.Context, teamID uuid.UUID) ([]Tag, error) {
+	return nil, nil
+}
+func (m *mockTagRepo) Update(ctx context.Context, tag *Tag) error { return nil }
+func (m *mockTagRepo) SoftDelete(ctx context.Context, teamID, tagID uuid.UUID) error {
+	return nil
+}
+
+type mockTeamRepo struct {
+	members map[string]team.Member
+}
+
+func (m *mockTeamRepo) Create(ctx context.Context, t *team.Team) error { return nil }
+func (m *mockTeamRepo) FindByID(ctx context.Context, id uuid.UUID) (*team.Team, error) {
+	return nil, team.ErrNotFound
+}
+func (m *mockTeamRepo) Update(ctx context.Context, t *team.Team) error { return nil }
+func (m *mockTeamRepo) CreateMember(ctx context.Context, member *team.Member) error { return nil }
+func (m *mockTeamRepo) FindPrimaryMembership(ctx context.Context, userID uuid.UUID) (*team.Member, error) {
+	return nil, team.ErrMemberNotFound
+}
+func (m *mockTeamRepo) FindMemberByUser(ctx context.Context, teamID, userID uuid.UUID) (*team.Member, error) {
+	member, ok := m.members[teamID.String()+":"+userID.String()]
+	if !ok {
+		return nil, team.ErrMemberNotFound
+	}
+	return &member, nil
+}
+func (m *mockTeamRepo) FindMemberByID(ctx context.Context, teamID, memberID uuid.UUID) (*team.Member, error) {
+	return nil, team.ErrMemberNotFound
+}
+func (m *mockTeamRepo) ListMembers(ctx context.Context, teamID uuid.UUID) ([]team.MemberWithUser, error) {
+	return nil, nil
+}
+func (m *mockTeamRepo) UpdateMemberRole(ctx context.Context, teamID, memberID uuid.UUID, role team.Role) error {
+	return nil
+}
+func (m *mockTeamRepo) SoftDeleteMember(ctx context.Context, teamID, memberID uuid.UUID) error {
+	return nil
+}
+
+func TestService_Create(t *testing.T) {
+	teamID := uuid.New()
+	userID := uuid.New()
+	svc := NewService(&mockTagRepo{tags: map[uuid.UUID]*Tag{}}, &mockTeamRepo{
+		members: map[string]team.Member{
+			teamID.String() + ":" + userID.String(): {Role: team.RoleOwner},
+		},
+	})
+
+	tag, err := svc.Create(context.Background(), teamID, userID, team.RoleOwner, CreateInput{Name: "VIP"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if tag.Color != "#6366f1" {
+		t.Fatalf("unexpected color %s", tag.Color)
+	}
+}
