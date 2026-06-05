@@ -10,13 +10,18 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/api"
 	"github.com/omnichannel/omni-chan-v2/internal/auth"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
+	"github.com/omnichannel/omni-chan-v2/internal/device"
+	"github.com/omnichannel/omni-chan-v2/internal/inbox"
+	metahandler "github.com/omnichannel/omni-chan-v2/internal/meta"
 	"github.com/omnichannel/omni-chan-v2/internal/storage"
+	wsserver "github.com/omnichannel/omni-chan-v2/internal/websocket"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
 	"github.com/omnichannel/omni-chan-v2/internal/user"
 	"github.com/omnichannel/omni-chan-v2/internal/websocket/hub"
 	jwtmanager "github.com/omnichannel/omni-chan-v2/pkg/jwt"
 	"github.com/omnichannel/omni-chan-v2/pkg/database"
 	"github.com/omnichannel/omni-chan-v2/pkg/logger"
+	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
 	"github.com/omnichannel/omni-chan-v2/pkg/migrate"
 	redisclient "github.com/omnichannel/omni-chan-v2/pkg/redis"
 )
@@ -80,14 +85,30 @@ func main() {
 	teamService := team.NewService(teamRepo, userRepo)
 	teamHandler := team.NewHandler(teamService)
 
+	metaClient := metaclient.NewClient(cfg.Meta.APIVersion)
+
+	deviceRepo := device.NewRepository(db)
+	deviceService := device.NewService(deviceRepo, teamRepo, metaClient)
+	deviceHandler := device.NewHandler(deviceService)
+
+	inboxRepo := inbox.NewRepository(db)
+	inboxService := inbox.NewService(inboxRepo, deviceRepo, metaClient, wsHub)
+	inboxHandler := inbox.NewHandler(inboxService)
+	metaHandler := metahandler.NewHandler(cfg.Meta, inboxService, log)
+
 	app := api.NewRouter(api.Deps{
-		Config:      cfg,
-		Logger:      log,
-		DB:          db,
-		AuthHandler: authHandler,
-		TeamHandler: teamHandler,
-		JWT:         jwt,
+		Config:        cfg,
+		Logger:        log,
+		DB:            db,
+		AuthHandler:   authHandler,
+		TeamHandler:   teamHandler,
+		DeviceHandler: deviceHandler,
+		InboxHandler:  inboxHandler,
+		MetaHandler:   metaHandler,
+		JWT:           jwt,
 	})
+
+	wsserver.Register(app, wsHub, jwt, log)
 
 	go func() {
 		log.Info("server starting", "addr", cfg.HTTP.Addr())

@@ -16,6 +16,13 @@ type Config struct {
 	Redis    RedisConfig
 	Storage  StorageConfig
 	JWT      JWTConfig
+	Meta     MetaConfig
+}
+
+type MetaConfig struct {
+	AppSecret   string
+	VerifyToken string
+	APIVersion  string
 }
 
 type AppConfig struct {
@@ -100,6 +107,11 @@ func Load() (*Config, error) {
 			AccessTTL:     getEnvDuration("JWT_ACCESS_TTL", 15*time.Minute),
 			RefreshTTL:    getEnvDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
 		},
+		Meta: MetaConfig{
+			AppSecret:   getEnv("META_APP_SECRET", ""),
+			VerifyToken: getEnv("META_VERIFY_TOKEN", ""),
+			APIVersion:  getEnv("META_API_VERSION", "v21.0"),
+		},
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -128,6 +140,9 @@ func (c *Config) Validate() error {
 		} else {
 			return fmt.Errorf("JWT_ACCESS_SECRET and JWT_REFRESH_SECRET are required")
 		}
+	}
+	if c.Meta.VerifyToken == "" && c.App.Env == "development" {
+		c.Meta.VerifyToken = "dev-meta-verify-token"
 	}
 	return nil
 }

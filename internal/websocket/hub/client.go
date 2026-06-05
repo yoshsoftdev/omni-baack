@@ -55,3 +55,13 @@ func (c *Client) WritePump() {
 		}
 	}
 }
+
+// Send enqueues a payload to be written to the WebSocket connection.
+// It is safe for concurrent use by event publishers.
+func (c *Client) Send(payload []byte) {
+	select {
+	case c.send <- payload:
+	default:
+		// Drop messages when the client is slow; avoids blocking hub.
+	}
+}

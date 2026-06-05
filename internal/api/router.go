@@ -8,6 +8,9 @@ import (
 	v1 "github.com/omnichannel/omni-chan-v2/internal/api/v1"
 	"github.com/omnichannel/omni-chan-v2/internal/auth"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
+	"github.com/omnichannel/omni-chan-v2/internal/device"
+	"github.com/omnichannel/omni-chan-v2/internal/inbox"
+	metahandler "github.com/omnichannel/omni-chan-v2/internal/meta"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
 	jwtmanager "github.com/omnichannel/omni-chan-v2/pkg/jwt"
 	"github.com/omnichannel/omni-chan-v2/pkg/database"
@@ -19,8 +22,11 @@ type Deps struct {
 	Logger      *logger.Logger
 	DB          *database.DB
 	AuthHandler *auth.Handler
-	TeamHandler *team.Handler
-	JWT         *jwtmanager.Manager
+	TeamHandler   *team.Handler
+	DeviceHandler *device.Handler
+	InboxHandler  *inbox.Handler
+	MetaHandler   *metahandler.Handler
+	JWT           *jwtmanager.Manager
 }
 
 func NewRouter(deps Deps) *fiber.App {
@@ -40,9 +46,12 @@ func NewRouter(deps Deps) *fiber.App {
 
 	apiGroup := app.Group("/api")
 	v1.Register(apiGroup.Group("/v1"), v1.Deps{
-		AuthHandler: deps.AuthHandler,
-		TeamHandler: deps.TeamHandler,
-		JWT:         deps.JWT,
+		AuthHandler:   deps.AuthHandler,
+		TeamHandler:   deps.TeamHandler,
+		DeviceHandler: deps.DeviceHandler,
+		InboxHandler:  deps.InboxHandler,
+		MetaHandler:   deps.MetaHandler,
+		JWT:           deps.JWT,
 	})
 
 	return app
