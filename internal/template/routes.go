@@ -1,4 +1,4 @@
-package broadcast
+package template
 
 import (
 	"github.com/gofiber/fiber/v2"
@@ -7,9 +7,7 @@ import (
 )
 
 func RegisterRoutes(router fiber.Router, handler *Handler, jwt *jwtmanager.Manager) {
-	broadcasts := router.Group("/broadcasts", middleware.Auth(jwt))
-	broadcasts.Get("/", handler.List)
-	broadcasts.Post("/", handler.Create)
-	broadcasts.Get("/:id", handler.Get)
-	broadcasts.Post("/:id/cancel", handler.Cancel)
+	group := router.Group("/templates", middleware.Auth(jwt))
+	group.Get("/", handler.List)
+	group.Post("/sync", handler.Sync)
 }

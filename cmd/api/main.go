@@ -9,6 +9,7 @@ import (
 
 	"github.com/omnichannel/omni-chan-v2/internal/api"
 	"github.com/omnichannel/omni-chan-v2/internal/auth"
+	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
@@ -17,12 +18,14 @@ import (
 	metahandler "github.com/omnichannel/omni-chan-v2/internal/meta"
 	"github.com/omnichannel/omni-chan-v2/internal/storage"
 	"github.com/omnichannel/omni-chan-v2/internal/tag"
+	"github.com/omnichannel/omni-chan-v2/internal/template"
 	wsserver "github.com/omnichannel/omni-chan-v2/internal/websocket"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
 	"github.com/omnichannel/omni-chan-v2/internal/user"
 	"github.com/omnichannel/omni-chan-v2/internal/websocket/hub"
 	jwtmanager "github.com/omnichannel/omni-chan-v2/pkg/jwt"
 	"github.com/omnichannel/omni-chan-v2/pkg/database"
+	"github.com/omnichannel/omni-chan-v2/pkg/campaignqueue"
 	"github.com/omnichannel/omni-chan-v2/pkg/logger"
 	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
 	"github.com/omnichannel/omni-chan-v2/pkg/migrate"
@@ -111,6 +114,20 @@ func main() {
 	messageHandler := message.NewHandler(messageService)
 	metaHandler := metahandler.NewHandler(cfg.Meta, messageService)
 
+	templateRepo := template.NewRepository(db)
+	templateService := template.NewService(templateRepo, deviceRepo, teamRepo, metaClient)
+	templateHandler := template.NewHandler(templateService)
+
+	campaignQueue := campaignqueue.NewRedisQueue(rdb.Client)
+	campaignRepo := campaign.NewRepository(db)
+	campaignService := campaign.NewService(campaignRepo, contactRepo, deviceRepo, templateRepo, teamRepo, campaignQueue)
+	campaignHandler := campaign.NewHandler(campaignService)
+	campaignWorker := campaign.NewWorker(campaignRepo, contactRepo, deviceRepo, templateRepo, campaignQueue, metaClient, log)
+	campaignScheduler := campaign.NewScheduler(campaignService, log)
+
+	go campaignWorker.Start(ctx)
+	go campaignScheduler.Start(ctx)
+
 	app := api.NewRouter(api.Deps{
 		Config:              cfg,
 		Logger:              log,
@@ -123,6 +140,8 @@ func main() {
 		TagHandler:          tagHandler,
 		ConversationHandler: conversationHandler,
 		MessageHandler:      messageHandler,
+		TemplateHandler:     templateHandler,
+		CampaignHandler:     campaignHandler,
 		JWT:                 jwt,
 	})
 

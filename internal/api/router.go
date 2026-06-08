@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/requestid"
 	v1 "github.com/omnichannel/omni-chan-v2/internal/api/v1"
 	"github.com/omnichannel/omni-chan-v2/internal/auth"
+	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
@@ -14,6 +15,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/message"
 	metahandler "github.com/omnichannel/omni-chan-v2/internal/meta"
 	"github.com/omnichannel/omni-chan-v2/internal/tag"
+	"github.com/omnichannel/omni-chan-v2/internal/template"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
 	jwtmanager "github.com/omnichannel/omni-chan-v2/pkg/jwt"
 	"github.com/omnichannel/omni-chan-v2/pkg/database"
@@ -32,6 +34,8 @@ type Deps struct {
 	TagHandler          *tag.Handler
 	ConversationHandler *conversation.Handler
 	MessageHandler      *message.Handler
+	TemplateHandler     *template.Handler
+	CampaignHandler     *campaign.Handler
 	JWT                 *jwtmanager.Manager
 }
 
@@ -60,6 +64,8 @@ func NewRouter(deps Deps) *fiber.App {
 		TagHandler:          deps.TagHandler,
 		ConversationHandler: deps.ConversationHandler,
 		MessageHandler:      deps.MessageHandler,
+		TemplateHandler:     deps.TemplateHandler,
+		CampaignHandler:     deps.CampaignHandler,
 		JWT:                 deps.JWT,
 	})
 

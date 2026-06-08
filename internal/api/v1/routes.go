@@ -4,12 +4,14 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/auth"
+	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
 	"github.com/omnichannel/omni-chan-v2/internal/device"
 	"github.com/omnichannel/omni-chan-v2/internal/message"
 	metahandler "github.com/omnichannel/omni-chan-v2/internal/meta"
 	"github.com/omnichannel/omni-chan-v2/internal/tag"
+	"github.com/omnichannel/omni-chan-v2/internal/template"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
 	jwtmanager "github.com/omnichannel/omni-chan-v2/pkg/jwt"
 )
@@ -23,6 +25,8 @@ type Deps struct {
 	TagHandler          *tag.Handler
 	ConversationHandler *conversation.Handler
 	MessageHandler      *message.Handler
+	TemplateHandler     *template.Handler
+	CampaignHandler     *campaign.Handler
 	JWT                 *jwtmanager.Manager
 }
 
@@ -52,6 +56,12 @@ func Register(router fiber.Router, deps Deps) {
 	}
 	if deps.MessageHandler != nil {
 		message.RegisterRoutes(router, deps.MessageHandler, deps.JWT)
+	}
+	if deps.TemplateHandler != nil {
+		template.RegisterRoutes(router, deps.TemplateHandler, deps.JWT)
+	}
+	if deps.CampaignHandler != nil {
+		campaign.RegisterRoutes(router, deps.CampaignHandler, deps.JWT)
 	}
 	if deps.MetaHandler != nil {
 		metahandler.RegisterRoutes(router, deps.MetaHandler)

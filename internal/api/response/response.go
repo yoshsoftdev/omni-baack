@@ -24,6 +24,14 @@ func Created(c *fiber.Ctx, message string, data interface{}) error {
 	})
 }
 
+func Accepted(c *fiber.Ctx, message string, data interface{}) error {
+	return c.Status(fiber.StatusAccepted).JSON(Body{
+		Success: true,
+		Message: message,
+		Data:    data,
+	})
+}
+
 func Fail(c *fiber.Ctx, status int, message string) error {
 	return c.Status(status).JSON(Body{
 		Success: false,
