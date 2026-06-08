@@ -17,7 +17,7 @@ var ErrNotFound = errors.New("template not found")
 type Repository interface {
 	Upsert(ctx context.Context, tpl *Template) error
 	FindByID(ctx context.Context, teamID, templateID uuid.UUID) (*Template, error)
-	ListByTeam(ctx context.Context, teamID uuid.UUID, deviceID *uuid.UUID) ([]Template, error)
+	ListByTeam(ctx context.Context, teamID uuid.UUID, filter ListFilter) ([]Template, error)
 }
 
 type PostgresRepository struct {
@@ -68,7 +68,7 @@ func (r *PostgresRepository) FindByID(ctx context.Context, teamID, templateID uu
 	return r.scanOne(r.db.Pool.QueryRow(ctx, query, templateID, teamID))
 }
 
-func (r *PostgresRepository) ListByTeam(ctx context.Context, teamID uuid.UUID, deviceID *uuid.UUID) ([]Template, error) {
+func (r *PostgresRepository) ListByTeam(ctx context.Context, teamID uuid.UUID, filter ListFilter) ([]Template, error) {
 	query := `
 		SELECT id, team_id, device_id, waba_id, meta_template_id, name, language,
 			category, status, components, created_at, updated_at, deleted_at
@@ -76,10 +76,33 @@ func (r *PostgresRepository) ListByTeam(ctx context.Context, teamID uuid.UUID, d
 		WHERE team_id = $1 AND deleted_at IS NULL
 	`
 	args := []any{teamID}
-	if deviceID != nil {
-		query += ` AND device_id = $2`
-		args = append(args, *deviceID)
+	argPos := 2
+	if filter.DeviceID != nil && *filter.DeviceID != "" {
+		query += fmt.Sprintf(` AND device_id = $%d`, argPos)
+		args = append(args, *filter.DeviceID)
+		argPos++
 	}
+	if filter.Search != "" {
+		query += fmt.Sprintf(` AND (name ILIKE $%d OR language ILIKE $%d)`, argPos, argPos)
+		args = append(args, "%"+filter.Search+"%")
+		argPos++
+	}
+	if filter.Language != "" && filter.Language != "all" {
+		query += fmt.Sprintf(` AND language ILIKE $%d`, argPos)
+		args = append(args, "%"+filter.Language+"%")
+		argPos++
+	}
+	if filter.Category != "" && filter.Category != "all" {
+		query += fmt.Sprintf(` AND category ILIKE $%d`, argPos)
+		args = append(args, filter.Category)
+		argPos++
+	}
+	if filter.Status != "" && filter.Status != "all" {
+		query += fmt.Sprintf(` AND status ILIKE $%d`, argPos)
+		args = append(args, filter.Status)
+		argPos++
+	}
+	_ = argPos
 	query += ` ORDER BY name ASC, language ASC`
 
 	rows, err := r.db.Pool.Query(ctx, query, args...)

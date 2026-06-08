@@ -80,12 +80,37 @@ type Response struct {
 	DeliveredCount  int             `json:"delivered_count"`
 	ReadCount       int             `json:"read_count"`
 	FailedCount     int             `json:"failed_count"`
+	DeviceName      *string         `json:"device_name,omitempty"`
+	DevicePhone     *string         `json:"device_phone,omitempty"`
+	TemplateName    *string         `json:"template_name,omitempty"`
+	TemplateLanguage *string        `json:"template_language,omitempty"`
+	TemplateCategory *string        `json:"template_category,omitempty"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
+type DeliveryBreakdown struct {
+	Label string `json:"label"`
+	Value int    `json:"value"`
+}
+
+type HourlyPerformance struct {
+	Hour  int `json:"hour"`
+	Count int `json:"count"`
+}
+
 type ReportResponse struct {
 	Response
+	DeliveryBreakdown []DeliveryBreakdown `json:"delivery_breakdown,omitempty"`
+	HourlyPerformance []HourlyPerformance `json:"hourly_performance,omitempty"`
+}
+
+type OverviewResponse struct {
+	TotalCampaigns int     `json:"total_campaigns"`
+	TotalSent      int     `json:"total_sent"`
+	DeliveredRate  float64 `json:"delivered_rate"`
+	ReadRate       float64 `json:"read_rate"`
+	FailedRate     float64 `json:"failed_rate"`
 }
 
 func ToResponse(c *Campaign) Response {

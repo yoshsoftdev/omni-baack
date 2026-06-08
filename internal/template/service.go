@@ -49,11 +49,11 @@ type SyncResult struct {
 	Synced int `json:"synced"`
 }
 
-func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID, deviceID *uuid.UUID) ([]Response, error) {
+func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID, filter ListFilter) ([]Response, error) {
 	if err := s.ensureMember(ctx, teamID, userID); err != nil {
 		return nil, err
 	}
-	items, err := s.templates.ListByTeam(ctx, teamID, deviceID)
+	items, err := s.templates.ListByTeam(ctx, teamID, filter)
 	if err != nil {
 		return nil, err
 	}

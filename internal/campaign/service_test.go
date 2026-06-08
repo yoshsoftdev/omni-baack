@@ -59,6 +59,9 @@ func (m *mockCampaignRepo) ListTagIDs(ctx context.Context, campaignID uuid.UUID)
 func (m *mockCampaignRepo) ListAudienceContactIDs(ctx context.Context, campaignID uuid.UUID) ([]uuid.UUID, error) {
 	return nil, nil
 }
+func (m *mockCampaignRepo) ListContactsByCampaign(ctx context.Context, campaignID uuid.UUID) ([]CampaignContact, error) {
+	return nil, nil
+}
 
 type mockContactRepo struct{}
 
@@ -108,7 +111,7 @@ func (m *mockTemplateRepo) Upsert(ctx context.Context, tpl *template.Template) e
 func (m *mockTemplateRepo) FindByID(ctx context.Context, teamID, templateID uuid.UUID) (*template.Template, error) {
 	return &template.Template{ID: templateID, TeamID: teamID, Name: "hello_world", Language: "en_US"}, nil
 }
-func (m *mockTemplateRepo) ListByTeam(ctx context.Context, teamID uuid.UUID, deviceID *uuid.UUID) ([]template.Template, error) {
+func (m *mockTemplateRepo) ListByTeam(ctx context.Context, teamID uuid.UUID, filter template.ListFilter) ([]template.Template, error) {
 	return nil, nil
 }
 

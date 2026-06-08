@@ -112,6 +112,34 @@ func (h *Handler) Send(c *fiber.Ctx) error {
 	return response.Accepted(c, "campaign queued", item)
 }
 
+func (h *Handler) Overview(c *fiber.Ctx) error {
+	claims, err := middleware.ClaimsFromContext(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	overview, err := h.service.GetOverview(c.Context(), claims.TeamID, claims.UserID)
+	if err != nil {
+		return h.mapError(c, err)
+	}
+	return response.OK(c, "ok", overview)
+}
+
+func (h *Handler) Cancel(c *fiber.Ctx) error {
+	claims, err := middleware.ClaimsFromContext(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	campaignID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return response.BadRequest(c, "invalid campaign id")
+	}
+	item, err := h.service.Cancel(c.Context(), claims.TeamID, claims.UserID, team.Role(claims.Role), campaignID)
+	if err != nil {
+		return h.mapError(c, err)
+	}
+	return response.OK(c, "campaign cancelled", item)
+}
+
 func (h *Handler) Report(c *fiber.Ctx) error {
 	claims, err := middleware.ClaimsFromContext(c)
 	if err != nil {
@@ -139,7 +167,8 @@ func (h *Handler) mapError(c *fiber.Ctx, err error) error {
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrTemplateNotFound), errors.Is(err, ErrDeviceNotFound):
 		return response.NotFound(c, err.Error())
 	case errors.Is(err, ErrNameRequired), errors.Is(err, ErrRecipientsRequired),
-		errors.Is(err, ErrInvalidStatus), errors.Is(err, ErrDeviceNotConnected):
+		errors.Is(err, ErrInvalidStatus), errors.Is(err, ErrDeviceNotConnected),
+		errors.Is(err, ErrCannotCancel):
 		return response.BadRequest(c, err.Error())
 	default:
 		if strings.Contains(err.Error(), "variable_mapping") {

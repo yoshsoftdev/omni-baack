@@ -30,6 +30,7 @@ type Repository interface {
 	RecalculateCounts(ctx context.Context, campaignID uuid.UUID) error
 	ListTagIDs(ctx context.Context, campaignID uuid.UUID) ([]uuid.UUID, error)
 	ListAudienceContactIDs(ctx context.Context, campaignID uuid.UUID) ([]uuid.UUID, error)
+	ListContactsByCampaign(ctx context.Context, campaignID uuid.UUID) ([]CampaignContact, error)
 }
 
 type PostgresRepository struct {
@@ -292,6 +293,31 @@ func (r *PostgresRepository) UpdateContactStatus(ctx context.Context, wamid stri
 	}
 	_, err := r.db.Pool.Exec(ctx, query, wamid, string(status), at)
 	return err
+}
+
+func (r *PostgresRepository) ListContactsByCampaign(ctx context.Context, campaignID uuid.UUID) ([]CampaignContact, error) {
+	query := `
+		SELECT id, campaign_id, contact_id, phone, status, wamid, error_message,
+			sent_at, delivered_at, read_at, created_at
+		FROM campaign_contacts
+		WHERE campaign_id = $1
+		ORDER BY created_at ASC
+	`
+	rows, err := r.db.Pool.Query(ctx, query, campaignID)
+	if err != nil {
+		return nil, fmt.Errorf("list campaign contacts: %w", err)
+	}
+	defer rows.Close()
+
+	var items []CampaignContact
+	for rows.Next() {
+		item, err := r.scanContactRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *item)
+	}
+	return items, rows.Err()
 }
 
 func (r *PostgresRepository) ListAudienceContactIDs(ctx context.Context, campaignID uuid.UUID) ([]uuid.UUID, error) {

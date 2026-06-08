@@ -23,6 +23,7 @@ var (
 	ErrDeviceNotConnected = errors.New("device is not connected")
 	ErrTemplateNotFound   = errors.New("template not found")
 	ErrInvalidStatus      = errors.New("campaign cannot be sent in current status")
+	ErrCannotCancel       = errors.New("campaign cannot be cancelled")
 )
 
 type Service struct {
@@ -72,9 +73,40 @@ func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID) ([]Respons
 	}
 	responses := make([]Response, 0, len(items))
 	for i := range items {
-		responses = append(responses, ToResponse(&items[i]))
+		resp, err := s.enrichResponse(ctx, teamID, &items[i])
+		if err != nil {
+			return nil, err
+		}
+		responses = append(responses, resp)
 	}
 	return responses, nil
+}
+
+func (s *Service) GetOverview(ctx context.Context, teamID, userID uuid.UUID) (*OverviewResponse, error) {
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	items, err := s.campaigns.ListByTeam(ctx, teamID, 500)
+	if err != nil {
+		return nil, err
+	}
+	overview := &OverviewResponse{}
+	var totalSent, totalDelivered, totalRead, totalFailed int
+	for i := range items {
+		c := items[i]
+		overview.TotalCampaigns++
+		totalSent += c.SentCount
+		totalDelivered += c.DeliveredCount
+		totalRead += c.ReadCount
+		totalFailed += c.FailedCount
+	}
+	overview.TotalSent = totalSent
+	if totalSent > 0 {
+		overview.DeliveredRate = float64(totalDelivered) / float64(totalSent) * 100
+		overview.ReadRate = float64(totalRead) / float64(totalSent) * 100
+		overview.FailedRate = float64(totalFailed) / float64(totalSent) * 100
+	}
+	return overview, nil
 }
 
 func (s *Service) GetReport(ctx context.Context, teamID, userID, campaignID uuid.UUID) (*ReportResponse, error) {
@@ -85,8 +117,85 @@ func (s *Service) GetReport(ctx context.Context, teamID, userID, campaignID uuid
 	if err != nil {
 		return nil, err
 	}
-	report := ToReport(item)
+	resp, err := s.enrichResponse(ctx, teamID, item)
+	if err != nil {
+		return nil, err
+	}
+	report := ReportResponse{Response: resp}
+	report.DeliveryBreakdown = buildDeliveryBreakdown(item)
+	report.HourlyPerformance = buildHourlyPerformance(ctx, s.campaigns, campaignID)
 	return &report, nil
+}
+
+func (s *Service) Cancel(ctx context.Context, teamID, userID uuid.UUID, role team.Role, campaignID uuid.UUID) (*Response, error) {
+	if !canManage(role) {
+		return nil, ErrForbidden
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	campaign, err := s.campaigns.FindByID(ctx, teamID, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	if campaign.Status != StatusScheduled && campaign.Status != StatusDraft {
+		return nil, ErrCannotCancel
+	}
+	now := time.Now().UTC()
+	campaign.Status = StatusCancelled
+	campaign.UpdatedAt = now
+	if err := s.campaigns.Update(ctx, campaign); err != nil {
+		return nil, err
+	}
+	resp, err := s.enrichResponse(ctx, teamID, campaign)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (s *Service) enrichResponse(ctx context.Context, teamID uuid.UUID, campaign *Campaign) (Response, error) {
+	resp := ToResponse(campaign)
+	dev, err := s.devices.FindByID(ctx, teamID, campaign.DeviceID)
+	if err == nil {
+		resp.DeviceName = &dev.Name
+		resp.DevicePhone = dev.PhoneNumber
+	}
+	tpl, err := s.templates.FindByID(ctx, teamID, campaign.TemplateID)
+	if err == nil {
+		resp.TemplateName = &tpl.Name
+		resp.TemplateLanguage = &tpl.Language
+		resp.TemplateCategory = tpl.Category
+	}
+	return resp, nil
+}
+
+func buildDeliveryBreakdown(campaign *Campaign) []DeliveryBreakdown {
+	return []DeliveryBreakdown{
+		{Label: "Terkirim", Value: campaign.SentCount},
+		{Label: "Terkirim (Delivered)", Value: campaign.DeliveredCount},
+		{Label: "Terbaca", Value: campaign.ReadCount},
+		{Label: "Gagal", Value: campaign.FailedCount},
+	}
+}
+
+func buildHourlyPerformance(ctx context.Context, repo Repository, campaignID uuid.UUID) []HourlyPerformance {
+	contacts, err := repo.ListContactsByCampaign(ctx, campaignID)
+	if err != nil {
+		return nil
+	}
+	buckets := make([]int, 24)
+	for i := range contacts {
+		if contacts[i].SentAt == nil {
+			continue
+		}
+		buckets[contacts[i].SentAt.UTC().Hour()]++
+	}
+	result := make([]HourlyPerformance, 24)
+	for hour := 0; hour < 24; hour++ {
+		result[hour] = HourlyPerformance{Hour: hour, Count: buckets[hour]}
+	}
+	return result
 }
 
 func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, role team.Role, input CreateInput) (*Response, error) {
@@ -152,7 +261,10 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, role tea
 		return nil, err
 	}
 
-	resp := ToResponse(campaign)
+	resp, err := s.enrichResponse(ctx, teamID, campaign)
+	if err != nil {
+		return nil, err
+	}
 	return &resp, nil
 }
 
@@ -191,7 +303,10 @@ func (s *Service) Send(ctx context.Context, teamID, userID uuid.UUID, role team.
 	if err != nil {
 		return nil, err
 	}
-	resp := ToResponse(updated)
+	resp, err := s.enrichResponse(ctx, teamID, updated)
+	if err != nil {
+		return nil, err
+	}
 	return &resp, nil
 }
 

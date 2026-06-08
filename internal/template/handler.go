@@ -29,16 +29,20 @@ func (h *Handler) List(c *fiber.Ctx) error {
 		return response.Unauthorized(c, "unauthorized")
 	}
 
-	var deviceID *uuid.UUID
+	filter := ListFilter{
+		Search:   strings.TrimSpace(c.Query("search")),
+		Language: strings.TrimSpace(c.Query("language")),
+		Category: strings.TrimSpace(c.Query("category")),
+		Status:   strings.TrimSpace(c.Query("status")),
+	}
 	if raw := strings.TrimSpace(c.Query("device_id")); raw != "" {
-		parsed, err := uuid.Parse(raw)
-		if err != nil {
+		if _, err := uuid.Parse(raw); err != nil {
 			return response.BadRequest(c, "invalid device_id")
 		}
-		deviceID = &parsed
+		filter.DeviceID = &raw
 	}
 
-	items, err := h.service.List(c.Context(), claims.TeamID, claims.UserID, deviceID)
+	items, err := h.service.List(c.Context(), claims.TeamID, claims.UserID, filter)
 	if err != nil {
 		return h.mapError(c, err)
 	}

@@ -32,6 +32,7 @@ type Response struct {
 	Language       string          `json:"language"`
 	Category       *string         `json:"category,omitempty"`
 	Status         *string         `json:"status,omitempty"`
+	Preview        string          `json:"preview,omitempty"`
 	Components     json.RawMessage `json:"components"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
@@ -47,6 +48,7 @@ func ToResponse(t *Template) Response {
 		Language:       t.Language,
 		Category:       t.Category,
 		Status:         t.Status,
+		Preview:        ExtractPreview(t.Components),
 		Components:     t.Components,
 		CreatedAt:      t.CreatedAt,
 		UpdatedAt:      t.UpdatedAt,
