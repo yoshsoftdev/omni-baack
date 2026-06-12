@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_devices_slug;
+ALTER TABLE devices DROP COLUMN IF EXISTS slug;

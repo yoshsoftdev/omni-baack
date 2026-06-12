@@ -18,6 +18,7 @@ type Repository interface {
 	Create(ctx context.Context, device *Device) error
 	FindByID(ctx context.Context, teamID, deviceID uuid.UUID) (*Device, error)
 	FindByPhoneNumberID(ctx context.Context, phoneNumberID string) (*Device, error)
+	FindBySlug(ctx context.Context, slug string) (*Device, error)
 	ListByTeam(ctx context.Context, teamID uuid.UUID) ([]Device, error)
 	Update(ctx context.Context, device *Device) error
 	SoftDelete(ctx context.Context, teamID, deviceID uuid.UUID) error
@@ -31,16 +32,28 @@ func NewRepository(db *database.DB) *PostgresRepository {
 	return &PostgresRepository{db: db}
 }
 
+const deviceColumns = `
+	id, team_id, slug, name, phone_number, waba_id, phone_number_id, access_token,
+	provider, status, connection_type, is_coex, onboarding_status,
+	contacts_synced_count, history_messages_synced, history_sync_progress,
+	contacts_sync_request_id, history_sync_request_id, onboarding_error,
+	onboarding_completed_at, last_connected_at, created_at, updated_at, deleted_at
+`
+
 func (r *PostgresRepository) Create(ctx context.Context, device *Device) error {
 	query := `
 		INSERT INTO devices (
-			id, team_id, name, phone_number, waba_id, phone_number_id, access_token,
-			provider, status, last_connected_at, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			id, team_id, slug, name, phone_number, waba_id, phone_number_id, access_token,
+			provider, status, connection_type, is_coex, onboarding_status,
+			contacts_synced_count, history_messages_synced, history_sync_progress,
+			contacts_sync_request_id, history_sync_request_id, onboarding_error,
+			onboarding_completed_at, last_connected_at, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 	`
 	_, err := r.db.Pool.Exec(ctx, query,
 		device.ID,
 		device.TeamID,
+		device.Slug,
 		device.Name,
 		device.PhoneNumber,
 		device.WabaID,
@@ -48,6 +61,16 @@ func (r *PostgresRepository) Create(ctx context.Context, device *Device) error {
 		device.AccessToken,
 		device.Provider,
 		string(device.Status),
+		string(device.ConnectionType),
+		device.IsCoex,
+		onboardingStatusValue(device.OnboardingStatus),
+		device.ContactsSyncedCount,
+		device.HistoryMessagesSynced,
+		device.HistorySyncProgress,
+		device.ContactsSyncRequestID,
+		device.HistorySyncRequestID,
+		device.OnboardingError,
+		device.OnboardingCompletedAt,
 		device.LastConnectedAt,
 		device.CreatedAt,
 		device.UpdatedAt,
@@ -59,33 +82,22 @@ func (r *PostgresRepository) Create(ctx context.Context, device *Device) error {
 }
 
 func (r *PostgresRepository) FindByID(ctx context.Context, teamID, deviceID uuid.UUID) (*Device, error) {
-	query := `
-		SELECT id, team_id, name, phone_number, waba_id, phone_number_id, access_token,
-		       provider, status, last_connected_at, created_at, updated_at, deleted_at
-		FROM devices
-		WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL
-	`
+	query := `SELECT ` + deviceColumns + ` FROM devices WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL`
 	return r.scanOne(r.db.Pool.QueryRow(ctx, query, deviceID, teamID))
 }
 
 func (r *PostgresRepository) FindByPhoneNumberID(ctx context.Context, phoneNumberID string) (*Device, error) {
-	query := `
-		SELECT id, team_id, name, phone_number, waba_id, phone_number_id, access_token,
-		       provider, status, last_connected_at, created_at, updated_at, deleted_at
-		FROM devices
-		WHERE phone_number_id = $1 AND deleted_at IS NULL
-	`
+	query := `SELECT ` + deviceColumns + ` FROM devices WHERE phone_number_id = $1 AND deleted_at IS NULL`
 	return r.scanOne(r.db.Pool.QueryRow(ctx, query, phoneNumberID))
 }
 
+func (r *PostgresRepository) FindBySlug(ctx context.Context, slug string) (*Device, error) {
+	query := `SELECT ` + deviceColumns + ` FROM devices WHERE slug = $1 AND deleted_at IS NULL`
+	return r.scanOne(r.db.Pool.QueryRow(ctx, query, strings.TrimSpace(slug)))
+}
+
 func (r *PostgresRepository) ListByTeam(ctx context.Context, teamID uuid.UUID) ([]Device, error) {
-	query := `
-		SELECT id, team_id, name, phone_number, waba_id, phone_number_id, access_token,
-		       provider, status, last_connected_at, created_at, updated_at, deleted_at
-		FROM devices
-		WHERE team_id = $1 AND deleted_at IS NULL
-		ORDER BY created_at DESC
-	`
+	query := `SELECT ` + deviceColumns + ` FROM devices WHERE team_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`
 	rows, err := r.db.Pool.Query(ctx, query, teamID)
 	if err != nil {
 		return nil, fmt.Errorf("list devices: %w", err)
@@ -109,11 +121,17 @@ func (r *PostgresRepository) ListByTeam(ctx context.Context, teamID uuid.UUID) (
 func (r *PostgresRepository) Update(ctx context.Context, device *Device) error {
 	query := `
 		UPDATE devices
-		SET name = $1, phone_number = $2, waba_id = $3, phone_number_id = $4,
-		    access_token = $5, provider = $6, status = $7, last_connected_at = $8, updated_at = $9
-		WHERE id = $10 AND team_id = $11 AND deleted_at IS NULL
+		SET slug = $1, name = $2, phone_number = $3, waba_id = $4, phone_number_id = $5,
+		    access_token = $6, provider = $7, status = $8, connection_type = $9,
+		    is_coex = $10, onboarding_status = $11, contacts_synced_count = $12,
+		    history_messages_synced = $13, history_sync_progress = $14,
+		    contacts_sync_request_id = $15, history_sync_request_id = $16,
+		    onboarding_error = $17, onboarding_completed_at = $18,
+		    last_connected_at = $19, updated_at = $20
+		WHERE id = $21 AND team_id = $22 AND deleted_at IS NULL
 	`
 	tag, err := r.db.Pool.Exec(ctx, query,
+		device.Slug,
 		device.Name,
 		device.PhoneNumber,
 		device.WabaID,
@@ -121,6 +139,16 @@ func (r *PostgresRepository) Update(ctx context.Context, device *Device) error {
 		device.AccessToken,
 		device.Provider,
 		string(device.Status),
+		string(device.ConnectionType),
+		device.IsCoex,
+		onboardingStatusValue(device.OnboardingStatus),
+		device.ContactsSyncedCount,
+		device.HistoryMessagesSynced,
+		device.HistorySyncProgress,
+		device.ContactsSyncRequestID,
+		device.HistorySyncRequestID,
+		device.OnboardingError,
+		device.OnboardingCompletedAt,
 		device.LastConnectedAt,
 		device.UpdatedAt,
 		device.ID,
@@ -155,13 +183,23 @@ func (r *PostgresRepository) SoftDelete(ctx context.Context, teamID, deviceID uu
 	return nil
 }
 
+func onboardingStatusValue(status *OnboardingStatus) *string {
+	if status == nil {
+		return nil
+	}
+	value := string(*status)
+	return &value
+}
+
 func (r *PostgresRepository) scanOne(row pgx.Row) (*Device, error) {
 	var d Device
-	var status string
+	var status, connectionType string
+	var onboardingStatus *string
 	var deletedAt *time.Time
 	err := row.Scan(
 		&d.ID,
 		&d.TeamID,
+		&d.Slug,
 		&d.Name,
 		&d.PhoneNumber,
 		&d.WabaID,
@@ -169,6 +207,16 @@ func (r *PostgresRepository) scanOne(row pgx.Row) (*Device, error) {
 		&d.AccessToken,
 		&d.Provider,
 		&status,
+		&connectionType,
+		&d.IsCoex,
+		&onboardingStatus,
+		&d.ContactsSyncedCount,
+		&d.HistoryMessagesSynced,
+		&d.HistorySyncProgress,
+		&d.ContactsSyncRequestID,
+		&d.HistorySyncRequestID,
+		&d.OnboardingError,
+		&d.OnboardingCompletedAt,
 		&d.LastConnectedAt,
 		&d.CreatedAt,
 		&d.UpdatedAt,
@@ -181,17 +229,24 @@ func (r *PostgresRepository) scanOne(row pgx.Row) (*Device, error) {
 		return nil, fmt.Errorf("scan device: %w", err)
 	}
 	d.Status = Status(status)
+	d.ConnectionType = ConnectionType(connectionType)
+	if onboardingStatus != nil {
+		value := OnboardingStatus(*onboardingStatus)
+		d.OnboardingStatus = &value
+	}
 	d.DeletedAt = deletedAt
 	return &d, nil
 }
 
 func (r *PostgresRepository) scanRow(row pgx.Rows) (*Device, error) {
 	var d Device
-	var status string
+	var status, connectionType string
+	var onboardingStatus *string
 	var deletedAt *time.Time
 	err := row.Scan(
 		&d.ID,
 		&d.TeamID,
+		&d.Slug,
 		&d.Name,
 		&d.PhoneNumber,
 		&d.WabaID,
@@ -199,6 +254,16 @@ func (r *PostgresRepository) scanRow(row pgx.Rows) (*Device, error) {
 		&d.AccessToken,
 		&d.Provider,
 		&status,
+		&connectionType,
+		&d.IsCoex,
+		&onboardingStatus,
+		&d.ContactsSyncedCount,
+		&d.HistoryMessagesSynced,
+		&d.HistorySyncProgress,
+		&d.ContactsSyncRequestID,
+		&d.HistorySyncRequestID,
+		&d.OnboardingError,
+		&d.OnboardingCompletedAt,
 		&d.LastConnectedAt,
 		&d.CreatedAt,
 		&d.UpdatedAt,
@@ -208,6 +273,11 @@ func (r *PostgresRepository) scanRow(row pgx.Rows) (*Device, error) {
 		return nil, fmt.Errorf("scan device row: %w", err)
 	}
 	d.Status = Status(status)
+	d.ConnectionType = ConnectionType(connectionType)
+	if onboardingStatus != nil {
+		value := OnboardingStatus(*onboardingStatus)
+		d.OnboardingStatus = &value
+	}
 	d.DeletedAt = deletedAt
 	return &d, nil
 }

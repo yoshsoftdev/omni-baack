@@ -14,6 +14,7 @@ import (
 type Repository interface {
 	Create(ctx context.Context, message *Message) error
 	ListByConversation(ctx context.Context, teamID, conversationID uuid.UUID, limit int) ([]Message, error)
+	FindByWAMID(ctx context.Context, wamid string) (*Message, error)
 }
 
 type PostgresRepository struct {

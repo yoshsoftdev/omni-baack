@@ -14,5 +14,6 @@ func RegisterRoutes(router fiber.Router, handler *Handler, jwt *jwtmanager.Manag
 	devices.Patch("/:id", handler.Update)
 	devices.Delete("/:id", handler.Delete)
 	devices.Post("/:id/connect", handler.Connect)
+	devices.Post("/:id/connect/embedded", handler.ConnectEmbedded)
 	devices.Post("/:id/disconnect", handler.Disconnect)
 }

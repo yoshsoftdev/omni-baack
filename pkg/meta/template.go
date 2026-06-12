@@ -26,7 +26,31 @@ type TemplateParameter struct {
 
 type TemplateComponent struct {
 	Type       string              `json:"type"`
+	SubType    string              `json:"sub_type,omitempty"`
+	Index      string              `json:"index,omitempty"`
 	Parameters []TemplateParameter `json:"parameters,omitempty"`
+}
+
+const (
+	OTPTemplateName     = "kode_otp"
+	OTPTemplateLanguage = "id"
+)
+
+// BuildKodeOTPComponents builds Meta template components for the kode_otp authentication template.
+func BuildKodeOTPComponents(code string) []TemplateComponent {
+	param := TemplateParameter{Type: "text", Text: code}
+	return []TemplateComponent{
+		{
+			Type:       "body",
+			Parameters: []TemplateParameter{param},
+		},
+		{
+			Type:       "button",
+			SubType:    "url",
+			Index:      "0",
+			Parameters: []TemplateParameter{param},
+		},
+	}
 }
 
 type listTemplatesResponse struct {
@@ -126,4 +150,53 @@ func (c *Client) SendTemplateMessage(
 		return "", fmt.Errorf("meta send template: empty message id")
 	}
 	return result.Messages[0].ID, nil
+}
+
+type CreateTemplateRequest struct {
+	Name       string          `json:"name"`
+	Language   string          `json:"language"`
+	Category   string          `json:"category"`
+	Components json.RawMessage `json:"components"`
+}
+
+type CreateTemplateResponse struct {
+	ID       string `json:"id"`
+	Status   string `json:"status"`
+	Category string `json:"category"`
+}
+
+func (c *Client) CreateMessageTemplate(
+	ctx context.Context,
+	wabaID, accessToken string,
+	input CreateTemplateRequest,
+) (*CreateTemplateResponse, error) {
+	data, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+
+	url := fmt.Sprintf("https://graph.facebook.com/%s/%s/message_templates", c.apiVersion, wabaID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("meta create template: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("meta create template error: %s", strings.TrimSpace(string(respBody)))
+	}
+
+	var result CreateTemplateResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("decode create template response: %w", err)
+	}
+	return &result, nil
 }

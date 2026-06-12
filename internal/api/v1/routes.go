@@ -10,6 +10,8 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/device"
 	"github.com/omnichannel/omni-chan-v2/internal/message"
 	metahandler "github.com/omnichannel/omni-chan-v2/internal/meta"
+	"github.com/omnichannel/omni-chan-v2/internal/onboarding"
+	"github.com/omnichannel/omni-chan-v2/internal/otp"
 	"github.com/omnichannel/omni-chan-v2/internal/tag"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
@@ -27,11 +29,17 @@ type Deps struct {
 	MessageHandler      *message.Handler
 	TemplateHandler     *template.Handler
 	CampaignHandler     *campaign.Handler
+	OnboardingHandler   *onboarding.Handler
+	OTPHandler          *otp.Handler
 	JWT                 *jwtmanager.Manager
 }
 
 func Register(router fiber.Router, deps Deps) {
 	router.Get("/health", health)
+
+	if deps.OTPHandler != nil {
+		otp.RegisterRoutes(router, deps.OTPHandler)
+	}
 
 	if deps.JWT == nil {
 		return
@@ -63,8 +71,11 @@ func Register(router fiber.Router, deps Deps) {
 	if deps.CampaignHandler != nil {
 		campaign.RegisterRoutes(router, deps.CampaignHandler, deps.JWT)
 	}
+	if deps.OnboardingHandler != nil {
+		onboarding.RegisterRoutes(router, deps.OnboardingHandler, deps.JWT)
+	}
 	if deps.MetaHandler != nil {
-		metahandler.RegisterRoutes(router, deps.MetaHandler)
+		metahandler.RegisterRoutes(router, deps.MetaHandler, deps.JWT)
 	}
 }
 

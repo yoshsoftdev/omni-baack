@@ -33,6 +33,12 @@ type connectDeviceRequest struct {
 	AccessToken   string `json:"access_token"`
 }
 
+type connectEmbeddedRequest struct {
+	Code          string `json:"code"`
+	WabaID        string `json:"waba_id"`
+	PhoneNumberID string `json:"phone_number_id"`
+}
+
 func (h *Handler) List(c *fiber.Ctx) error {
 	claims, err := middleware.ClaimsFromContext(c)
 	if err != nil {
@@ -162,6 +168,34 @@ func (h *Handler) Connect(c *fiber.Ctx) error {
 	}
 
 	return response.OK(c, "device connected", ToResponse(device))
+}
+
+func (h *Handler) ConnectEmbedded(c *fiber.Ctx) error {
+	claims, err := middleware.ClaimsFromContext(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+
+	deviceID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return response.BadRequest(c, "invalid device id")
+	}
+
+	var req connectEmbeddedRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+
+	device, err := h.service.ConnectEmbedded(c.Context(), claims.TeamID, claims.UserID, team.Role(claims.Role), deviceID, ConnectEmbeddedInput{
+		Code:          req.Code,
+		WabaID:        req.WabaID,
+		PhoneNumberID: req.PhoneNumberID,
+	})
+	if err != nil {
+		return h.mapError(c, err)
+	}
+
+	return response.OK(c, "device connected via embedded signup", ToResponse(device))
 }
 
 func (h *Handler) Disconnect(c *fiber.Ctx) error {

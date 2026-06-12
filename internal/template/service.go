@@ -14,10 +14,14 @@ import (
 )
 
 var (
-	ErrForbidden          = errors.New("insufficient permissions")
-	ErrDeviceNotFound     = errors.New("device not found")
-	ErrDeviceNotReady     = errors.New("device is not configured for templates")
-	ErrDeviceIDRequired   = errors.New("device_id is required")
+	ErrForbidden        = errors.New("insufficient permissions")
+	ErrDeviceNotFound   = errors.New("device not found")
+	ErrDeviceNotReady   = errors.New("device is not configured for templates")
+	ErrDeviceIDRequired = errors.New("device_id is required")
+	ErrNameRequired     = errors.New("template name is required")
+	ErrInvalidCategory  = errors.New("invalid template category")
+	ErrInvalidLanguage  = errors.New("invalid template language")
+	ErrComponentsEmpty  = errors.New("template components are required")
 )
 
 type Service struct {
@@ -43,6 +47,14 @@ func NewService(
 
 type SyncInput struct {
 	DeviceID uuid.UUID
+}
+
+type CreateInput struct {
+	DeviceID   uuid.UUID
+	Name       string
+	Language   string
+	Category   string
+	Components json.RawMessage
 }
 
 type SyncResult struct {
@@ -129,6 +141,120 @@ func (s *Service) Sync(ctx context.Context, teamID, userID uuid.UUID, role team.
 	}
 
 	return &SyncResult{Synced: synced}, nil
+}
+
+func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, role team.Role, input CreateInput) (*Response, error) {
+	if !canManage(role) {
+		return nil, ErrForbidden
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	if input.DeviceID == uuid.Nil {
+		return nil, ErrDeviceIDRequired
+	}
+
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return nil, ErrNameRequired
+	}
+	if len(input.Components) == 0 || string(input.Components) == "null" {
+		return nil, ErrComponentsEmpty
+	}
+
+	language := normalizeTemplateLanguage(strings.TrimSpace(input.Language))
+	if language == "" {
+		return nil, ErrInvalidLanguage
+	}
+	category := normalizeTemplateCategory(strings.TrimSpace(input.Category))
+	if category == "" {
+		return nil, ErrInvalidCategory
+	}
+
+	dev, err := s.devices.FindByID(ctx, teamID, input.DeviceID)
+	if err != nil {
+		if errors.Is(err, device.ErrNotFound) {
+			return nil, ErrDeviceNotFound
+		}
+		return nil, err
+	}
+	if dev.WabaID == nil || dev.AccessToken == nil || strings.TrimSpace(*dev.WabaID) == "" || strings.TrimSpace(*dev.AccessToken) == "" {
+		return nil, ErrDeviceNotReady
+	}
+
+	created, err := s.meta.CreateMessageTemplate(ctx, *dev.WabaID, *dev.AccessToken, metaclient.CreateTemplateRequest{
+		Name:       name,
+		Language:   language,
+		Category:   category,
+		Components: input.Components,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	status := strings.TrimSpace(created.Status)
+	if status == "" {
+		status = "PENDING"
+	}
+	categoryPtr := category
+	statusPtr := status
+	tpl := &Template{
+		ID:             uuid.New(),
+		TeamID:         teamID,
+		DeviceID:       dev.ID,
+		WabaID:         *dev.WabaID,
+		MetaTemplateID: created.ID,
+		Name:           name,
+		Language:       language,
+		Category:       &categoryPtr,
+		Status:         &statusPtr,
+		Components:     input.Components,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := s.templates.Upsert(ctx, tpl); err != nil {
+		return nil, err
+	}
+
+	resp := ToResponse(tpl)
+	return &resp, nil
+}
+
+func normalizeTemplateLanguage(raw string) string {
+	switch strings.ToLower(raw) {
+	case "id", "id_id":
+		return "id"
+	case "en", "en_us", "en-us":
+		return "en_US"
+	default:
+		if len(raw) >= 2 {
+			return raw
+		}
+		return ""
+	}
+}
+
+func normalizeTemplateCategory(raw string) string {
+	switch strings.ToUpper(raw) {
+	case "MARKETING":
+		return "MARKETING"
+	case "UTILITY":
+		return "UTILITY"
+	case "AUTHENTICATION":
+		return "AUTHENTICATION"
+	default:
+		switch strings.ToLower(raw) {
+		case "marketing":
+			return "MARKETING"
+		case "utility":
+			return "UTILITY"
+		case "authentication":
+			return "AUTHENTICATION"
+		default:
+			return ""
+		}
+	}
 }
 
 func (s *Service) ensureMember(ctx context.Context, teamID, userID uuid.UUID) error {

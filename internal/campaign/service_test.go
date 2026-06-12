@@ -99,6 +99,9 @@ func (m *mockDeviceRepo) FindByID(ctx context.Context, teamID, deviceID uuid.UUI
 func (m *mockDeviceRepo) FindByPhoneNumberID(ctx context.Context, phoneNumberID string) (*device.Device, error) {
 	return nil, device.ErrNotFound
 }
+func (m *mockDeviceRepo) FindBySlug(ctx context.Context, slug string) (*device.Device, error) {
+	return nil, device.ErrNotFound
+}
 func (m *mockDeviceRepo) ListByTeam(ctx context.Context, teamID uuid.UUID) ([]device.Device, error) {
 	return nil, nil
 }

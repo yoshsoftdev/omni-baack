@@ -36,6 +36,15 @@ func (m *mockDeviceRepo) FindByPhoneNumberID(ctx context.Context, phoneNumberID 
 	return nil, ErrNotFound
 }
 
+func (m *mockDeviceRepo) FindBySlug(ctx context.Context, slug string) (*Device, error) {
+	for _, d := range m.devices {
+		if d.Slug != nil && *d.Slug == slug && d.DeletedAt == nil {
+			return d, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
 func (m *mockDeviceRepo) ListByTeam(ctx context.Context, teamID uuid.UUID) ([]Device, error) {
 	var list []Device
 	for _, d := range m.devices {

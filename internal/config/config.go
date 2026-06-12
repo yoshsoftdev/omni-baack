@@ -17,10 +17,17 @@ type Config struct {
 	Storage  StorageConfig
 	JWT      JWTConfig
 	Meta     MetaConfig
+	OTP      OTPConfig
+}
+
+type OTPConfig struct {
+	DefaultDeviceSlug string
 }
 
 type MetaConfig struct {
+	AppID       string
 	AppSecret   string
+	ConfigID    string
 	VerifyToken string
 	APIVersion  string
 }
@@ -108,9 +115,14 @@ func Load() (*Config, error) {
 			RefreshTTL:    getEnvDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
 		},
 		Meta: MetaConfig{
+			AppID:       getEnv("META_APP_ID", ""),
 			AppSecret:   getEnv("META_APP_SECRET", ""),
+			ConfigID:    getEnv("META_EMBEDDED_CONFIG_ID", ""),
 			VerifyToken: getEnv("META_VERIFY_TOKEN", ""),
 			APIVersion:  getEnv("META_API_VERSION", "v21.0"),
+		},
+		OTP: OTPConfig{
+			DefaultDeviceSlug: getEnv("OTP_DEFAULT_DEVICE_SLUG", "dgos-waba"),
 		},
 	}
 

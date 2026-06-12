@@ -16,6 +16,8 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/device"
 	"github.com/omnichannel/omni-chan-v2/internal/message"
 	metahandler "github.com/omnichannel/omni-chan-v2/internal/meta"
+	"github.com/omnichannel/omni-chan-v2/internal/onboarding"
+	"github.com/omnichannel/omni-chan-v2/internal/otp"
 	"github.com/omnichannel/omni-chan-v2/internal/storage"
 	"github.com/omnichannel/omni-chan-v2/internal/tag"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
@@ -94,7 +96,7 @@ func main() {
 	metaClient := metaclient.NewClient(cfg.Meta.APIVersion)
 
 	deviceRepo := device.NewRepository(db)
-	deviceService := device.NewService(deviceRepo, teamRepo, metaClient)
+	deviceService := device.NewService(deviceRepo, teamRepo, metaClient, cfg.Meta)
 	deviceHandler := device.NewHandler(deviceService)
 
 	tagRepo := tag.NewRepository(db)
@@ -112,7 +114,9 @@ func main() {
 	messageRepo := message.NewRepository(db)
 	messageService := message.NewService(messageRepo, conversationService, contactService, deviceRepo, teamRepo, userRepo, metaClient, wsHub)
 	messageHandler := message.NewHandler(messageService)
-	metaHandler := metahandler.NewHandler(cfg.Meta, messageService)
+	onboardingService := onboarding.NewService(deviceRepo, contactService, conversationService, messageRepo, teamRepo, metaClient)
+	onboardingHandler := onboarding.NewHandler(onboardingService)
+	metaHandler := metahandler.NewHandler(cfg.Meta, messageService, onboardingService)
 
 	templateRepo := template.NewRepository(db)
 	templateService := template.NewService(templateRepo, deviceRepo, teamRepo, metaClient)
@@ -124,6 +128,10 @@ func main() {
 	campaignHandler := campaign.NewHandler(campaignService)
 	campaignWorker := campaign.NewWorker(campaignRepo, contactRepo, deviceRepo, templateRepo, campaignQueue, metaClient, log)
 	campaignScheduler := campaign.NewScheduler(campaignService, log)
+
+	otpRepo := otp.NewRepository(db)
+	otpService := otp.NewService(otpRepo, deviceRepo, metaClient, cfg.OTP.DefaultDeviceSlug)
+	otpHandler := otp.NewHandler(otpService, cfg.Meta.VerifyToken)
 
 	go campaignWorker.Start(ctx)
 	go campaignScheduler.Start(ctx)
@@ -142,6 +150,8 @@ func main() {
 		MessageHandler:      messageHandler,
 		TemplateHandler:     templateHandler,
 		CampaignHandler:     campaignHandler,
+		OnboardingHandler:   onboardingHandler,
+		OTPHandler:          otpHandler,
 		JWT:                 jwt,
 	})
 

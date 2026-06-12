@@ -14,6 +14,8 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/device"
 	"github.com/omnichannel/omni-chan-v2/internal/message"
 	metahandler "github.com/omnichannel/omni-chan-v2/internal/meta"
+	"github.com/omnichannel/omni-chan-v2/internal/onboarding"
+	"github.com/omnichannel/omni-chan-v2/internal/otp"
 	"github.com/omnichannel/omni-chan-v2/internal/tag"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
@@ -36,6 +38,8 @@ type Deps struct {
 	MessageHandler      *message.Handler
 	TemplateHandler     *template.Handler
 	CampaignHandler     *campaign.Handler
+	OnboardingHandler   *onboarding.Handler
+	OTPHandler          *otp.Handler
 	JWT                 *jwtmanager.Manager
 }
 
@@ -66,6 +70,8 @@ func NewRouter(deps Deps) *fiber.App {
 		MessageHandler:      deps.MessageHandler,
 		TemplateHandler:     deps.TemplateHandler,
 		CampaignHandler:     deps.CampaignHandler,
+		OnboardingHandler:   deps.OnboardingHandler,
+		OTPHandler:          deps.OTPHandler,
 		JWT:                 deps.JWT,
 	})
 

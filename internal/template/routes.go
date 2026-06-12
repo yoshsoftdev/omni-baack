@@ -9,5 +9,6 @@ import (
 func RegisterRoutes(router fiber.Router, handler *Handler, jwt *jwtmanager.Manager) {
 	group := router.Group("/templates", middleware.Auth(jwt))
 	group.Get("/", handler.List)
+	group.Post("/", handler.Create)
 	group.Post("/sync", handler.Sync)
 }

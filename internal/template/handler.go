@@ -1,6 +1,7 @@
 package template
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -21,6 +22,14 @@ func NewHandler(service *Service) *Handler {
 
 type syncRequest struct {
 	DeviceID string `json:"device_id"`
+}
+
+type createTemplateRequest struct {
+	DeviceID   string          `json:"device_id"`
+	Name       string          `json:"name"`
+	Language   string          `json:"language"`
+	Category   string          `json:"category"`
+	Components json.RawMessage `json:"components"`
 }
 
 func (h *Handler) List(c *fiber.Ctx) error {
@@ -73,6 +82,34 @@ func (h *Handler) Sync(c *fiber.Ctx) error {
 	return response.OK(c, "templates synced", result)
 }
 
+func (h *Handler) Create(c *fiber.Ctx) error {
+	claims, err := middleware.ClaimsFromContext(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+
+	var req createTemplateRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	deviceID, err := uuid.Parse(strings.TrimSpace(req.DeviceID))
+	if err != nil {
+		return response.BadRequest(c, "invalid device_id")
+	}
+
+	item, err := h.service.Create(c.Context(), claims.TeamID, claims.UserID, team.Role(claims.Role), CreateInput{
+		DeviceID:   deviceID,
+		Name:       strings.TrimSpace(req.Name),
+		Language:   strings.TrimSpace(req.Language),
+		Category:   strings.TrimSpace(req.Category),
+		Components: req.Components,
+	})
+	if err != nil {
+		return h.mapError(c, err)
+	}
+	return response.Created(c, "template submitted to meta", item)
+}
+
 func (h *Handler) mapError(c *fiber.Ctx, err error) error {
 	switch {
 	case errors.Is(err, team.ErrMemberNotFound):
@@ -81,9 +118,14 @@ func (h *Handler) mapError(c *fiber.Ctx, err error) error {
 		return response.Forbidden(c, err.Error())
 	case errors.Is(err, ErrDeviceNotFound):
 		return response.NotFound(c, err.Error())
-	case errors.Is(err, ErrDeviceNotReady), errors.Is(err, ErrDeviceIDRequired):
+	case errors.Is(err, ErrDeviceNotReady), errors.Is(err, ErrDeviceIDRequired),
+		errors.Is(err, ErrNameRequired), errors.Is(err, ErrInvalidCategory),
+		errors.Is(err, ErrInvalidLanguage), errors.Is(err, ErrComponentsEmpty):
 		return response.BadRequest(c, err.Error())
 	default:
+		if strings.Contains(err.Error(), "meta create template error") {
+			return response.BadRequest(c, err.Error())
+		}
 		return response.InternalError(c, "internal server error")
 	}
 }

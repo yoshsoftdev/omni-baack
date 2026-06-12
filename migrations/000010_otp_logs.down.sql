@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS otp_logs;
+DROP TYPE IF EXISTS otp_status;
