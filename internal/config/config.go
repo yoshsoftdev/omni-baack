@@ -18,6 +18,15 @@ type Config struct {
 	JWT      JWTConfig
 	Meta     MetaConfig
 	OTP      OTPConfig
+	NATS     NATSConfig
+}
+
+type NATSConfig struct {
+	URL           string
+	StreamName    string
+	InternalToken string
+	ConsumerName  string
+	Enabled       bool
 }
 
 type OTPConfig struct {
@@ -124,6 +133,13 @@ func Load() (*Config, error) {
 		OTP: OTPConfig{
 			DefaultDeviceSlug: getEnv("OTP_DEFAULT_DEVICE_SLUG", "dgos-waba"),
 		},
+		NATS: NATSConfig{
+			URL:           getEnv("NATS_URL", "nats://localhost:4222"),
+			StreamName:    getEnv("NATS_STREAM_NAME", "WEBHOOK_EVENTS"),
+			InternalToken: getEnv("INTERNAL_SERVICE_TOKEN", ""),
+			ConsumerName:  getEnv("NATS_CONSUMER_NAME", "backend-service"),
+			Enabled:       getEnvBool("NATS_CONSUMER_ENABLED", true),
+		},
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -155,6 +171,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Meta.VerifyToken == "" && c.App.Env == "development" {
 		c.Meta.VerifyToken = "dev-meta-verify-token"
+	}
+	if c.NATS.InternalToken == "" && c.App.Env == "development" {
+		c.NATS.InternalToken = "dev-internal-token"
 	}
 	return nil
 }

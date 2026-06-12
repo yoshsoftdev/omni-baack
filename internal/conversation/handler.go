@@ -58,6 +58,19 @@ func (h *Handler) List(c *fiber.Ctx) error {
 	return response.OK(c, "ok", fiber.Map{"conversations": items})
 }
 
+func (h *Handler) UnreadCount(c *fiber.Ctx) error {
+	claims, err := middleware.ClaimsFromContext(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+
+	count, err := h.service.UnreadCount(c.Context(), claims.TeamID, claims.UserID)
+	if err != nil {
+		return h.mapError(c, err)
+	}
+	return response.OK(c, "ok", fiber.Map{"unread_count": count})
+}
+
 func (h *Handler) Get(c *fiber.Ctx) error {
 	claims, err := middleware.ClaimsFromContext(c)
 	if err != nil {

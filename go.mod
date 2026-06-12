@@ -5,6 +5,8 @@ go 1.25.0
 toolchain go1.25.11
 
 require (
+	github.com/nats-io/nats.go v1.43.0
+	github.com/omnichannel/omni-chan-v2/shared v0.0.0
 	github.com/gofiber/contrib/websocket v1.3.4
 	github.com/gofiber/fiber/v2 v2.52.10
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -17,6 +19,8 @@ require (
 	github.com/xuri/excelize/v2 v2.10.1
 	golang.org/x/crypto v0.52.0
 )
+
+replace github.com/omnichannel/omni-chan-v2/shared => ../../shared
 
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect

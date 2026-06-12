@@ -34,6 +34,13 @@ type ListInput struct {
 	Limit      int
 }
 
+func (s *Service) UnreadCount(ctx context.Context, teamID, userID uuid.UUID) (int, error) {
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return 0, err
+	}
+	return s.conversations.SumUnreadCount(ctx, teamID)
+}
+
 func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID, input ListInput) ([]ListItem, error) {
 	if err := s.ensureMember(ctx, teamID, userID); err != nil {
 		return nil, err

@@ -9,11 +9,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/device"
+	"github.com/omnichannel/omni-chan-v2/internal/message"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 	"github.com/omnichannel/omni-chan-v2/pkg/campaignqueue"
 	"github.com/omnichannel/omni-chan-v2/pkg/logger"
 	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
 )
+
+type broadcastRecorder interface {
+	RecordBroadcastTemplate(ctx context.Context, input message.RecordBroadcastTemplateInput) error
+}
 
 type Worker struct {
 	campaigns Repository
@@ -22,6 +27,7 @@ type Worker struct {
 	templates template.Repository
 	queue     campaignqueue.Queue
 	meta      *metaclient.Client
+	messages  broadcastRecorder
 	log       *logger.Logger
 }
 
@@ -32,6 +38,7 @@ func NewWorker(
 	templates template.Repository,
 	queue campaignqueue.Queue,
 	meta *metaclient.Client,
+	messages broadcastRecorder,
 	log *logger.Logger,
 ) *Worker {
 	return &Worker{
@@ -41,6 +48,7 @@ func NewWorker(
 		templates: templates,
 		queue:     queue,
 		meta:      meta,
+		messages:  messages,
 		log:       log,
 	}
 }
@@ -181,7 +189,31 @@ func (w *Worker) sendToContact(
 	if err := w.campaigns.UpdateContact(ctx, cc); err != nil {
 		return err
 	}
-	return w.campaigns.IncrementCounts(ctx, campaign.ID, 1, 0)
+	if err := w.campaigns.IncrementCounts(ctx, campaign.ID, 1, 0); err != nil {
+		return err
+	}
+
+	if w.messages != nil {
+		content := renderTemplateContent(tpl, mapping, c)
+		if err := w.messages.RecordBroadcastTemplate(ctx, message.RecordBroadcastTemplateInput{
+			TeamID:      campaign.TeamID,
+			Device:      dev,
+			ContactID:   cc.ContactID,
+			Phone:       cc.Phone,
+			ContactName: c.Name,
+			WAMID:       wamid,
+			Content:     content,
+			SentAt:      now,
+		}); err != nil {
+			w.log.Error(
+				"campaign conversation history failed",
+				"campaign_id", campaign.ID,
+				"contact_id", cc.ID,
+				"error", err,
+			)
+		}
+	}
+	return nil
 }
 
 func (w *Worker) failCampaign(ctx context.Context, campaign *Campaign, cause error) error {

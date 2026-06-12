@@ -28,6 +28,7 @@ type Repository interface {
 	List(ctx context.Context, teamID uuid.UUID, filter ListFilter) ([]ListItem, error)
 	GetDetail(ctx context.Context, teamID, conversationID uuid.UUID) (*Detail, error)
 	Update(ctx context.Context, conversation *Conversation) error
+	SumUnreadCount(ctx context.Context, teamID uuid.UUID) (int, error)
 }
 
 type PostgresRepository struct {
@@ -165,6 +166,19 @@ func (r *PostgresRepository) GetDetail(ctx context.Context, teamID, conversation
 	}
 	detail.Status = Status(status)
 	return &detail, nil
+}
+
+func (r *PostgresRepository) SumUnreadCount(ctx context.Context, teamID uuid.UUID) (int, error) {
+	query := `
+		SELECT COALESCE(SUM(unread_count), 0)
+		FROM conversations
+		WHERE team_id = $1 AND deleted_at IS NULL
+	`
+	var count int
+	if err := r.db.Pool.QueryRow(ctx, query, teamID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("sum unread count: %w", err)
+	}
+	return count, nil
 }
 
 func (r *PostgresRepository) Update(ctx context.Context, conversation *Conversation) error {

@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/omnichannel/omni-chan-v2/internal/api"
+	"github.com/omnichannel/omni-chan-v2/internal/eventconsumer"
 	"github.com/omnichannel/omni-chan-v2/internal/auth"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
@@ -32,6 +34,8 @@ import (
 	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
 	"github.com/omnichannel/omni-chan-v2/pkg/migrate"
 	redisclient "github.com/omnichannel/omni-chan-v2/pkg/redis"
+	sharedconfig "github.com/omnichannel/omni-chan-v2/shared/config"
+	sharednats "github.com/omnichannel/omni-chan-v2/shared/nats"
 )
 
 func main() {
@@ -116,7 +120,7 @@ func main() {
 	messageHandler := message.NewHandler(messageService)
 	onboardingService := onboarding.NewService(deviceRepo, contactService, conversationService, messageRepo, teamRepo, metaClient)
 	onboardingHandler := onboarding.NewHandler(onboardingService)
-	metaHandler := metahandler.NewHandler(cfg.Meta, messageService, onboardingService)
+	metaHandler := metahandler.NewHandler(cfg.Meta)
 
 	templateRepo := template.NewRepository(db)
 	templateService := template.NewService(templateRepo, deviceRepo, teamRepo, metaClient)
@@ -126,7 +130,7 @@ func main() {
 	campaignRepo := campaign.NewRepository(db)
 	campaignService := campaign.NewService(campaignRepo, contactRepo, deviceRepo, templateRepo, teamRepo, campaignQueue)
 	campaignHandler := campaign.NewHandler(campaignService)
-	campaignWorker := campaign.NewWorker(campaignRepo, contactRepo, deviceRepo, templateRepo, campaignQueue, metaClient, log)
+	campaignWorker := campaign.NewWorker(campaignRepo, contactRepo, deviceRepo, templateRepo, campaignQueue, metaClient, messageService, log)
 	campaignScheduler := campaign.NewScheduler(campaignService, log)
 
 	otpRepo := otp.NewRepository(db)
@@ -135,6 +139,10 @@ func main() {
 
 	go campaignWorker.Start(ctx)
 	go campaignScheduler.Start(ctx)
+
+	if cfg.NATS.Enabled {
+		startEventConsumer(ctx, cfg, messageService, onboardingService, log)
+	}
 
 	app := api.NewRouter(api.Deps{
 		Config:              cfg,
@@ -171,4 +179,46 @@ func main() {
 	defer cancel()
 	_ = shutdownCtx
 	_ = app.Shutdown()
+}
+
+func startEventConsumer(
+	ctx context.Context,
+	cfg *config.Config,
+	messageService *message.Service,
+	onboardingService *onboarding.Service,
+	log *logger.Logger,
+) {
+	slogLog := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	natsCfg := sharedconfig.NATS{
+		URL:           cfg.NATS.URL,
+		StreamName:    cfg.NATS.StreamName,
+		InternalToken: cfg.NATS.InternalToken,
+	}
+
+	nc, err := sharednats.Connect(natsCfg.URL)
+	if err != nil {
+		log.Error("nats connect failed", "error", err)
+		return
+	}
+
+	sub, err := sharednats.NewSubscriber(nc, natsCfg, slogLog)
+	if err != nil {
+		log.Error("nats subscriber init failed", "error", err)
+		nc.Close()
+		return
+	}
+
+	consumer := eventconsumer.New(messageService, onboardingService, slogLog)
+	if err := sub.Subscribe(ctx, cfg.NATS.ConsumerName, consumer.Handle); err != nil {
+		log.Error("nats subscribe failed", "error", err)
+		nc.Close()
+		return
+	}
+
+	go func() {
+		<-ctx.Done()
+		nc.Close()
+	}()
+
+	log.Info("webhook event consumer started", "consumer", cfg.NATS.ConsumerName)
 }

@@ -160,6 +160,96 @@ func (s *Service) Send(ctx context.Context, teamID, userID, conversationID uuid.
 	return &resp, nil
 }
 
+type RecordBroadcastTemplateInput struct {
+	TeamID      uuid.UUID
+	Device      *device.Device
+	ContactID   *uuid.UUID
+	Phone       string
+	ContactName string
+	WAMID       string
+	Content     string
+	SentAt      time.Time
+}
+
+// RecordBroadcastTemplate stores a successful campaign template send in conversation history.
+func (s *Service) RecordBroadcastTemplate(ctx context.Context, input RecordBroadcastTemplateInput) error {
+	if input.Device == nil || strings.TrimSpace(input.WAMID) == "" {
+		return nil
+	}
+
+	wamid := strings.TrimSpace(input.WAMID)
+	existing, err := s.messages.FindByWAMID(ctx, wamid)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		return nil
+	}
+
+	contactEntity, err := s.resolveBroadcastContact(ctx, input)
+	if err != nil {
+		return err
+	}
+
+	conv, err := s.conversations.FindOrCreate(ctx, input.TeamID, contactEntity.ID, input.Device.ID)
+	if err != nil {
+		return err
+	}
+
+	content := strings.TrimSpace(input.Content)
+	if content == "" {
+		content = "[Template message]"
+	}
+
+	now := input.SentAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	deviceID := input.Device.ID
+	contactID := contactEntity.ID
+	senderPhone := deref(input.Device.PhoneNumber, "system")
+	senderName := strings.TrimSpace(input.Device.Name)
+	if senderName == "" {
+		senderName = "Broadcast"
+	}
+
+	msg := &Message{
+		ID:             uuid.New(),
+		TeamID:         input.TeamID,
+		ConversationID: conv.ID,
+		DeviceID:       &deviceID,
+		ContactID:      &contactID,
+		WAMID:          &wamid,
+		Direction:      DirectionOutbound,
+		Content:        content,
+		SenderPhone:    senderPhone,
+		SenderName:     senderName,
+		SentAt:         now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	if err := s.messages.Create(ctx, msg); err != nil {
+		return err
+	}
+	if err := s.conversations.TouchFromMessage(ctx, conv, content, false); err != nil {
+		return err
+	}
+
+	resp := ToResponse(msg)
+	s.publishMessage(ctx, input.TeamID, resp)
+	return s.conversations.PublishConversation(ctx, input.TeamID, "conversation.updated", conv.ID)
+}
+
+func (s *Service) resolveBroadcastContact(ctx context.Context, input RecordBroadcastTemplateInput) (*contact.Contact, error) {
+	displayName := strings.TrimSpace(input.ContactName)
+	if displayName == "" {
+		displayName = input.Phone
+	}
+	return s.contacts.FindOrCreateByPhone(ctx, input.TeamID, input.Phone, displayName)
+}
+
 func (s *Service) HandleMetaInbound(ctx context.Context, inbound metaclient.InboundMessage) error {
 	dev, err := s.devices.FindByPhoneNumberID(ctx, inbound.PhoneNumberID)
 	if err != nil {
