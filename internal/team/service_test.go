@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/user"
 )
 
@@ -73,12 +74,34 @@ func (m *mockTeamRepo) ListMembers(ctx context.Context, teamID uuid.UUID) ([]Mem
 	return nil, nil
 }
 
-func (m *mockTeamRepo) UpdateMemberRole(ctx context.Context, teamID, memberID uuid.UUID, role Role) error {
+func (m *mockTeamRepo) ListMembersFiltered(ctx context.Context, teamID uuid.UUID, filter ListMembersFilter) ([]MemberWithUser, error) {
+	return nil, nil
+}
+
+func (m *mockTeamRepo) UpdateMemberRole(ctx context.Context, teamID, memberID uuid.UUID, role Role, roleID uuid.UUID) error {
+	return nil
+}
+
+func (m *mockTeamRepo) UpdateMemberStatus(ctx context.Context, teamID, memberID uuid.UUID, status MemberStatus) error {
 	return nil
 }
 
 func (m *mockTeamRepo) SoftDeleteMember(ctx context.Context, teamID, memberID uuid.UUID) error {
 	return nil
+}
+
+func (m *mockTeamRepo) FindRoleIDByName(ctx context.Context, name string) (uuid.UUID, error) {
+	return uuid.New(), nil
+}
+
+func (m *mockTeamRepo) GetWorkspaceDetail(ctx context.Context, teamID uuid.UUID) (*WorkspaceDetail, error) {
+	return nil, ErrNotFound
+}
+
+func (m *mockTeamRepo) CreateInvitation(ctx context.Context, inv *Invitation) error { return nil }
+
+func (m *mockTeamRepo) ListInvitations(ctx context.Context, teamID uuid.UUID) ([]Invitation, error) {
+	return nil, nil
 }
 
 type mockUserRepo struct {
@@ -104,6 +127,42 @@ func (m *mockUserRepo) FindByID(ctx context.Context, id uuid.UUID) (*user.User, 
 	return nil, user.ErrNotFound
 }
 
+type mockRbacRepo struct {
+	matrix map[string]map[string]bool
+}
+
+func (m *mockRbacRepo) LoadRolePermissions(ctx context.Context) (map[string]map[string]bool, error) {
+	return m.matrix, nil
+}
+func (m *mockRbacRepo) ListRoles(ctx context.Context) ([]rbac.Role, error) { return nil, nil }
+func (m *mockRbacRepo) FindRoleByID(ctx context.Context, id uuid.UUID) (*rbac.Role, error) {
+	return nil, rbac.ErrNotFound
+}
+func (m *mockRbacRepo) FindRoleByName(ctx context.Context, name string) (*rbac.Role, error) {
+	return nil, rbac.ErrNotFound
+}
+func (m *mockRbacRepo) ListPermissions(ctx context.Context) ([]rbac.Permission, error) { return nil, nil }
+func (m *mockRbacRepo) ListPermissionsByRoleID(ctx context.Context, roleID uuid.UUID) ([]rbac.Permission, error) {
+	return nil, nil
+}
+func (m *mockRbacRepo) GetPermissionMatrix(ctx context.Context) ([]rbac.PermissionMatrixRow, error) {
+	return nil, nil
+}
+
+func testRBAC() *rbac.Service {
+	svc := rbac.NewService(&mockRbacRepo{
+		matrix: map[string]map[string]bool{
+			"owner": {
+				rbac.PermUserInvite:      true,
+				rbac.PermWorkspaceManage: true,
+			},
+			"agent": {},
+		},
+	})
+	_ = svc.WarmCache(context.Background())
+	return svc
+}
+
 func TestService_AddMember_ForbiddenForAgent(t *testing.T) {
 	teamID := uuid.New()
 	ownerID := uuid.New()
@@ -113,9 +172,9 @@ func TestService_AddMember_ForbiddenForAgent(t *testing.T) {
 			{ID: uuid.New(), TeamID: teamID, UserID: ownerID, Role: RoleOwner},
 		},
 	}
-	svc := NewService(repo, &mockUserRepo{users: map[string]*user.User{}})
+	svc := NewService(repo, &mockUserRepo{users: map[string]*user.User{}}, testRBAC())
 
-	_, err := svc.AddMember(context.Background(), teamID, ownerID, RoleAgent, "new@example.com", RoleAdmin)
+	_, err := svc.AddMember(context.Background(), teamID, ownerID, "agent", "new@example.com", RoleAdmin)
 	if err != ErrForbidden {
 		t.Fatalf("AddMember() error = %v", err)
 	}
@@ -132,9 +191,9 @@ func TestService_Update_ForbiddenForAgent(t *testing.T) {
 			{ID: uuid.New(), TeamID: teamID, UserID: userID, Role: RoleAgent},
 		},
 	}
-	svc := NewService(repo, &mockUserRepo{})
+	svc := NewService(repo, &mockUserRepo{}, testRBAC())
 
-	_, err := svc.Update(context.Background(), teamID, userID, RoleAgent, "New Name")
+	_, err := svc.Update(context.Background(), teamID, userID, "agent", "New Name")
 	if err != ErrForbidden {
 		t.Fatalf("Update() error = %v", err)
 	}

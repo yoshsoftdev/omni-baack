@@ -21,6 +21,7 @@ import (
 type Deps struct {
 	AuthHandler         *auth.Handler
 	TeamHandler         *team.Handler
+	TeamMgmtHandler     *team.MgmtHandler
 	DeviceHandler       *device.Handler
 	MetaHandler         *metahandler.Handler
 	ContactHandler      *contact.Handler
@@ -49,6 +50,9 @@ func Register(router fiber.Router, deps Deps) {
 	}
 	if deps.TeamHandler != nil {
 		team.RegisterRoutes(router, deps.TeamHandler, deps.JWT)
+	}
+	if deps.TeamMgmtHandler != nil {
+		team.RegisterMgmtRoutes(router, deps.TeamMgmtHandler, deps.JWT)
 	}
 	if deps.DeviceHandler != nil {
 		device.RegisterRoutes(router, deps.DeviceHandler, deps.JWT)

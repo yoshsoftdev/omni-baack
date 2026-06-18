@@ -5,8 +5,6 @@ go 1.25.0
 toolchain go1.25.11
 
 require (
-	github.com/nats-io/nats.go v1.43.0
-	github.com/omnichannel/omni-chan-v2/shared v0.0.0
 	github.com/gofiber/contrib/websocket v1.3.4
 	github.com/gofiber/fiber/v2 v2.52.10
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -15,6 +13,7 @@ require (
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/joho/godotenv v1.5.1
 	github.com/minio/minio-go/v7 v7.0.98
+	github.com/omnichannel/omni-chan-v2/shared v0.0.0
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/xuri/excelize/v2 v2.10.1
 	golang.org/x/crypto v0.52.0
@@ -42,6 +41,9 @@ require (
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/minio/crc64nvme v1.1.1 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
+	github.com/nats-io/nats.go v1.43.0 // indirect
+	github.com/nats-io/nkeys v0.4.11 // indirect
+	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/richardlehane/mscfb v1.0.6 // indirect
 	github.com/richardlehane/msoleps v1.0.6 // indirect

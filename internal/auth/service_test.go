@@ -96,12 +96,34 @@ func (m *mockTeamRepo) ListMembers(ctx context.Context, teamID uuid.UUID) ([]tea
 	return nil, nil
 }
 
-func (m *mockTeamRepo) UpdateMemberRole(ctx context.Context, teamID, memberID uuid.UUID, role team.Role) error {
+func (m *mockTeamRepo) ListMembersFiltered(ctx context.Context, teamID uuid.UUID, filter team.ListMembersFilter) ([]team.MemberWithUser, error) {
+	return nil, nil
+}
+
+func (m *mockTeamRepo) UpdateMemberRole(ctx context.Context, teamID, memberID uuid.UUID, role team.Role, roleID uuid.UUID) error {
+	return nil
+}
+
+func (m *mockTeamRepo) UpdateMemberStatus(ctx context.Context, teamID, memberID uuid.UUID, status team.MemberStatus) error {
 	return nil
 }
 
 func (m *mockTeamRepo) SoftDeleteMember(ctx context.Context, teamID, memberID uuid.UUID) error {
 	return nil
+}
+
+func (m *mockTeamRepo) FindRoleIDByName(ctx context.Context, name string) (uuid.UUID, error) {
+	return uuid.New(), nil
+}
+
+func (m *mockTeamRepo) GetWorkspaceDetail(ctx context.Context, teamID uuid.UUID) (*team.WorkspaceDetail, error) {
+	return nil, team.ErrNotFound
+}
+
+func (m *mockTeamRepo) CreateInvitation(ctx context.Context, inv *team.Invitation) error { return nil }
+
+func (m *mockTeamRepo) ListInvitations(ctx context.Context, teamID uuid.UUID) ([]team.Invitation, error) {
+	return nil, nil
 }
 
 type mockRefreshRepo struct {

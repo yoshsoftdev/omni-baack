@@ -1,0 +1,29 @@
+package rbac
+
+// Permission codes used across the platform.
+const (
+	PermWorkspaceManage     = "workspace.manage"
+	PermTeamManage          = "team.manage"
+	PermUserView            = "user.view"
+	PermUserInvite          = "user.invite"
+	PermUserUpdate          = "user.update"
+	PermUserDelete          = "user.delete"
+	PermContactView         = "contact.view"
+	PermContactCreate       = "contact.create"
+	PermContactUpdate       = "contact.update"
+	PermContactDelete       = "contact.delete"
+	PermConversationView    = "conversation.view"
+	PermConversationReply   = "conversation.reply"
+	PermConversationAssign  = "conversation.assign"
+	PermCampaignView        = "campaign.view"
+	PermCampaignCreate      = "campaign.create"
+	PermCampaignSend        = "campaign.send"
+	PermTemplateView        = "template.view"
+	PermTemplateCreate      = "template.create"
+	PermTemplateSync        = "template.sync"
+	PermReportView          = "report.view"
+	PermBillingView         = "billing.view"
+	PermBillingManage       = "billing.manage"
+	PermDeviceView          = "device.view"
+	PermDeviceManage        = "device.manage"
+)

@@ -55,7 +55,7 @@ func (h *Handler) Update(c *fiber.Ctx) error {
 		return response.BadRequest(c, "invalid request body")
 	}
 
-	team, err := h.service.Update(c.Context(), claims.TeamID, claims.UserID, Role(claims.Role), req.Name)
+	team, err := h.service.Update(c.Context(), claims.TeamID, claims.UserID, claims.Role, req.Name)
 	if err != nil {
 		return h.mapError(c, err)
 	}
@@ -95,7 +95,7 @@ func (h *Handler) AddMember(c *fiber.Ctx) error {
 		c.Context(),
 		claims.TeamID,
 		claims.UserID,
-		Role(claims.Role),
+		claims.Role,
 		req.Email,
 		Role(req.Role),
 	)
@@ -129,7 +129,7 @@ func (h *Handler) UpdateMemberRole(c *fiber.Ctx) error {
 		c.Context(),
 		claims.TeamID,
 		claims.UserID,
-		Role(claims.Role),
+		claims.Role,
 		memberID,
 		Role(req.Role),
 	)
@@ -151,7 +151,7 @@ func (h *Handler) RemoveMember(c *fiber.Ctx) error {
 		return response.BadRequest(c, "invalid member id")
 	}
 
-	if err := h.service.RemoveMember(c.Context(), claims.TeamID, claims.UserID, Role(claims.Role), memberID); err != nil {
+	if err := h.service.RemoveMember(c.Context(), claims.TeamID, claims.UserID, claims.Role, memberID); err != nil {
 		return h.mapError(c, err)
 	}
 
@@ -161,7 +161,7 @@ func (h *Handler) RemoveMember(c *fiber.Ctx) error {
 func (h *Handler) mapError(c *fiber.Ctx, err error) error {
 	switch {
 	case errors.Is(err, ErrForbidden):
-		return response.Fail(c, fiber.StatusForbidden, err.Error())
+		return response.Forbidden(c, "permission denied")
 	case errors.Is(err, ErrInvalidRole), errors.Is(err, ErrAlreadyMember):
 		return response.BadRequest(c, err.Error())
 	case errors.Is(err, ErrCannotModifyOwner):

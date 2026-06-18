@@ -106,11 +106,18 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*Session, 
 		}
 	}
 
+	roleID, err := s.teams.FindRoleIDByName(ctx, string(team.RoleOwner))
+	if err != nil {
+		return nil, err
+	}
+
 	member := &team.Member{
 		ID:        uuid.New(),
 		TeamID:    teamID,
 		UserID:    userID,
 		Role:      team.RoleOwner,
+		RoleID:    roleID,
+		Status:    team.MemberStatusActive,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}

@@ -30,6 +30,7 @@ type Deps struct {
 	DB                  *database.DB
 	AuthHandler         *auth.Handler
 	TeamHandler         *team.Handler
+	TeamMgmtHandler     *team.MgmtHandler
 	DeviceHandler       *device.Handler
 	MetaHandler         *metahandler.Handler
 	ContactHandler      *contact.Handler
@@ -62,6 +63,7 @@ func NewRouter(deps Deps) *fiber.App {
 	v1.Register(apiGroup.Group("/v1"), v1.Deps{
 		AuthHandler:         deps.AuthHandler,
 		TeamHandler:         deps.TeamHandler,
+		TeamMgmtHandler:     deps.TeamMgmtHandler,
 		DeviceHandler:       deps.DeviceHandler,
 		MetaHandler:         deps.MetaHandler,
 		ContactHandler:      deps.ContactHandler,

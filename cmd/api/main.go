@@ -20,6 +20,7 @@ import (
 	metahandler "github.com/omnichannel/omni-chan-v2/internal/meta"
 	"github.com/omnichannel/omni-chan-v2/internal/onboarding"
 	"github.com/omnichannel/omni-chan-v2/internal/otp"
+	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/storage"
 	"github.com/omnichannel/omni-chan-v2/internal/tag"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
@@ -88,14 +89,22 @@ func main() {
 		cfg.JWT.AccessTTL,
 	)
 
+	rbacRepo := rbac.NewRepository(db)
+	rbacService := rbac.NewService(rbacRepo)
+	if err := rbacService.WarmCache(ctx); err != nil {
+		log.Error("rbac cache warm failed", "error", err)
+		os.Exit(1)
+	}
+
 	userRepo := user.NewRepository(db)
 	teamRepo := team.NewRepository(db)
 	refreshRepo := auth.NewRefreshRepository(db)
 	authService := auth.NewService(userRepo, teamRepo, refreshRepo, jwt, cfg.JWT)
 	authHandler := auth.NewHandler(authService)
 
-	teamService := team.NewService(teamRepo, userRepo)
+	teamService := team.NewService(teamRepo, userRepo, rbacService)
 	teamHandler := team.NewHandler(teamService)
+	teamMgmtHandler := team.NewMgmtHandler(teamService, rbacService)
 
 	metaClient := metaclient.NewClient(cfg.Meta.APIVersion)
 
@@ -150,6 +159,7 @@ func main() {
 		DB:                  db,
 		AuthHandler:         authHandler,
 		TeamHandler:         teamHandler,
+		TeamMgmtHandler:     teamMgmtHandler,
 		DeviceHandler:       deviceHandler,
 		MetaHandler:         metaHandler,
 		ContactHandler:      contactHandler,
