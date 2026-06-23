@@ -5,12 +5,21 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
 )
 
 type DB struct {
 	Pool *pgxpool.Pool
+}
+
+// Querier is implemented by *pgxpool.Pool and pgx.Tx.
+type Querier interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 func New(ctx context.Context, cfg config.DatabaseConfig) (*DB, error) {
@@ -40,11 +49,43 @@ func New(ctx context.Context, cfg config.DatabaseConfig) (*DB, error) {
 }
 
 func (db *DB) Close() {
-	if db.Pool != nil {
+	if db != nil && db.Pool != nil {
 		db.Pool.Close()
 	}
 }
 
 func (db *DB) Ping(ctx context.Context) error {
 	return db.Pool.Ping(ctx)
+}
+
+// IsTx reports whether q is an active pgx transaction.
+func IsTx(q Querier) bool {
+	_, ok := q.(pgx.Tx)
+	return ok
+}
+
+// WithTx runs fn inside a transaction with panic-safe rollback.
+func (db *DB) WithTx(ctx context.Context, fn func(pgx.Tx) error) error {
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+
+	var runErr error
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback(ctx)
+			panic(p)
+		}
+		if runErr != nil {
+			_ = tx.Rollback(ctx)
+			return
+		}
+		if err := tx.Commit(ctx); err != nil {
+			runErr = fmt.Errorf("commit tx: %w", err)
+		}
+	}()
+
+	runErr = fn(tx)
+	return runErr
 }

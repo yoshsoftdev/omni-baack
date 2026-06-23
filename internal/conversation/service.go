@@ -7,211 +7,183 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/omnichannel/omni-chan-v2/internal/contact"
+	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
-	"github.com/omnichannel/omni-chan-v2/internal/websocket/hub"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
+	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
 
-var (
-	ErrForbidden        = errors.New("insufficient permissions")
-	ErrInvalidStatus    = errors.New("invalid status")
-	ErrAssigneeNotFound = errors.New("assignee is not a team member")
-)
-
+// Service (ConversationService) manages inbox conversations.
 type Service struct {
 	conversations Repository
+	contacts      contact.Repository
 	teams         team.Repository
-	ws            *hub.Hub
+	rbac          *rbac.Service
 }
 
-func NewService(conversations Repository, teams team.Repository, wsHub *hub.Hub) *Service {
-	return &Service{conversations: conversations, teams: teams, ws: wsHub}
+func NewService(
+	conversations Repository,
+	contacts contact.Repository,
+	teams team.Repository,
+	rbacSvc *rbac.Service,
+) *Service {
+	return &Service{
+		conversations: conversations,
+		contacts:      contacts,
+		teams:         teams,
+		rbac:          rbacSvc,
+	}
 }
 
-type ListInput struct {
-	Status     *Status
-	AssignedTo *uuid.UUID
-	Search     string
-	Limit      int
+type CreateInput struct {
+	ContactID   uuid.UUID
+	ChannelID   *uuid.UUID
+	ChannelType ChannelType
 }
 
-func (s *Service) UnreadCount(ctx context.Context, teamID, userID uuid.UUID) (int, error) {
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return 0, err
+func (s *Service) authorize(role, perm string) error {
+	if s.rbac != nil && s.rbac.Require(role, perm) {
+		return nil
 	}
-	return s.conversations.SumUnreadCount(ctx, teamID)
-}
-
-func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID, input ListInput) ([]ListItem, error) {
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
-	}
-	return s.conversations.List(ctx, teamID, ListFilter{
-		Status:     input.Status,
-		AssignedTo: input.AssignedTo,
-		Search:     input.Search,
-		Limit:      input.Limit,
-	})
-}
-
-func (s *Service) Get(ctx context.Context, teamID, userID, conversationID uuid.UUID) (*Detail, error) {
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
-	}
-	return s.conversations.GetDetail(ctx, teamID, conversationID)
-}
-
-func (s *Service) Assign(ctx context.Context, teamID, userID uuid.UUID, role team.Role, conversationID uuid.UUID, assigneeID *uuid.UUID) (*Detail, error) {
-	if !canManage(role) {
-		return nil, ErrForbidden
-	}
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
-	}
-
-	conv, err := s.conversations.FindByID(ctx, teamID, conversationID)
-	if err != nil {
-		return nil, err
-	}
-
-	if assigneeID != nil {
-		if _, err := s.teams.FindMemberByUser(ctx, teamID, *assigneeID); err != nil {
-			return nil, ErrAssigneeNotFound
-		}
-	}
-
-	conv.AssignedTo = assigneeID
-	conv.UpdatedAt = time.Now().UTC()
-	if err := s.conversations.Update(ctx, conv); err != nil {
-		return nil, err
-	}
-
-	detail, err := s.conversations.GetDetail(ctx, teamID, conversationID)
-	if err != nil {
-		return nil, err
-	}
-	s.publish(ctx, teamID, "conversation.updated", detail)
-	return detail, nil
-}
-
-func (s *Service) UpdateStatus(ctx context.Context, teamID, userID uuid.UUID, conversationID uuid.UUID, status Status) (*Detail, error) {
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
-	}
-	if status != StatusOpen && status != StatusPending && status != StatusResolved {
-		return nil, ErrInvalidStatus
-	}
-
-	conv, err := s.conversations.FindByID(ctx, teamID, conversationID)
-	if err != nil {
-		return nil, err
-	}
-
-	conv.Status = status
-	conv.UpdatedAt = time.Now().UTC()
-	if status == StatusResolved {
-		conv.UnreadCount = 0
-	}
-	if err := s.conversations.Update(ctx, conv); err != nil {
-		return nil, err
-	}
-
-	detail, err := s.conversations.GetDetail(ctx, teamID, conversationID)
-	if err != nil {
-		return nil, err
-	}
-	s.publish(ctx, teamID, "conversation.updated", detail)
-	return detail, nil
-}
-
-func (s *Service) MarkRead(ctx context.Context, teamID, userID, conversationID uuid.UUID) (*Detail, error) {
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
-	}
-
-	conv, err := s.conversations.FindByID(ctx, teamID, conversationID)
-	if err != nil {
-		return nil, err
-	}
-	if conv.UnreadCount == 0 {
-		return s.conversations.GetDetail(ctx, teamID, conversationID)
-	}
-
-	conv.UnreadCount = 0
-	conv.UpdatedAt = time.Now().UTC()
-	if err := s.conversations.Update(ctx, conv); err != nil {
-		return nil, err
-	}
-
-	detail, err := s.conversations.GetDetail(ctx, teamID, conversationID)
-	if err != nil {
-		return nil, err
-	}
-	s.publish(ctx, teamID, "conversation.updated", detail)
-	return detail, nil
-}
-
-func (s *Service) FindOrCreate(ctx context.Context, teamID, contactID, deviceID uuid.UUID) (*Conversation, error) {
-	existing, err := s.conversations.FindByContactDevice(ctx, teamID, contactID, deviceID)
-	if err == nil {
-		return existing, nil
-	}
-	if !errors.Is(err, ErrNotFound) {
-		return nil, err
-	}
-
-	now := time.Now().UTC()
-	conv := &Conversation{
-		ID:        uuid.New(),
-		TeamID:    teamID,
-		ContactID: contactID,
-		DeviceID:  deviceID,
-		Status:    StatusOpen,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	if err := s.conversations.Create(ctx, conv); err != nil {
-		return nil, err
-	}
-	return conv, nil
-}
-
-func (s *Service) TouchFromMessage(ctx context.Context, conv *Conversation, content string, inbound bool) error {
-	now := time.Now().UTC()
-	preview := strings.TrimSpace(content)
-	if len(preview) > 200 {
-		preview = preview[:200]
-	}
-	conv.LastMessageAt = &now
-	conv.LastMessagePreview = &preview
-	conv.UpdatedAt = now
-	if inbound {
-		conv.UnreadCount++
-		if conv.Status == StatusResolved {
-			conv.Status = StatusOpen
-		}
-	}
-	return s.conversations.Update(ctx, conv)
-}
-
-func (s *Service) PublishConversation(ctx context.Context, teamID uuid.UUID, eventType string, conversationID uuid.UUID) error {
-	detail, err := s.conversations.GetDetail(ctx, teamID, conversationID)
-	if err != nil {
-		return err
-	}
-	s.publish(ctx, teamID, eventType, detail)
-	return nil
-}
-
-func (s *Service) publish(ctx context.Context, teamID uuid.UUID, eventType string, data interface{}) {
-	event := Event{Type: eventType, Data: data}
-	_ = s.ws.PublishTenant(ctx, teamID.String(), event)
+	return serviceerrors.ErrForbidden
 }
 
 func (s *Service) ensureMember(ctx context.Context, teamID, userID uuid.UUID) error {
 	_, err := s.teams.FindMemberByUser(ctx, teamID, userID)
-	return err
+	if err != nil {
+		if err == team.ErrMemberNotFound {
+			return serviceerrors.ErrForbidden
+		}
+		return err
+	}
+	return nil
 }
 
-func canManage(role team.Role) bool {
-	return role == team.RoleOwner || role == team.RoleAdmin || role == team.RoleAgent
+func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRole string, input CreateInput) (*Conversation, error) {
+	if err := s.authorize(actorRole, rbac.PermConversationView); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	if _, err := s.contacts.FindByID(ctx, teamID, input.ContactID); err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+
+	if existing, err := s.conversations.FindByContactChannel(ctx, teamID, input.ContactID, input.ChannelID); err == nil {
+		return existing, nil
+	} else if !errors.Is(err, repository.ErrNotFound) {
+		return nil, serviceerrors.MapRepository(err)
+	}
+
+	channelType := input.ChannelType
+	if channelType == "" {
+		channelType = ChannelWhatsApp
+	}
+
+	now := time.Now().UTC()
+	c := &Conversation{
+		ID:          uuid.New(),
+		TeamID:      teamID,
+		ContactID:   input.ContactID,
+		ChannelID:   input.ChannelID,
+		ChannelType: channelType,
+		Status:      StatusOpen,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := serviceerrors.MapRepository(s.conversations.Create(ctx, c)); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (s *Service) Get(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID) (*Conversation, error) {
+	if err := s.authorize(actorRole, rbac.PermConversationView); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	c, err := s.conversations.FindByID(ctx, teamID, conversationID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	return c, nil
+}
+
+func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID, actorRole string, filter ListFilter, page repository.PageParams) (repository.Page[Conversation], error) {
+	if err := s.authorize(actorRole, rbac.PermConversationView); err != nil {
+		return repository.Page[Conversation]{}, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return repository.Page[Conversation]{}, err
+	}
+	result, err := s.conversations.List(ctx, teamID, filter, page)
+	if err != nil {
+		return repository.Page[Conversation]{}, serviceerrors.MapRepository(err)
+	}
+	return result, nil
+}
+
+func (s *Service) Assign(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID, assigneeID *uuid.UUID) (*Conversation, error) {
+	if err := s.authorize(actorRole, rbac.PermConversationAssign); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	if assigneeID != nil {
+		if _, err := s.teams.FindMemberByUser(ctx, teamID, *assigneeID); err != nil {
+			if err == team.ErrMemberNotFound {
+				return nil, serviceerrors.NewValidation("assigned_to", "assignee must be a team member")
+			}
+			return nil, err
+		}
+	}
+	if err := serviceerrors.MapRepository(s.conversations.UpdateAssignment(ctx, teamID, conversationID, assigneeID)); err != nil {
+		return nil, err
+	}
+	return s.conversations.FindByID(ctx, teamID, conversationID)
+}
+
+func (s *Service) UpdateStatus(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID, status Status) (*Conversation, error) {
+	if err := s.authorize(actorRole, rbac.PermConversationReply); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	if err := validateStatus(status); err != nil {
+		return nil, err
+	}
+	if err := serviceerrors.MapRepository(s.conversations.UpdateStatus(ctx, teamID, conversationID, status)); err != nil {
+		return nil, err
+	}
+	return s.conversations.FindByID(ctx, teamID, conversationID)
+}
+
+func (s *Service) RecordInboundPreview(ctx context.Context, teamID uuid.UUID, conversationID uuid.UUID, preview string) error {
+	preview = strings.TrimSpace(preview)
+	if preview == "" {
+		preview = "New message"
+	}
+	if len(preview) > 200 {
+		preview = preview[:200]
+	}
+	now := time.Now().UTC()
+	return serviceerrors.MapRepository(s.conversations.UpdateLastMessage(ctx, teamID, conversationID, LastMessageUpdate{
+		Preview: preview,
+		At:      now,
+	}))
+}
+
+func validateStatus(status Status) error {
+	switch status {
+	case StatusOpen, StatusAssigned, StatusClosed:
+		return nil
+	default:
+		return serviceerrors.NewValidation("status", "invalid value")
+	}
 }

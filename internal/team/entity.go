@@ -22,13 +22,28 @@ const (
 	MemberStatusInactive MemberStatus = "inactive"
 )
 
+type PlanType string
+
+const (
+	PlanStarter    PlanType = "starter"
+	PlanGrowth     PlanType = "growth"
+	PlanBusiness   PlanType = "business"
+	PlanEnterprise PlanType = "enterprise"
+)
+
 type Team struct {
-	ID        uuid.UUID
-	Name      string
-	Slug      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	DeletedAt *time.Time
+	ID           uuid.UUID
+	Name         string
+	Slug         string
+	OwnerID      *uuid.UUID
+	Timezone     string
+	Country      string
+	PlanType     PlanType
+	ContactLimit int
+	ChannelLimit int
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	DeletedAt    *time.Time
 }
 
 type Member struct {

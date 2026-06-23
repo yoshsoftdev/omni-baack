@@ -1,0 +1,3 @@
+ALTER TABLE teams DROP CONSTRAINT IF EXISTS fk_teams_owner_id;
+DROP TABLE IF EXISTS refresh_tokens;
+DROP TABLE IF EXISTS users;

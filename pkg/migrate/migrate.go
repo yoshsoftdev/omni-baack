@@ -52,3 +52,22 @@ func Down(databaseURL, migrationsPath string) error {
 	}
 	return nil
 }
+
+func Force(databaseURL, migrationsPath string, version int) error {
+	abs, err := filepath.Abs(migrationsPath)
+	if err != nil {
+		return fmt.Errorf("resolve migrations path: %w", err)
+	}
+
+	sourceURL := "file://" + filepath.ToSlash(abs)
+	m, err := migrate.New(sourceURL, databaseURL)
+	if err != nil {
+		return fmt.Errorf("create migrator: %w", err)
+	}
+	defer m.Close()
+
+	if err := m.Force(version); err != nil {
+		return fmt.Errorf("migrate force: %w", err)
+	}
+	return nil
+}

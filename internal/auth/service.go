@@ -16,6 +16,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/user"
 	jwtmanager "github.com/omnichannel/omni-chan-v2/pkg/jwt"
 	"github.com/omnichannel/omni-chan-v2/pkg/password"
+	"github.com/omnichannel/omni-chan-v2/pkg/slug"
 )
 
 var (
@@ -88,11 +89,17 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*Session, 
 	}
 
 	newTeam := &team.Team{
-		ID:        teamID,
-		Name:      teamName,
-		Slug:      slugify(teamName),
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:           teamID,
+		Name:         teamName,
+		Slug:         slug.FromName(teamName),
+		OwnerID:      &userID,
+		Timezone:     "Asia/Jakarta",
+		Country:      "ID",
+		PlanType:     team.PlanStarter,
+		ContactLimit: 50000,
+		ChannelLimit: 1,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 
 	if err := s.users.Create(ctx, newUser); err != nil {

@@ -4,21 +4,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/omnichannel/omni-chan-v2/pkg/database"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 )
 
-var ErrNotFound = errors.New("user not found")
-var ErrEmailTaken = errors.New("email already registered")
-
+// Repository (UserRepository) persists users and refresh tokens.
 type Repository interface {
-	Create(ctx context.Context, user *User) error
-	FindByEmail(ctx context.Context, email string) (*User, error)
+	Create(ctx context.Context, u *User) error
 	FindByID(ctx context.Context, id uuid.UUID) (*User, error)
+	FindByEmail(ctx context.Context, email string) (*User, error)
+	Update(ctx context.Context, u *User) error
+	UpdateLastActive(ctx context.Context, id uuid.UUID, at time.Time) error
+	SoftDelete(ctx context.Context, id uuid.UUID) error
+
+	CreateRefreshToken(ctx context.Context, t *RefreshToken) error
+	FindRefreshTokenByHash(ctx context.Context, hash string) (*RefreshToken, error)
+	RevokeRefreshToken(ctx context.Context, id uuid.UUID, at time.Time) error
 }
 
 type PostgresRepository struct {
@@ -29,66 +34,118 @@ func NewRepository(db *database.DB) *PostgresRepository {
 	return &PostgresRepository{db: db}
 }
 
-func (r *PostgresRepository) Create(ctx context.Context, user *User) error {
+func (r *PostgresRepository) Create(ctx context.Context, u *User) error {
 	query := `
-		INSERT INTO users (id, email, password_hash, name, created_at, updated_at)
-		VALUES ($1, LOWER($2), $3, $4, $5, $6)
+		INSERT INTO users (id, email, name, password_hash, last_active_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`
 	_, err := r.db.Pool.Exec(ctx, query,
-		user.ID,
-		user.Email,
-		user.PasswordHash,
-		user.Name,
-		user.CreatedAt,
-		user.UpdatedAt,
+		u.ID, u.Email, u.Name, u.PasswordHash, u.LastActiveAt, u.CreatedAt, u.UpdatedAt,
 	)
-	if err != nil {
-		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			return ErrEmailTaken
-		}
-		return fmt.Errorf("insert user: %w", err)
-	}
-	return nil
-}
-
-func (r *PostgresRepository) FindByEmail(ctx context.Context, email string) (*User, error) {
-	query := `
-		SELECT id, email, password_hash, name, created_at, updated_at, deleted_at
-		FROM users
-		WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL
-	`
-	return r.scanOne(ctx, query, email)
+	return repository.MapError(err)
 }
 
 func (r *PostgresRepository) FindByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	query := `
-		SELECT id, email, password_hash, name, created_at, updated_at, deleted_at
-		FROM users
-		WHERE id = $1 AND deleted_at IS NULL
+		SELECT id, email, name, password_hash, last_active_at, created_at, updated_at, deleted_at
+		FROM users WHERE id = $1 AND deleted_at IS NULL
 	`
-	return r.scanOne(ctx, query, id)
+	return scanUser(r.db.Pool.QueryRow(ctx, query, id))
 }
 
-func (r *PostgresRepository) scanOne(ctx context.Context, query string, arg any) (*User, error) {
-	row := r.db.Pool.QueryRow(ctx, query, arg)
+func (r *PostgresRepository) FindByEmail(ctx context.Context, email string) (*User, error) {
+	query := `
+		SELECT id, email, name, password_hash, last_active_at, created_at, updated_at, deleted_at
+		FROM users WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL
+	`
+	return scanUser(r.db.Pool.QueryRow(ctx, query, email))
+}
 
-	var user User
-	var deletedAt *time.Time
-	err := row.Scan(
-		&user.ID,
-		&user.Email,
-		&user.PasswordHash,
-		&user.Name,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-		&deletedAt,
+func (r *PostgresRepository) Update(ctx context.Context, u *User) error {
+	query := `
+		UPDATE users SET email = $1, name = $2, password_hash = $3, updated_at = $4
+		WHERE id = $5 AND deleted_at IS NULL
+	`
+	tag, err := r.db.Pool.Exec(ctx, query, u.Email, u.Name, u.PasswordHash, u.UpdatedAt, u.ID)
+	if err != nil {
+		return repository.MapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (r *PostgresRepository) UpdateLastActive(ctx context.Context, id uuid.UUID, at time.Time) error {
+	query := `UPDATE users SET last_active_at = $1, updated_at = $1 WHERE id = $2 AND deleted_at IS NULL`
+	_, err := r.db.Pool.Exec(ctx, query, at, id)
+	return repository.MapError(err)
+}
+
+func (r *PostgresRepository) SoftDelete(ctx context.Context, id uuid.UUID) error {
+	query := `UPDATE users SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
+	tag, err := r.db.Pool.Exec(ctx, query, id)
+	if err != nil {
+		return repository.MapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (r *PostgresRepository) CreateRefreshToken(ctx context.Context, t *RefreshToken) error {
+	query := `
+		INSERT INTO refresh_tokens (id, user_id, team_id, token_hash, expires_at, revoked_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`
+	_, err := r.db.Pool.Exec(ctx, query,
+		t.ID, t.UserID, t.TeamID, t.TokenHash, t.ExpiresAt, t.RevokedAt, t.CreatedAt,
+	)
+	return repository.MapError(err)
+}
+
+func (r *PostgresRepository) FindRefreshTokenByHash(ctx context.Context, hash string) (*RefreshToken, error) {
+	query := `
+		SELECT id, user_id, team_id, token_hash, expires_at, revoked_at, created_at
+		FROM refresh_tokens WHERE token_hash = $1 AND revoked_at IS NULL
+	`
+	var t RefreshToken
+	err := r.db.Pool.QueryRow(ctx, query, hash).Scan(
+		&t.ID, &t.UserID, &t.TeamID, &t.TokenHash, &t.ExpiresAt, &t.RevokedAt, &t.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
+			return nil, repository.ErrNotFound
+		}
+		return nil, fmt.Errorf("find refresh token: %w", err)
+	}
+	return &t, nil
+}
+
+func (r *PostgresRepository) RevokeRefreshToken(ctx context.Context, id uuid.UUID, at time.Time) error {
+	query := `UPDATE refresh_tokens SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL`
+	tag, err := r.db.Pool.Exec(ctx, query, at, id)
+	if err != nil {
+		return repository.MapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func scanUser(row pgx.Row) (*User, error) {
+	var u User
+	err := row.Scan(
+		&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.LastActiveAt,
+		&u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, repository.ErrNotFound
 		}
 		return nil, fmt.Errorf("scan user: %w", err)
 	}
-	user.DeletedAt = deletedAt
-	return &user, nil
+	return &u, nil
 }

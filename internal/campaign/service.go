@@ -3,403 +3,376 @@ package campaign
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/omnichannel/omni-chan-v2/internal/contact"
-	"github.com/omnichannel/omni-chan-v2/internal/device"
+	"github.com/omnichannel/omni-chan-v2/internal/channel"
+	"github.com/omnichannel/omni-chan-v2/internal/rbac"
+	"github.com/omnichannel/omni-chan-v2/internal/segment"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
-	"github.com/omnichannel/omni-chan-v2/pkg/campaignqueue"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
+	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
 
-var (
-	ErrForbidden          = errors.New("insufficient permissions")
-	ErrNameRequired       = errors.New("campaign name is required")
-	ErrRecipientsRequired = errors.New("at least one recipient is required")
-	ErrDeviceNotFound     = errors.New("device not found")
-	ErrDeviceNotConnected = errors.New("device is not connected")
-	ErrTemplateNotFound   = errors.New("template not found")
-	ErrInvalidStatus      = errors.New("campaign cannot be sent in current status")
-	ErrCannotCancel       = errors.New("campaign cannot be cancelled")
-)
-
+// Service (CampaignService) manages broadcast campaigns and draft execution artifacts.
 type Service struct {
 	campaigns Repository
-	contacts  contact.Repository
-	devices   device.Repository
-	templates template.Repository
+	tx        UnitOfWorkRunner
 	teams     team.Repository
-	queue     campaignqueue.Queue
+	channels  channel.Repository
+	templates template.Repository
+	segments  segment.Repository
+	rbac      *rbac.Service
 }
 
 func NewService(
 	campaigns Repository,
-	contacts contact.Repository,
-	devices device.Repository,
-	templates template.Repository,
+	tx UnitOfWorkRunner,
 	teams team.Repository,
-	queue campaignqueue.Queue,
+	channels channel.Repository,
+	templates template.Repository,
+	segments segment.Repository,
+	rbacSvc *rbac.Service,
 ) *Service {
 	return &Service{
 		campaigns: campaigns,
-		contacts:  contacts,
-		devices:   devices,
-		templates: templates,
+		tx:        tx,
 		teams:     teams,
-		queue:     queue,
+		channels:  channels,
+		templates: templates,
+		segments:  segments,
+		rbac:      rbacSvc,
 	}
+}
+
+type AudienceInput struct {
+	SourceType AudienceSourceType
+	SourceID   uuid.UUID
 }
 
 type CreateInput struct {
 	Name            string
-	DeviceID        uuid.UUID
+	Description     *string
+	ChannelID       uuid.UUID
 	TemplateID      uuid.UUID
+	SegmentID       *uuid.UUID
+	Audiences       []AudienceInput
 	VariableMapping json.RawMessage
-	ContactIDs      []uuid.UUID
-	TagIDs          []uuid.UUID
+	SampleValues    json.RawMessage
+	Timezone        *string
+	SendMode        SendMode
 	ScheduledAt     *time.Time
 }
 
-func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID) ([]Response, error) {
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
-	}
-	items, err := s.campaigns.ListByTeam(ctx, teamID, 100)
-	if err != nil {
-		return nil, err
-	}
-	responses := make([]Response, 0, len(items))
-	for i := range items {
-		resp, err := s.enrichResponse(ctx, teamID, &items[i])
-		if err != nil {
-			return nil, err
-		}
-		responses = append(responses, resp)
-	}
-	return responses, nil
+type CreateResult struct {
+	Campaign *Campaign
+	Job      *BroadcastJob
+	Snapshot *AudienceSnapshot
 }
 
-func (s *Service) GetOverview(ctx context.Context, teamID, userID uuid.UUID) (*OverviewResponse, error) {
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
-	}
-	items, err := s.campaigns.ListByTeam(ctx, teamID, 500)
-	if err != nil {
-		return nil, err
-	}
-	overview := &OverviewResponse{}
-	var totalSent, totalDelivered, totalRead, totalFailed int
-	for i := range items {
-		c := items[i]
-		overview.TotalCampaigns++
-		totalSent += c.SentCount
-		totalDelivered += c.DeliveredCount
-		totalRead += c.ReadCount
-		totalFailed += c.FailedCount
-	}
-	overview.TotalSent = totalSent
-	if totalSent > 0 {
-		overview.DeliveredRate = float64(totalDelivered) / float64(totalSent) * 100
-		overview.ReadRate = float64(totalRead) / float64(totalSent) * 100
-		overview.FailedRate = float64(totalFailed) / float64(totalSent) * 100
-	}
-	return overview, nil
+type UpdateInput struct {
+	Name            *string
+	Description     *string
+	VariableMapping json.RawMessage
+	SampleValues    json.RawMessage
+	Timezone        *string
+	SendMode        *SendMode
+	ScheduledAt     *time.Time
+	SegmentID       *uuid.UUID
 }
 
-func (s *Service) GetReport(ctx context.Context, teamID, userID, campaignID uuid.UUID) (*ReportResponse, error) {
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
-	}
-	item, err := s.campaigns.FindByID(ctx, teamID, campaignID)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := s.enrichResponse(ctx, teamID, item)
-	if err != nil {
-		return nil, err
-	}
-	report := ReportResponse{Response: resp}
-	report.DeliveryBreakdown = buildDeliveryBreakdown(item)
-	report.HourlyPerformance = buildHourlyPerformance(ctx, s.campaigns, campaignID)
-	return &report, nil
-}
-
-func (s *Service) Cancel(ctx context.Context, teamID, userID uuid.UUID, role team.Role, campaignID uuid.UUID) (*Response, error) {
-	if !canManage(role) {
-		return nil, ErrForbidden
-	}
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
-	}
-	campaign, err := s.campaigns.FindByID(ctx, teamID, campaignID)
-	if err != nil {
-		return nil, err
-	}
-	if campaign.Status != StatusScheduled && campaign.Status != StatusDraft {
-		return nil, ErrCannotCancel
-	}
-	now := time.Now().UTC()
-	campaign.Status = StatusCancelled
-	campaign.UpdatedAt = now
-	if err := s.campaigns.Update(ctx, campaign); err != nil {
-		return nil, err
-	}
-	resp, err := s.enrichResponse(ctx, teamID, campaign)
-	if err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-func (s *Service) enrichResponse(ctx context.Context, teamID uuid.UUID, campaign *Campaign) (Response, error) {
-	resp := ToResponse(campaign)
-	dev, err := s.devices.FindByID(ctx, teamID, campaign.DeviceID)
-	if err == nil {
-		resp.DeviceName = &dev.Name
-		resp.DevicePhone = dev.PhoneNumber
-	}
-	tpl, err := s.templates.FindByID(ctx, teamID, campaign.TemplateID)
-	if err == nil {
-		resp.TemplateName = &tpl.Name
-		resp.TemplateLanguage = &tpl.Language
-		resp.TemplateCategory = tpl.Category
-	}
-	return resp, nil
-}
-
-func buildDeliveryBreakdown(campaign *Campaign) []DeliveryBreakdown {
-	return []DeliveryBreakdown{
-		{Label: "Terkirim", Value: campaign.SentCount},
-		{Label: "Terkirim (Delivered)", Value: campaign.DeliveredCount},
-		{Label: "Terbaca", Value: campaign.ReadCount},
-		{Label: "Gagal", Value: campaign.FailedCount},
-	}
-}
-
-func buildHourlyPerformance(ctx context.Context, repo Repository, campaignID uuid.UUID) []HourlyPerformance {
-	contacts, err := repo.ListContactsByCampaign(ctx, campaignID)
-	if err != nil {
+func (s *Service) authorize(role, perm string) error {
+	if s.rbac != nil && s.rbac.Require(role, perm) {
 		return nil
 	}
-	buckets := make([]int, 24)
-	for i := range contacts {
-		if contacts[i].SentAt == nil {
-			continue
-		}
-		buckets[contacts[i].SentAt.UTC().Hour()]++
-	}
-	result := make([]HourlyPerformance, 24)
-	for hour := 0; hour < 24; hour++ {
-		result[hour] = HourlyPerformance{Hour: hour, Count: buckets[hour]}
-	}
-	return result
-}
-
-func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, role team.Role, input CreateInput) (*Response, error) {
-	if !canManage(role) {
-		return nil, ErrForbidden
-	}
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
-	}
-
-	name := strings.TrimSpace(input.Name)
-	if name == "" {
-		return nil, ErrNameRequired
-	}
-	if input.DeviceID == uuid.Nil || input.TemplateID == uuid.Nil {
-		return nil, errors.New("device_id and template_id are required")
-	}
-	if len(input.ContactIDs) == 0 && len(input.TagIDs) == 0 {
-		return nil, ErrRecipientsRequired
-	}
-
-	if _, err := s.devices.FindByID(ctx, teamID, input.DeviceID); err != nil {
-		if errors.Is(err, device.ErrNotFound) {
-			return nil, ErrDeviceNotFound
-		}
-		return nil, err
-	}
-	if _, err := s.templates.FindByID(ctx, teamID, input.TemplateID); err != nil {
-		if errors.Is(err, template.ErrNotFound) {
-			return nil, ErrTemplateNotFound
-		}
-		return nil, err
-	}
-
-	mapping := input.VariableMapping
-	if len(mapping) == 0 {
-		mapping = json.RawMessage(`{}`)
-	}
-	if _, err := parseVariableMapping(mapping); err != nil {
-		return nil, err
-	}
-
-	now := time.Now().UTC()
-	status := StatusDraft
-	if input.ScheduledAt != nil && input.ScheduledAt.After(now) {
-		status = StatusScheduled
-	}
-
-	campaign := &Campaign{
-		ID:              uuid.New(),
-		TeamID:          teamID,
-		DeviceID:        input.DeviceID,
-		TemplateID:      input.TemplateID,
-		Name:            name,
-		Status:          status,
-		VariableMapping: mapping,
-		ScheduledAt:     input.ScheduledAt,
-		CreatedBy:       userID,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-	}
-	if err := s.campaigns.Create(ctx, campaign, input.ContactIDs, input.TagIDs); err != nil {
-		return nil, err
-	}
-
-	resp, err := s.enrichResponse(ctx, teamID, campaign)
-	if err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-func (s *Service) Send(ctx context.Context, teamID, userID uuid.UUID, role team.Role, campaignID uuid.UUID, contactIDs []uuid.UUID) (*Response, error) {
-	if !canManage(role) {
-		return nil, ErrForbidden
-	}
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
-	}
-
-	campaign, err := s.campaigns.FindByID(ctx, teamID, campaignID)
-	if err != nil {
-		return nil, err
-	}
-	if campaign.Status != StatusDraft && campaign.Status != StatusScheduled {
-		return nil, ErrInvalidStatus
-	}
-
-	tagIDs, err := s.campaigns.ListTagIDs(ctx, campaignID)
-	if err != nil {
-		return nil, err
-	}
-	if len(contactIDs) == 0 {
-		contactIDs, err = s.campaigns.ListAudienceContactIDs(ctx, campaignID)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if err := s.prepareAndQueue(ctx, campaign, contactIDs, tagIDs); err != nil {
-		return nil, err
-	}
-
-	updated, err := s.campaigns.FindByID(ctx, teamID, campaignID)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := s.enrichResponse(ctx, teamID, updated)
-	if err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-func (s *Service) prepareAndQueue(ctx context.Context, campaign *Campaign, contactIDs, tagIDs []uuid.UUID) error {
-	audience, err := s.resolveAudience(ctx, campaign.TeamID, contactIDs, tagIDs)
-	if err != nil {
-		return err
-	}
-	if len(audience) == 0 {
-		return ErrRecipientsRequired
-	}
-
-	now := time.Now().UTC()
-	contacts := make([]CampaignContact, 0, len(audience))
-	for i := range audience {
-		c := audience[i]
-		contactID := c.ID
-		contacts = append(contacts, CampaignContact{
-			ID:         uuid.New(),
-			CampaignID: campaign.ID,
-			ContactID:  &contactID,
-			Phone:      c.Phone,
-			Status:     ContactPending,
-			CreatedAt:  now,
-		})
-	}
-	if err := s.campaigns.ReplaceContacts(ctx, campaign.ID, contacts); err != nil {
-		return err
-	}
-
-	campaign.TotalContacts = len(contacts)
-	campaign.Status = StatusQueued
-	campaign.UpdatedAt = now
-	if err := s.campaigns.Update(ctx, campaign); err != nil {
-		return err
-	}
-	return s.queue.Enqueue(ctx, campaign.ID)
-}
-
-func (s *Service) resolveAudience(ctx context.Context, teamID uuid.UUID, contactIDs, tagIDs []uuid.UUID) ([]contact.Contact, error) {
-	seen := make(map[string]contact.Contact)
-
-	if len(contactIDs) > 0 {
-		items, err := s.contacts.ListByIDs(ctx, teamID, contactIDs)
-		if err != nil {
-			return nil, err
-		}
-		for i := range items {
-			seen[items[i].Phone] = items[i]
-		}
-	}
-	if len(tagIDs) > 0 {
-		items, err := s.contacts.ListByTagIDs(ctx, teamID, tagIDs)
-		if err != nil {
-			return nil, err
-		}
-		for i := range items {
-			seen[items[i].Phone] = items[i]
-		}
-	}
-
-	result := make([]contact.Contact, 0, len(seen))
-	for _, c := range seen {
-		result = append(result, c)
-	}
-	return result, nil
-}
-
-func (s *Service) HandleDeliveryStatus(ctx context.Context, wamid, status string, at time.Time) error {
-	var contactStatus ContactStatus
-	switch status {
-	case "delivered":
-		contactStatus = ContactDelivered
-	case "read":
-		contactStatus = ContactRead
-	default:
-		return nil
-	}
-	if err := s.campaigns.UpdateContactStatus(ctx, wamid, contactStatus, at); err != nil {
-		return err
-	}
-	cc, err := s.campaigns.FindContactByWamid(ctx, wamid)
-	if err != nil {
-		return nil
-	}
-	return s.campaigns.RecalculateCounts(ctx, cc.CampaignID)
+	return serviceerrors.ErrForbidden
 }
 
 func (s *Service) ensureMember(ctx context.Context, teamID, userID uuid.UUID) error {
 	_, err := s.teams.FindMemberByUser(ctx, teamID, userID)
-	return err
+	if err != nil {
+		if err == team.ErrMemberNotFound {
+			return serviceerrors.ErrForbidden
+		}
+		return err
+	}
+	return nil
 }
 
-func canManage(role team.Role) bool {
-	return role == team.RoleOwner || role == team.RoleAdmin
+func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRole string, input CreateInput) (*CreateResult, error) {
+	if err := s.authorize(actorRole, rbac.PermCampaignCreate); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	if err := s.validateCreateInput(ctx, teamID, input); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	campaignID := uuid.New()
+	jobID := uuid.New()
+	snapID := uuid.New()
+
+	variableMapping := input.VariableMapping
+	if len(variableMapping) == 0 {
+		variableMapping = json.RawMessage(`{}`)
+	}
+
+	audiences := buildAudiences(campaignID, input.Audiences, input.SegmentID, now)
+	sourceSummary, _ := json.Marshal(map[string]any{
+		"audiences": audiences,
+		"segment_id": input.SegmentID,
+	})
+
+	c := &Campaign{
+		ID:              campaignID,
+		TeamID:          teamID,
+		ChannelID:       input.ChannelID,
+		TemplateID:      input.TemplateID,
+		SegmentID:       input.SegmentID,
+		Name:            strings.TrimSpace(input.Name),
+		Description:     input.Description,
+		Status:          StatusDraft,
+		VariableMapping: variableMapping,
+		SampleValues:    input.SampleValues,
+		Timezone:        input.Timezone,
+		SendMode:        &input.SendMode,
+		ScheduledAt:     input.ScheduledAt,
+		CreatedBy:       &userID,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+
+	job := &BroadcastJob{
+		ID:         jobID,
+		CampaignID: campaignID,
+		TeamID:     teamID,
+		ChannelID:  input.ChannelID,
+		Status:     JobPending,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+
+	snap := &AudienceSnapshot{
+		ID:            snapID,
+		CampaignID:    campaignID,
+		JobID:         jobID,
+		SnapshotAt:    now,
+		SourceSummary: sourceSummary,
+		CreatedAt:     now,
+	}
+
+	if err := s.tx.Run(ctx, func(ctx context.Context, repos Repository) error {
+		if err := repos.Create(ctx, c, audiences); err != nil {
+			return err
+		}
+		if err := repos.CreateJob(ctx, job); err != nil {
+			return err
+		}
+		return repos.CreateAudienceSnapshot(ctx, snap)
+	}); err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+
+	return &CreateResult{Campaign: c, Job: job, Snapshot: snap}, nil
+}
+
+func (s *Service) Get(ctx context.Context, teamID, userID uuid.UUID, actorRole string, campaignID uuid.UUID) (*Campaign, error) {
+	if err := s.authorize(actorRole, rbac.PermCampaignView); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	c, err := s.campaigns.FindByID(ctx, teamID, campaignID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	return c, nil
+}
+
+func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID, actorRole string, filter ListFilter, page repository.PageParams) (repository.Page[Campaign], error) {
+	if err := s.authorize(actorRole, rbac.PermCampaignView); err != nil {
+		return repository.Page[Campaign]{}, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return repository.Page[Campaign]{}, err
+	}
+	result, err := s.campaigns.List(ctx, teamID, filter, page)
+	if err != nil {
+		return repository.Page[Campaign]{}, serviceerrors.MapRepository(err)
+	}
+	return result, nil
+}
+
+func (s *Service) Update(ctx context.Context, teamID, userID uuid.UUID, actorRole string, campaignID uuid.UUID, input UpdateInput) (*Campaign, error) {
+	if err := s.authorize(actorRole, rbac.PermCampaignCreate); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+
+	c, err := s.campaigns.FindByID(ctx, teamID, campaignID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	if c.Status != StatusDraft && c.Status != StatusScheduled {
+		return nil, serviceerrors.NewValidation("status", "only draft or scheduled campaigns can be updated")
+	}
+
+	if input.Name != nil {
+		name := strings.TrimSpace(*input.Name)
+		if name == "" {
+			return nil, serviceerrors.NewValidation("name", "is required")
+		}
+		c.Name = name
+	}
+	if input.Description != nil {
+		c.Description = input.Description
+	}
+	if len(input.VariableMapping) > 0 {
+		c.VariableMapping = input.VariableMapping
+	}
+	if len(input.SampleValues) > 0 {
+		c.SampleValues = input.SampleValues
+	}
+	if input.Timezone != nil {
+		c.Timezone = input.Timezone
+	}
+	if input.SendMode != nil {
+		if err := validateSendMode(*input.SendMode, coalesceTime(input.ScheduledAt, c.ScheduledAt)); err != nil {
+			return nil, err
+		}
+		c.SendMode = input.SendMode
+	}
+	if input.ScheduledAt != nil {
+		mode := SendLater
+		if c.SendMode != nil {
+			mode = *c.SendMode
+		}
+		if err := validateSendMode(mode, input.ScheduledAt); err != nil {
+			return nil, err
+		}
+		c.ScheduledAt = input.ScheduledAt
+	}
+	if input.SegmentID != nil {
+		if err := validateSegmentExists(ctx, s.segments, teamID, *input.SegmentID); err != nil {
+			return nil, err
+		}
+		c.SegmentID = input.SegmentID
+	}
+	c.UpdatedAt = time.Now().UTC()
+
+	if err := serviceerrors.MapRepository(s.campaigns.Update(ctx, c)); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (s *Service) Delete(ctx context.Context, teamID, userID uuid.UUID, actorRole string, campaignID uuid.UUID) error {
+	if err := s.authorize(actorRole, rbac.PermCampaignCreate); err != nil {
+		return err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return err
+	}
+	return serviceerrors.MapRepository(s.campaigns.SoftDelete(ctx, teamID, campaignID))
+}
+
+func (s *Service) validateCreateInput(ctx context.Context, teamID uuid.UUID, input CreateInput) error {
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return serviceerrors.NewValidation("name", "is required")
+	}
+	if err := validateChannelForCampaign(ctx, s.channels, teamID, input.ChannelID); err != nil {
+		return err
+	}
+	if err := validateTemplateForCampaign(ctx, s.templates, teamID, input.ChannelID, input.TemplateID); err != nil {
+		return err
+	}
+	if input.SegmentID != nil {
+		if err := validateSegmentExists(ctx, s.segments, teamID, *input.SegmentID); err != nil {
+			return err
+		}
+	}
+	if len(input.Audiences) == 0 && input.SegmentID == nil {
+		return serviceerrors.NewValidation("audiences", "segment or audience sources are required")
+	}
+	for _, a := range input.Audiences {
+		if err := validateAudienceSource(a); err != nil {
+			return err
+		}
+	}
+	return validateSendMode(input.SendMode, input.ScheduledAt)
+}
+
+func validateSendMode(mode SendMode, scheduledAt *time.Time) error {
+	switch mode {
+	case SendNow:
+		return nil
+	case SendLater:
+		if scheduledAt == nil {
+			return serviceerrors.NewValidation("scheduled_at", "is required when send_mode is later")
+		}
+		if scheduledAt.Before(time.Now().UTC()) {
+			return serviceerrors.NewValidation("scheduled_at", "must be in the future")
+		}
+		return nil
+	default:
+		return serviceerrors.NewValidation("send_mode", "must be now or later")
+	}
+}
+
+func validateAudienceSource(a AudienceInput) error {
+	switch a.SourceType {
+	case AudienceSegment, AudienceTag, AudienceContact:
+		if a.SourceID == uuid.Nil {
+			return serviceerrors.NewValidation("audiences.source_id", "is required")
+		}
+		return nil
+	default:
+		return serviceerrors.NewValidation("audiences.source_type", "invalid value")
+	}
+}
+
+func buildAudiences(campaignID uuid.UUID, inputs []AudienceInput, segmentID *uuid.UUID, now time.Time) []Audience {
+	audiences := make([]Audience, 0, len(inputs)+1)
+	seen := map[string]struct{}{}
+	if segmentID != nil {
+		audiences = append(audiences, Audience{
+			ID:         uuid.New(),
+			CampaignID: campaignID,
+			SourceType: AudienceSegment,
+			SourceID:   *segmentID,
+			CreatedAt:  now,
+		})
+		seen["segment:"+segmentID.String()] = struct{}{}
+	}
+	for _, in := range inputs {
+		key := string(in.SourceType) + ":" + in.SourceID.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		audiences = append(audiences, Audience{
+			ID:         uuid.New(),
+			CampaignID: campaignID,
+			SourceType: in.SourceType,
+			SourceID:   in.SourceID,
+			CreatedAt:  now,
+		})
+	}
+	return audiences
+}
+
+func coalesceTime(primary, fallback *time.Time) *time.Time {
+	if primary != nil {
+		return primary
+	}
+	return fallback
 }

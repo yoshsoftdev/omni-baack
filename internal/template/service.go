@@ -2,266 +2,120 @@ package template
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/omnichannel/omni-chan-v2/internal/device"
+	"github.com/omnichannel/omni-chan-v2/internal/channel"
+	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
-	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
+	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
 
-var (
-	ErrForbidden        = errors.New("insufficient permissions")
-	ErrDeviceNotFound   = errors.New("device not found")
-	ErrDeviceNotReady   = errors.New("device is not configured for templates")
-	ErrDeviceIDRequired = errors.New("device_id is required")
-	ErrNameRequired     = errors.New("template name is required")
-	ErrInvalidCategory  = errors.New("invalid template category")
-	ErrInvalidLanguage  = errors.New("invalid template language")
-	ErrComponentsEmpty  = errors.New("template components are required")
-)
-
+// Service (TemplateService) manages Meta-synced WhatsApp templates.
 type Service struct {
 	templates Repository
-	devices   device.Repository
+	channels  channel.Repository
 	teams     team.Repository
-	meta      *metaclient.Client
+	rbac      *rbac.Service
 }
 
 func NewService(
 	templates Repository,
-	devices device.Repository,
+	channels channel.Repository,
 	teams team.Repository,
-	meta *metaclient.Client,
+	rbacSvc *rbac.Service,
 ) *Service {
 	return &Service{
 		templates: templates,
-		devices:   devices,
+		channels:  channels,
 		teams:     teams,
-		meta:      meta,
+		rbac:      rbacSvc,
 	}
 }
 
-type SyncInput struct {
-	DeviceID uuid.UUID
-}
-
-type CreateInput struct {
-	DeviceID   uuid.UUID
-	Name       string
-	Language   string
-	Category   string
-	Components json.RawMessage
-}
-
-type SyncResult struct {
-	Synced int `json:"synced"`
-}
-
-func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID, filter ListFilter) ([]Response, error) {
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
+func (s *Service) authorize(role, perm string) error {
+	if s.rbac != nil && s.rbac.Require(role, perm) {
+		return nil
 	}
-	items, err := s.templates.ListByTeam(ctx, teamID, filter)
-	if err != nil {
-		return nil, err
-	}
-	responses := make([]Response, 0, len(items))
-	for i := range items {
-		responses = append(responses, ToResponse(&items[i]))
-	}
-	return responses, nil
-}
-
-func (s *Service) Sync(ctx context.Context, teamID, userID uuid.UUID, role team.Role, input SyncInput) (*SyncResult, error) {
-	if !canManage(role) {
-		return nil, ErrForbidden
-	}
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
-	}
-	if input.DeviceID == uuid.Nil {
-		return nil, ErrDeviceIDRequired
-	}
-
-	dev, err := s.devices.FindByID(ctx, teamID, input.DeviceID)
-	if err != nil {
-		if errors.Is(err, device.ErrNotFound) {
-			return nil, ErrDeviceNotFound
-		}
-		return nil, err
-	}
-	if dev.WabaID == nil || dev.AccessToken == nil || strings.TrimSpace(*dev.WabaID) == "" || strings.TrimSpace(*dev.AccessToken) == "" {
-		return nil, ErrDeviceNotReady
-	}
-
-	metaTemplates, err := s.meta.ListMessageTemplates(ctx, *dev.WabaID, *dev.AccessToken)
-	if err != nil {
-		return nil, err
-	}
-
-	now := time.Now().UTC()
-	synced := 0
-	for _, mt := range metaTemplates {
-		components := mt.Components
-		if len(components) == 0 {
-			components = json.RawMessage("[]")
-		}
-		category := strings.TrimSpace(mt.Category)
-		status := strings.TrimSpace(mt.Status)
-		var categoryPtr *string
-		var statusPtr *string
-		if category != "" {
-			categoryPtr = &category
-		}
-		if status != "" {
-			statusPtr = &status
-		}
-		tpl := &Template{
-			ID:             uuid.New(),
-			TeamID:         teamID,
-			DeviceID:       dev.ID,
-			WabaID:         *dev.WabaID,
-			MetaTemplateID: mt.ID,
-			Name:           mt.Name,
-			Language:       mt.Language,
-			Category:       categoryPtr,
-			Status:         statusPtr,
-			Components:     components,
-			CreatedAt:      now,
-			UpdatedAt:      now,
-		}
-		if err := s.templates.Upsert(ctx, tpl); err != nil {
-			return nil, err
-		}
-		synced++
-	}
-
-	return &SyncResult{Synced: synced}, nil
-}
-
-func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, role team.Role, input CreateInput) (*Response, error) {
-	if !canManage(role) {
-		return nil, ErrForbidden
-	}
-	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return nil, err
-	}
-	if input.DeviceID == uuid.Nil {
-		return nil, ErrDeviceIDRequired
-	}
-
-	name := strings.TrimSpace(input.Name)
-	if name == "" {
-		return nil, ErrNameRequired
-	}
-	if len(input.Components) == 0 || string(input.Components) == "null" {
-		return nil, ErrComponentsEmpty
-	}
-
-	language := normalizeTemplateLanguage(strings.TrimSpace(input.Language))
-	if language == "" {
-		return nil, ErrInvalidLanguage
-	}
-	category := normalizeTemplateCategory(strings.TrimSpace(input.Category))
-	if category == "" {
-		return nil, ErrInvalidCategory
-	}
-
-	dev, err := s.devices.FindByID(ctx, teamID, input.DeviceID)
-	if err != nil {
-		if errors.Is(err, device.ErrNotFound) {
-			return nil, ErrDeviceNotFound
-		}
-		return nil, err
-	}
-	if dev.WabaID == nil || dev.AccessToken == nil || strings.TrimSpace(*dev.WabaID) == "" || strings.TrimSpace(*dev.AccessToken) == "" {
-		return nil, ErrDeviceNotReady
-	}
-
-	created, err := s.meta.CreateMessageTemplate(ctx, *dev.WabaID, *dev.AccessToken, metaclient.CreateTemplateRequest{
-		Name:       name,
-		Language:   language,
-		Category:   category,
-		Components: input.Components,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	now := time.Now().UTC()
-	status := strings.TrimSpace(created.Status)
-	if status == "" {
-		status = "PENDING"
-	}
-	categoryPtr := category
-	statusPtr := status
-	tpl := &Template{
-		ID:             uuid.New(),
-		TeamID:         teamID,
-		DeviceID:       dev.ID,
-		WabaID:         *dev.WabaID,
-		MetaTemplateID: created.ID,
-		Name:           name,
-		Language:       language,
-		Category:       &categoryPtr,
-		Status:         &statusPtr,
-		Components:     input.Components,
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	}
-	if err := s.templates.Upsert(ctx, tpl); err != nil {
-		return nil, err
-	}
-
-	resp := ToResponse(tpl)
-	return &resp, nil
-}
-
-func normalizeTemplateLanguage(raw string) string {
-	switch strings.ToLower(raw) {
-	case "id", "id_id":
-		return "id"
-	case "en", "en_us", "en-us":
-		return "en_US"
-	default:
-		if len(raw) >= 2 {
-			return raw
-		}
-		return ""
-	}
-}
-
-func normalizeTemplateCategory(raw string) string {
-	switch strings.ToUpper(raw) {
-	case "MARKETING":
-		return "MARKETING"
-	case "UTILITY":
-		return "UTILITY"
-	case "AUTHENTICATION":
-		return "AUTHENTICATION"
-	default:
-		switch strings.ToLower(raw) {
-		case "marketing":
-			return "MARKETING"
-		case "utility":
-			return "UTILITY"
-		case "authentication":
-			return "AUTHENTICATION"
-		default:
-			return ""
-		}
-	}
+	return serviceerrors.ErrForbidden
 }
 
 func (s *Service) ensureMember(ctx context.Context, teamID, userID uuid.UUID) error {
 	_, err := s.teams.FindMemberByUser(ctx, teamID, userID)
-	return err
+	if err != nil {
+		if err == team.ErrMemberNotFound {
+			return serviceerrors.ErrForbidden
+		}
+		return err
+	}
+	return nil
 }
 
-func canManage(role team.Role) bool {
-	return role == team.RoleOwner || role == team.RoleAdmin
+func (s *Service) Get(ctx context.Context, teamID, userID uuid.UUID, actorRole string, templateID uuid.UUID) (*Template, error) {
+	if err := s.authorize(actorRole, rbac.PermTemplateView); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	tmpl, err := s.templates.FindByID(ctx, teamID, templateID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	return tmpl, nil
+}
+
+func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID, actorRole string, filter ListFilter, page repository.PageParams) (repository.Page[Template], error) {
+	if err := s.authorize(actorRole, rbac.PermTemplateView); err != nil {
+		return repository.Page[Template]{}, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return repository.Page[Template]{}, err
+	}
+	result, err := s.templates.List(ctx, teamID, filter, page)
+	if err != nil {
+		return repository.Page[Template]{}, serviceerrors.MapRepository(err)
+	}
+	return result, nil
+}
+
+// UpsertFromSync persists a template synced from Meta (called by sync worker/handler later).
+func (s *Service) UpsertFromSync(ctx context.Context, teamID uuid.UUID, actorRole string, tmpl *Template) error {
+	if err := s.authorize(actorRole, rbac.PermTemplateSync); err != nil {
+		return err
+	}
+	if _, err := s.channels.FindByID(ctx, teamID, tmpl.ChannelID); err != nil {
+		return serviceerrors.MapRepository(err)
+	}
+	tmpl.TeamID = teamID
+	tmpl.UpdatedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	if tmpl.CreatedAt.IsZero() {
+		tmpl.CreatedAt = now
+	}
+	if tmpl.LastSyncAt == nil {
+		tmpl.LastSyncAt = &now
+	}
+	return serviceerrors.MapRepository(s.templates.UpsertFromSync(ctx, tmpl))
+}
+
+// ValidateForCampaign ensures the template exists, is approved, and belongs to the channel.
+func (s *Service) ValidateForCampaign(ctx context.Context, teamID, channelID, templateID uuid.UUID) error {
+	tmpl, err := s.templates.FindByID(ctx, teamID, templateID)
+	if err != nil {
+		return serviceerrors.MapRepository(err)
+	}
+	if tmpl.ChannelID != channelID {
+		return serviceerrors.NewValidation("template_id", "template does not belong to the selected channel")
+	}
+	if tmpl.Status != StatusApproved {
+		return serviceerrors.NewValidation("template_id", "template must be approved by Meta")
+	}
+	name := strings.TrimSpace(tmpl.Name)
+	if name == "" {
+		return serviceerrors.NewValidation("template_id", "template name is required")
+	}
+	return nil
 }

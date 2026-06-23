@@ -2,22 +2,22 @@ package template
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/omnichannel/omni-chan-v2/pkg/database"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 )
 
-var ErrNotFound = errors.New("template not found")
-
+// Repository (TemplateRepository) persists Meta templates.
 type Repository interface {
-	Upsert(ctx context.Context, tpl *Template) error
-	FindByID(ctx context.Context, teamID, templateID uuid.UUID) (*Template, error)
-	ListByTeam(ctx context.Context, teamID uuid.UUID, filter ListFilter) ([]Template, error)
+	Create(ctx context.Context, t *Template) error
+	FindByID(ctx context.Context, teamID, id uuid.UUID) (*Template, error)
+	List(ctx context.Context, teamID uuid.UUID, filter ListFilter, page repository.PageParams) (repository.Page[Template], error)
+	UpsertFromSync(ctx context.Context, t *Template) error
+	SoftDelete(ctx context.Context, teamID, id uuid.UUID) error
 }
 
 type PostgresRepository struct {
@@ -28,133 +28,128 @@ func NewRepository(db *database.DB) *PostgresRepository {
 	return &PostgresRepository{db: db}
 }
 
-func (r *PostgresRepository) Upsert(ctx context.Context, tpl *Template) error {
+func (r *PostgresRepository) Create(ctx context.Context, t *Template) error {
 	query := `
 		INSERT INTO templates (
-			id, team_id, device_id, waba_id, meta_template_id, name, language,
-			category, status, components, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		ON CONFLICT (team_id, meta_template_id, language) WHERE deleted_at IS NULL
-		DO UPDATE SET
-			device_id = EXCLUDED.device_id,
-			waba_id = EXCLUDED.waba_id,
-			name = EXCLUDED.name,
-			category = EXCLUDED.category,
-			status = EXCLUDED.status,
-			components = EXCLUDED.components,
-			updated_at = EXCLUDED.updated_at
-		RETURNING id
+			id, channel_id, team_id, waba_id, meta_template_id, name, language,
+			category, status, preview, components, variable_count, last_sync_at, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 	`
-	var id uuid.UUID
-	err := r.db.Pool.QueryRow(ctx, query,
-		tpl.ID, tpl.TeamID, tpl.DeviceID, tpl.WabaID, tpl.MetaTemplateID,
-		tpl.Name, tpl.Language, tpl.Category, tpl.Status, tpl.Components,
-		tpl.CreatedAt, tpl.UpdatedAt,
-	).Scan(&id)
-	if err != nil {
-		return fmt.Errorf("upsert template: %w", err)
-	}
-	tpl.ID = id
-	return nil
+	_, err := r.db.Pool.Exec(ctx, query,
+		t.ID, t.ChannelID, t.TeamID, t.WABAID, t.MetaTemplateID, t.Name, t.Language,
+		t.Category, string(t.Status), t.Preview, t.Components, t.VariableCount, t.LastSyncAt,
+		t.CreatedAt, t.UpdatedAt,
+	)
+	return repository.MapError(err)
 }
 
-func (r *PostgresRepository) FindByID(ctx context.Context, teamID, templateID uuid.UUID) (*Template, error) {
+func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID) (*Template, error) {
 	query := `
-		SELECT id, team_id, device_id, waba_id, meta_template_id, name, language,
-			category, status, components, created_at, updated_at, deleted_at
-		FROM templates
-		WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL
+		SELECT id, channel_id, team_id, waba_id, meta_template_id, name, language,
+			category, status, preview, components, variable_count, last_sync_at, created_at, updated_at, deleted_at
+		FROM templates WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL
 	`
-	return r.scanOne(r.db.Pool.QueryRow(ctx, query, templateID, teamID))
+	return scanTemplate(r.db.Pool.QueryRow(ctx, query, id, teamID))
 }
 
-func (r *PostgresRepository) ListByTeam(ctx context.Context, teamID uuid.UUID, filter ListFilter) ([]Template, error) {
-	query := `
-		SELECT id, team_id, device_id, waba_id, meta_template_id, name, language,
-			category, status, components, created_at, updated_at, deleted_at
-		FROM templates
-		WHERE team_id = $1 AND deleted_at IS NULL
-	`
+func (r *PostgresRepository) List(ctx context.Context, teamID uuid.UUID, filter ListFilter, page repository.PageParams) (repository.Page[Template], error) {
+	page = page.Normalize()
 	args := []any{teamID}
-	argPos := 2
-	if filter.DeviceID != nil && *filter.DeviceID != "" {
-		query += fmt.Sprintf(` AND device_id = $%d`, argPos)
-		args = append(args, *filter.DeviceID)
-		argPos++
+	where := `team_id = $1 AND deleted_at IS NULL`
+	if filter.ChannelID != nil {
+		args = append(args, *filter.ChannelID)
+		where += fmt.Sprintf(` AND channel_id = $%d`, len(args))
+	}
+	if filter.Status != nil {
+		args = append(args, string(*filter.Status))
+		where += fmt.Sprintf(` AND status = $%d`, len(args))
 	}
 	if filter.Search != "" {
-		query += fmt.Sprintf(` AND (name ILIKE $%d OR language ILIKE $%d)`, argPos, argPos)
 		args = append(args, "%"+filter.Search+"%")
-		argPos++
+		where += fmt.Sprintf(` AND name ILIKE $%d`, len(args))
 	}
-	if filter.Language != "" && filter.Language != "all" {
-		query += fmt.Sprintf(` AND language ILIKE $%d`, argPos)
-		args = append(args, "%"+filter.Language+"%")
-		argPos++
-	}
-	if filter.Category != "" && filter.Category != "all" {
-		query += fmt.Sprintf(` AND category ILIKE $%d`, argPos)
-		args = append(args, filter.Category)
-		argPos++
-	}
-	if filter.Status != "" && filter.Status != "all" {
-		query += fmt.Sprintf(` AND status ILIKE $%d`, argPos)
-		args = append(args, filter.Status)
-		argPos++
-	}
-	_ = argPos
-	query += ` ORDER BY name ASC, language ASC`
 
-	rows, err := r.db.Pool.Query(ctx, query, args...)
+	var total int64
+	if err := r.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM templates WHERE `+where, args...).Scan(&total); err != nil {
+		return repository.Page[Template]{}, fmt.Errorf("count templates: %w", err)
+	}
+
+	args = append(args, page.Limit(), page.Offset())
+	listQ := fmt.Sprintf(`
+		SELECT id, channel_id, team_id, waba_id, meta_template_id, name, language,
+			category, status, preview, components, variable_count, last_sync_at, created_at, updated_at, deleted_at
+		FROM templates WHERE %s ORDER BY name ASC LIMIT $%d OFFSET $%d
+	`, where, len(args)-1, len(args))
+
+	rows, err := r.db.Pool.Query(ctx, listQ, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list templates: %w", err)
+		return repository.Page[Template]{}, fmt.Errorf("list templates: %w", err)
 	}
 	defer rows.Close()
 
-	var items []Template
+	items := make([]Template, 0)
 	for rows.Next() {
-		item, err := r.scanRow(rows)
+		t, err := scanTemplateRow(rows)
 		if err != nil {
-			return nil, err
+			return repository.Page[Template]{}, err
 		}
-		items = append(items, *item)
+		items = append(items, *t)
 	}
-	return items, rows.Err()
+	return repository.Page[Template]{Items: items, Pagination: repository.NewMeta(page.Page, page.PageSize, total)}, rows.Err()
 }
 
-func (r *PostgresRepository) scanOne(row pgx.Row) (*Template, error) {
-	var tpl Template
-	var components []byte
+func (r *PostgresRepository) UpsertFromSync(ctx context.Context, t *Template) error {
+	query := `
+		INSERT INTO templates (
+			id, channel_id, team_id, waba_id, meta_template_id, name, language,
+			category, status, preview, components, variable_count, last_sync_at, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		ON CONFLICT (channel_id, meta_template_id) WHERE deleted_at IS NULL DO UPDATE SET
+			name = EXCLUDED.name, language = EXCLUDED.language, category = EXCLUDED.category,
+			status = EXCLUDED.status, preview = EXCLUDED.preview, components = EXCLUDED.components,
+			variable_count = EXCLUDED.variable_count, last_sync_at = EXCLUDED.last_sync_at,
+			updated_at = EXCLUDED.updated_at
+	`
+	_, err := r.db.Pool.Exec(ctx, query,
+		t.ID, t.ChannelID, t.TeamID, t.WABAID, t.MetaTemplateID, t.Name, t.Language,
+		t.Category, string(t.Status), t.Preview, t.Components, t.VariableCount, t.LastSyncAt,
+		t.CreatedAt, t.UpdatedAt,
+	)
+	return repository.MapError(err)
+}
+
+func (r *PostgresRepository) SoftDelete(ctx context.Context, teamID, id uuid.UUID) error {
+	tag, err := r.db.Pool.Exec(ctx,
+		`UPDATE templates SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL`,
+		id, teamID,
+	)
+	if err != nil {
+		return repository.MapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func scanTemplate(row pgx.Row) (*Template, error) {
+	return scanTemplateRow(row)
+}
+
+func scanTemplateRow(row pgx.Row) (*Template, error) {
+	var t Template
+	var status string
 	err := row.Scan(
-		&tpl.ID, &tpl.TeamID, &tpl.DeviceID, &tpl.WabaID, &tpl.MetaTemplateID,
-		&tpl.Name, &tpl.Language, &tpl.Category, &tpl.Status, &components,
-		&tpl.CreatedAt, &tpl.UpdatedAt, &tpl.DeletedAt,
+		&t.ID, &t.ChannelID, &t.TeamID, &t.WABAID, &t.MetaTemplateID, &t.Name, &t.Language,
+		&t.Category, &status, &t.Preview, &t.Components, &t.VariableCount, &t.LastSyncAt,
+		&t.CreatedAt, &t.UpdatedAt, &t.DeletedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
+			return nil, repository.ErrNotFound
 		}
 		return nil, fmt.Errorf("scan template: %w", err)
 	}
-	tpl.Components = json.RawMessage(components)
-	return &tpl, nil
-}
-
-func (r *PostgresRepository) scanRow(rows pgx.Rows) (*Template, error) {
-	var tpl Template
-	var components []byte
-	err := rows.Scan(
-		&tpl.ID, &tpl.TeamID, &tpl.DeviceID, &tpl.WabaID, &tpl.MetaTemplateID,
-		&tpl.Name, &tpl.Language, &tpl.Category, &tpl.Status, &components,
-		&tpl.CreatedAt, &tpl.UpdatedAt, &tpl.DeletedAt,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("scan template row: %w", err)
-	}
-	tpl.Components = json.RawMessage(components)
-	return &tpl, nil
-}
-
-func nowUTC() time.Time {
-	return time.Now().UTC()
+	t.Status = Status(status)
+	return &t, nil
 }

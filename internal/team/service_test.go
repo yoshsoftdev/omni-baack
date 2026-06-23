@@ -172,7 +172,7 @@ func TestService_AddMember_ForbiddenForAgent(t *testing.T) {
 			{ID: uuid.New(), TeamID: teamID, UserID: ownerID, Role: RoleOwner},
 		},
 	}
-	svc := NewService(repo, &mockUserRepo{users: map[string]*user.User{}}, testRBAC())
+	svc := NewService(repo, &mockUserRepo{users: map[string]*user.User{}}, nil, testRBAC())
 
 	_, err := svc.AddMember(context.Background(), teamID, ownerID, "agent", "new@example.com", RoleAdmin)
 	if err != ErrForbidden {
@@ -191,7 +191,7 @@ func TestService_Update_ForbiddenForAgent(t *testing.T) {
 			{ID: uuid.New(), TeamID: teamID, UserID: userID, Role: RoleAgent},
 		},
 	}
-	svc := NewService(repo, &mockUserRepo{}, testRBAC())
+	svc := NewService(repo, &mockUserRepo{}, nil, testRBAC())
 
 	_, err := svc.Update(context.Background(), teamID, userID, "agent", "New Name")
 	if err != ErrForbidden {

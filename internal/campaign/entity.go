@@ -19,121 +19,174 @@ const (
 	StatusCancelled Status = "cancelled"
 )
 
-type ContactStatus string
+type SendMode string
 
 const (
-	ContactPending   ContactStatus = "pending"
-	ContactSent      ContactStatus = "sent"
-	ContactDelivered ContactStatus = "delivered"
-	ContactRead      ContactStatus = "read"
-	ContactFailed    ContactStatus = "failed"
+	SendNow   SendMode = "now"
+	SendLater SendMode = "later"
+)
+
+type AudienceSourceType string
+
+const (
+	AudienceSegment AudienceSourceType = "segment"
+	AudienceTag     AudienceSourceType = "tag"
+	AudienceContact AudienceSourceType = "contact"
 )
 
 type Campaign struct {
 	ID              uuid.UUID
 	TeamID          uuid.UUID
-	DeviceID        uuid.UUID
+	ChannelID       uuid.UUID
 	TemplateID      uuid.UUID
+	SegmentID       *uuid.UUID
 	Name            string
+	Description     *string
 	Status          Status
 	VariableMapping json.RawMessage
+	SampleValues    json.RawMessage
+	Timezone        *string
+	SendMode        *SendMode
 	ScheduledAt     *time.Time
 	StartedAt       *time.Time
 	CompletedAt     *time.Time
-	CreatedBy       uuid.UUID
 	TotalContacts   int
 	SentCount       int
 	DeliveredCount  int
 	ReadCount       int
 	FailedCount     int
+	ReplyCount      int
+	ClickedCount    int
+	CreatedBy       *uuid.UUID
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	DeletedAt       *time.Time
 }
 
-type CampaignContact struct {
+type Audience struct {
+	ID         uuid.UUID
+	CampaignID uuid.UUID
+	SourceType AudienceSourceType
+	SourceID   uuid.UUID
+	CreatedAt  time.Time
+}
+
+type BroadcastJobStatus string
+
+const (
+	JobPending           BroadcastJobStatus = "pending"
+	JobResolvingAudience BroadcastJobStatus = "resolving_audience"
+	JobPlanningBatches   BroadcastJobStatus = "planning_batches"
+	JobSending           BroadcastJobStatus = "sending"
+	JobCompleted         BroadcastJobStatus = "completed"
+	JobFailed            BroadcastJobStatus = "failed"
+	JobCancelled         BroadcastJobStatus = "cancelled"
+)
+
+type BroadcastJob struct {
+	ID                uuid.UUID
+	CampaignID        uuid.UUID
+	TeamID            uuid.UUID
+	ChannelID         uuid.UUID
+	Status            BroadcastJobStatus
+	TotalRecipients   int
+	BatchesTotal      int
+	BatchesCompleted  int
+	RecipientsSent    int
+	StartedAt         *time.Time
+	CompletedAt       *time.Time
+	CancelledAt       *time.Time
+	CancelReason      *string
+	ErrorSummary      *string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type BroadcastBatchStatus string
+
+const (
+	BatchPending    BroadcastBatchStatus = "pending"
+	BatchQueued     BroadcastBatchStatus = "queued"
+	BatchProcessing BroadcastBatchStatus = "processing"
+	BatchCompleted  BroadcastBatchStatus = "completed"
+	BatchFailed     BroadcastBatchStatus = "failed"
+	BatchCancelled  BroadcastBatchStatus = "cancelled"
+)
+
+type BroadcastBatch struct {
+	ID               uuid.UUID
+	JobID            uuid.UUID
+	CampaignID       uuid.UUID
+	BatchNumber      int
+	Status           BroadcastBatchStatus
+	RecipientCount   int
+	RecipientsSent   int
+	RecipientsFailed int
+	AttemptCount     int
+	NextRetryAt      *time.Time
+	LockedBy         *string
+	LockedAt         *time.Time
+	ErrorSummary     *string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+type RecipientStatus string
+
+const (
+	RecipientPending   RecipientStatus = "pending"
+	RecipientQueued    RecipientStatus = "queued"
+	RecipientSending   RecipientStatus = "sending"
+	RecipientSent      RecipientStatus = "sent"
+	RecipientDelivered RecipientStatus = "delivered"
+	RecipientRead      RecipientStatus = "read"
+	RecipientFailed    RecipientStatus = "failed"
+	RecipientCancelled RecipientStatus = "cancelled"
+	RecipientSkipped   RecipientStatus = "skipped"
+)
+
+type Recipient struct {
 	ID           uuid.UUID
 	CampaignID   uuid.UUID
-	ContactID    *uuid.UUID
+	TeamID       uuid.UUID
+	ContactID    uuid.UUID
+	JobID        *uuid.UUID
+	BatchID      *uuid.UUID
 	Phone        string
-	Status       ContactStatus
-	Wamid        *string
-	ErrorMessage *string
+	Status       RecipientStatus
+	AttemptCount int
+	LastError    *string
+	FailureCode  *string
+	WAMID        *string
 	SentAt       *time.Time
 	DeliveredAt  *time.Time
 	ReadAt       *time.Time
+	FailedAt     *time.Time
 	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
-type Response struct {
-	ID              uuid.UUID       `json:"id"`
-	DeviceID        uuid.UUID       `json:"device_id"`
-	TemplateID      uuid.UUID       `json:"template_id"`
-	Name            string          `json:"name"`
-	Status          Status          `json:"status"`
-	VariableMapping json.RawMessage `json:"variable_mapping"`
-	ScheduledAt     *time.Time      `json:"scheduled_at,omitempty"`
-	StartedAt       *time.Time      `json:"started_at,omitempty"`
-	CompletedAt     *time.Time      `json:"completed_at,omitempty"`
-	TotalContacts   int             `json:"total_contacts"`
-	SentCount       int             `json:"sent_count"`
-	DeliveredCount  int             `json:"delivered_count"`
-	ReadCount       int             `json:"read_count"`
-	FailedCount     int             `json:"failed_count"`
-	DeviceName      *string         `json:"device_name,omitempty"`
-	DevicePhone     *string         `json:"device_phone,omitempty"`
-	TemplateName    *string         `json:"template_name,omitempty"`
-	TemplateLanguage *string        `json:"template_language,omitempty"`
-	TemplateCategory *string        `json:"template_category,omitempty"`
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
+type AudienceSnapshot struct {
+	ID              uuid.UUID
+	CampaignID      uuid.UUID
+	JobID           uuid.UUID
+	SnapshotAt      time.Time
+	SourceSummary   json.RawMessage
+	ResolvedCount   int
+	SkippedOptOut   int
+	SkippedInvalid  int
+	CreatedAt       time.Time
 }
 
-type DeliveryBreakdown struct {
-	Label string `json:"label"`
-	Value int    `json:"value"`
+type ListFilter struct {
+	Status    *Status
+	ChannelID *uuid.UUID
+	Search    string
 }
 
-type HourlyPerformance struct {
-	Hour  int `json:"hour"`
-	Count int `json:"count"`
-}
-
-type ReportResponse struct {
-	Response
-	DeliveryBreakdown []DeliveryBreakdown `json:"delivery_breakdown,omitempty"`
-	HourlyPerformance []HourlyPerformance `json:"hourly_performance,omitempty"`
-}
-
-type OverviewResponse struct {
-	TotalCampaigns int     `json:"total_campaigns"`
-	TotalSent      int     `json:"total_sent"`
-	DeliveredRate  float64 `json:"delivered_rate"`
-	ReadRate       float64 `json:"read_rate"`
-	FailedRate     float64 `json:"failed_rate"`
-}
-
-func ToResponse(c *Campaign) Response {
-	return Response{
-		ID:              c.ID,
-		DeviceID:        c.DeviceID,
-		TemplateID:      c.TemplateID,
-		Name:            c.Name,
-		Status:          c.Status,
-		VariableMapping: c.VariableMapping,
-		ScheduledAt:     c.ScheduledAt,
-		StartedAt:       c.StartedAt,
-		CompletedAt:     c.CompletedAt,
-		TotalContacts:   c.TotalContacts,
-		SentCount:       c.SentCount,
-		DeliveredCount:  c.DeliveredCount,
-		ReadCount:       c.ReadCount,
-		FailedCount:     c.FailedCount,
-		CreatedAt:       c.CreatedAt,
-		UpdatedAt:       c.UpdatedAt,
-	}
-}
-
-func ToReport(c *Campaign) ReportResponse {
-	return ReportResponse{Response: ToResponse(c)}
+type CounterDelta struct {
+	Sent      int
+	Delivered int
+	Read      int
+	Failed    int
 }

@@ -10,6 +10,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/user"
+	"github.com/omnichannel/omni-chan-v2/pkg/planlimits"
+	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
+	"github.com/omnichannel/omni-chan-v2/pkg/slug"
 )
 
 var (
@@ -19,14 +22,21 @@ var (
 	ErrUserNotFound      = errors.New("user not found, they must register first")
 )
 
-type Service struct {
-	teams Repository
-	users user.Repository
-	rbac  *rbac.Service
+// MemberLimiter checks workspace member quotas (implemented by quota.Service).
+type MemberLimiter interface {
+	AssertMemberHeadroom(ctx context.Context, teamID uuid.UUID) error
 }
 
-func NewService(teams Repository, users user.Repository, rbacService *rbac.Service) *Service {
-	return &Service{teams: teams, users: users, rbac: rbacService}
+// Service (TeamService) manages team membership and invitations.
+type Service struct {
+	teams   Repository
+	users   user.Repository
+	limiter MemberLimiter
+	rbac    *rbac.Service
+}
+
+func NewService(teams Repository, users user.Repository, limiter MemberLimiter, rbacService *rbac.Service) *Service {
+	return &Service{teams: teams, users: users, limiter: limiter, rbac: rbacService}
 }
 
 func (s *Service) authorize(roleName, permission string) error {
@@ -63,7 +73,7 @@ func (s *Service) Update(ctx context.Context, teamID, userID uuid.UUID, actorRol
 	}
 
 	team.Name = name
-	team.Slug = slugify(name)
+	team.Slug = slug.FromName(name)
 	team.UpdatedAt = time.Now().UTC()
 
 	if err := s.teams.Update(ctx, team); err != nil {
@@ -111,6 +121,13 @@ func (s *Service) InviteUser(ctx context.Context, teamID, actorID uuid.UUID, act
 	if _, err := s.teams.FindMemberByUser(ctx, teamID, actorID); err != nil {
 		return nil, err
 	}
+	if s.limiter != nil {
+		if err := s.limiter.AssertMemberHeadroom(ctx, teamID); err != nil {
+			return nil, err
+		}
+	} else if err := s.assertMemberHeadroom(ctx, teamID); err != nil {
+		return nil, err
+	}
 	if err := validateAssignableRole(role); err != nil {
 		return nil, err
 	}
@@ -146,6 +163,13 @@ func (s *Service) InviteUser(ctx context.Context, teamID, actorID uuid.UUID, act
 
 func (s *Service) addMemberInternal(ctx context.Context, teamID, actorID uuid.UUID, email string, role Role) (*MemberWithUser, error) {
 	if _, err := s.teams.FindMemberByUser(ctx, teamID, actorID); err != nil {
+		return nil, err
+	}
+	if s.limiter != nil {
+		if err := s.limiter.AssertMemberHeadroom(ctx, teamID); err != nil {
+			return nil, err
+		}
+	} else if err := s.assertMemberHeadroom(ctx, teamID); err != nil {
 		return nil, err
 	}
 	if err := validateAssignableRole(role); err != nil {
@@ -212,6 +236,9 @@ func (s *Service) UpdateMemberRole(ctx context.Context, teamID, actorID uuid.UUI
 	}
 	if target.Role == RoleOwner {
 		return nil, ErrCannotModifyOwner
+	}
+	if newRole == RoleOwner {
+		return nil, serviceerrors.NewValidation("role", "cannot assign owner role")
 	}
 
 	roleID, err := s.teams.FindRoleIDByName(ctx, string(newRole))
@@ -315,4 +342,23 @@ func validateAssignableRole(role Role) error {
 	default:
 		return ErrInvalidRole
 	}
+}
+
+func (s *Service) assertMemberHeadroom(ctx context.Context, teamID uuid.UUID) error {
+	t, err := s.teams.FindByID(ctx, teamID)
+	if err != nil {
+		return err
+	}
+	limit := planlimits.MemberLimit(string(t.PlanType))
+	if limit == 0 {
+		return nil
+	}
+	members, err := s.teams.ListMembers(ctx, teamID)
+	if err != nil {
+		return err
+	}
+	if len(members) >= limit {
+		return serviceerrors.ErrQuotaExceeded
+	}
+	return nil
 }

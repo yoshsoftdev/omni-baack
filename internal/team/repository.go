@@ -53,13 +53,21 @@ func NewRepository(db *database.DB) *PostgresRepository {
 
 func (r *PostgresRepository) Create(ctx context.Context, team *Team) error {
 	query := `
-		INSERT INTO teams (id, name, slug, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO teams (
+			id, name, slug, owner_id, timezone, country, plan_type, contact_limit, channel_limit,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`
 	_, err := r.db.Pool.Exec(ctx, query,
 		team.ID,
 		team.Name,
 		team.Slug,
+		team.OwnerID,
+		team.Timezone,
+		team.Country,
+		string(team.PlanType),
+		team.ContactLimit,
+		team.ChannelLimit,
 		team.CreatedAt,
 		team.UpdatedAt,
 	)
@@ -74,7 +82,8 @@ func (r *PostgresRepository) Create(ctx context.Context, team *Team) error {
 
 func (r *PostgresRepository) FindByID(ctx context.Context, id uuid.UUID) (*Team, error) {
 	query := `
-		SELECT id, name, slug, created_at, updated_at, deleted_at
+		SELECT id, name, slug, owner_id, timezone, country, plan_type, contact_limit, channel_limit,
+			created_at, updated_at, deleted_at
 		FROM teams
 		WHERE id = $1 AND deleted_at IS NULL
 	`
@@ -84,10 +93,14 @@ func (r *PostgresRepository) FindByID(ctx context.Context, id uuid.UUID) (*Team,
 func (r *PostgresRepository) Update(ctx context.Context, team *Team) error {
 	query := `
 		UPDATE teams
-		SET name = $1, slug = $2, updated_at = $3
-		WHERE id = $4 AND deleted_at IS NULL
+		SET name = $1, slug = $2, owner_id = $3, timezone = $4, country = $5,
+			plan_type = $6, contact_limit = $7, channel_limit = $8, updated_at = $9
+		WHERE id = $10 AND deleted_at IS NULL
 	`
-	tag, err := r.db.Pool.Exec(ctx, query, team.Name, team.Slug, team.UpdatedAt, team.ID)
+	tag, err := r.db.Pool.Exec(ctx, query,
+		team.Name, team.Slug, team.OwnerID, team.Timezone, team.Country,
+		string(team.PlanType), team.ContactLimit, team.ChannelLimit, team.UpdatedAt, team.ID,
+	)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") {
 			return fmt.Errorf("team slug already exists")
@@ -380,10 +393,10 @@ func (r *PostgresRepository) FindRoleIDByName(ctx context.Context, name string) 
 
 func (r *PostgresRepository) GetWorkspaceDetail(ctx context.Context, teamID uuid.UUID) (*WorkspaceDetail, error) {
 	query := `
-		SELECT t.id, t.name, t.slug, t.created_at, u.id, u.name
+		SELECT t.id, t.name, t.slug, t.created_at, COALESCE(t.owner_id, tm.user_id), COALESCE(u.name, '')
 		FROM teams t
-		INNER JOIN team_members tm ON tm.team_id = t.id AND tm.role = 'owner' AND tm.deleted_at IS NULL
-		INNER JOIN users u ON u.id = tm.user_id
+		LEFT JOIN team_members tm ON tm.team_id = t.id AND tm.role = 'owner' AND tm.deleted_at IS NULL
+		LEFT JOIN users u ON u.id = COALESCE(t.owner_id, tm.user_id)
 		WHERE t.id = $1 AND t.deleted_at IS NULL
 		LIMIT 1
 	`
@@ -449,11 +462,18 @@ func (r *PostgresRepository) ListInvitations(ctx context.Context, teamID uuid.UU
 
 func (r *PostgresRepository) scanTeam(row pgx.Row) (*Team, error) {
 	var team Team
+	var planType string
 	var deletedAt *time.Time
 	err := row.Scan(
 		&team.ID,
 		&team.Name,
 		&team.Slug,
+		&team.OwnerID,
+		&team.Timezone,
+		&team.Country,
+		&planType,
+		&team.ContactLimit,
+		&team.ChannelLimit,
 		&team.CreatedAt,
 		&team.UpdatedAt,
 		&deletedAt,
@@ -464,6 +484,7 @@ func (r *PostgresRepository) scanTeam(row pgx.Row) (*Team, error) {
 		}
 		return nil, fmt.Errorf("scan team: %w", err)
 	}
+	team.PlanType = PlanType(planType)
 	team.DeletedAt = deletedAt
 	return &team, nil
 }

@@ -6,59 +6,51 @@ import (
 	"github.com/google/uuid"
 )
 
+type Direction string
+
 const (
-	DirectionInbound  = "inbound"
-	DirectionOutbound = "outbound"
+	DirectionInbound  Direction = "inbound"
+	DirectionOutbound Direction = "outbound"
+)
+
+type ContentType string
+
+const (
+	ContentText     ContentType = "text"
+	ContentImage    ContentType = "image"
+	ContentVideo    ContentType = "video"
+	ContentAudio    ContentType = "audio"
+	ContentDocument ContentType = "document"
+	ContentTemplate ContentType = "template"
+	ContentOther    ContentType = "other"
+)
+
+type Status string
+
+const (
+	StatusSent      Status = "sent"
+	StatusDelivered Status = "delivered"
+	StatusRead      Status = "read"
+	StatusFailed    Status = "failed"
 )
 
 type Message struct {
 	ID             uuid.UUID
-	TeamID         uuid.UUID
 	ConversationID uuid.UUID
-	DeviceID       *uuid.UUID
-	ContactID      *uuid.UUID
-	SentBy         *uuid.UUID
-	WAMID          *string
-	Direction      string
+	TeamID         uuid.UUID
+	ChannelID      *uuid.UUID
+	Direction      Direction
+	Sender         string
+	Recipient      *string
 	Content        string
-	SenderPhone    string
-	SenderName     string
-	SentAt         time.Time
+	ContentType    ContentType
+	WAMID          *string
+	Status         *Status
+	ReceivedAt     time.Time
 	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	DeletedAt      *time.Time
 }
 
-type Response struct {
-	ID             uuid.UUID  `json:"id"`
-	ConversationID uuid.UUID  `json:"conversation_id"`
-	Direction      string     `json:"direction"`
-	Content        string     `json:"content"`
-	SenderPhone    string     `json:"sender_phone"`
-	SenderName     *string    `json:"sender_name,omitempty"`
-	SentBy         *uuid.UUID `json:"sent_by,omitempty"`
-	SentAt         time.Time  `json:"sent_at"`
-	WAMID          *string    `json:"wamid,omitempty"`
-}
-
-type Event struct {
-	Type string   `json:"type"`
-	Data Response `json:"data"`
-}
-
-func ToResponse(m *Message) Response {
-	resp := Response{
-		ID:             m.ID,
-		ConversationID: m.ConversationID,
-		Direction:      m.Direction,
-		Content:        m.Content,
-		SenderPhone:    m.SenderPhone,
-		SentBy:         m.SentBy,
-		SentAt:         m.SentAt,
-		WAMID:          m.WAMID,
-	}
-	if m.SenderName != "" {
-		resp.SenderName = &m.SenderName
-	}
-	return resp
+type ListFilter struct {
+	Direction *Direction
+	Since     *time.Time
 }
