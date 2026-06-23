@@ -6,42 +6,18 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
 	v1 "github.com/omnichannel/omni-chan-v2/internal/api/v1"
-	"github.com/omnichannel/omni-chan-v2/internal/auth"
-	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
-	"github.com/omnichannel/omni-chan-v2/internal/contact"
-	"github.com/omnichannel/omni-chan-v2/internal/conversation"
-	"github.com/omnichannel/omni-chan-v2/internal/device"
-	"github.com/omnichannel/omni-chan-v2/internal/message"
-	metahandler "github.com/omnichannel/omni-chan-v2/internal/meta"
-	"github.com/omnichannel/omni-chan-v2/internal/onboarding"
-	"github.com/omnichannel/omni-chan-v2/internal/otp"
-	"github.com/omnichannel/omni-chan-v2/internal/tag"
-	"github.com/omnichannel/omni-chan-v2/internal/template"
-	"github.com/omnichannel/omni-chan-v2/internal/team"
 	jwtmanager "github.com/omnichannel/omni-chan-v2/pkg/jwt"
 	"github.com/omnichannel/omni-chan-v2/pkg/database"
 	"github.com/omnichannel/omni-chan-v2/pkg/logger"
 )
 
 type Deps struct {
-	Config              *config.Config
-	Logger              *logger.Logger
-	DB                  *database.DB
-	AuthHandler         *auth.Handler
-	TeamHandler         *team.Handler
-	TeamMgmtHandler     *team.MgmtHandler
-	DeviceHandler       *device.Handler
-	MetaHandler         *metahandler.Handler
-	ContactHandler      *contact.Handler
-	TagHandler          *tag.Handler
-	ConversationHandler *conversation.Handler
-	MessageHandler      *message.Handler
-	TemplateHandler     *template.Handler
-	CampaignHandler     *campaign.Handler
-	OnboardingHandler   *onboarding.Handler
-	OTPHandler          *otp.Handler
-	JWT                 *jwtmanager.Manager
+	Config *config.Config
+	Logger *logger.Logger
+	DB     *database.DB
+	V1     v1.Deps
+	JWT    *jwtmanager.Manager
 }
 
 func NewRouter(deps Deps) *fiber.App {
@@ -60,22 +36,7 @@ func NewRouter(deps Deps) *fiber.App {
 	}))
 
 	apiGroup := app.Group("/api")
-	v1.Register(apiGroup.Group("/v1"), v1.Deps{
-		AuthHandler:         deps.AuthHandler,
-		TeamHandler:         deps.TeamHandler,
-		TeamMgmtHandler:     deps.TeamMgmtHandler,
-		DeviceHandler:       deps.DeviceHandler,
-		MetaHandler:         deps.MetaHandler,
-		ContactHandler:      deps.ContactHandler,
-		TagHandler:          deps.TagHandler,
-		ConversationHandler: deps.ConversationHandler,
-		MessageHandler:      deps.MessageHandler,
-		TemplateHandler:     deps.TemplateHandler,
-		CampaignHandler:     deps.CampaignHandler,
-		OnboardingHandler:   deps.OnboardingHandler,
-		OTPHandler:          deps.OTPHandler,
-		JWT:                 deps.JWT,
-	})
+	v1.Register(apiGroup.Group("/v1"), deps.V1)
 
 	return app
 }

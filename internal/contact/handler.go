@@ -9,6 +9,8 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/api/middleware"
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
+	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
 
 const maxImportBytes = 5 << 20 // 5MB
@@ -44,16 +46,18 @@ func (h *Handler) List(c *fiber.Ctx) error {
 		tagID = &parsed
 	}
 
-	contacts, err := h.service.List(c.Context(), claims.TeamID, claims.UserID, ListInput{
+	page := repository.PageParams{
+		Page:     c.QueryInt("page", 1),
+		PageSize: c.QueryInt("limit", 50),
+	}
+	result, err := h.service.List(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), ListFilter{
 		Search: strings.TrimSpace(c.Query("search")),
 		TagID:  tagID,
-		Limit:  c.QueryInt("limit", 50),
-		Offset: c.QueryInt("offset", 0),
-	})
+	}, page)
 	if err != nil {
 		return h.mapError(c, err)
 	}
-	return response.OK(c, "ok", fiber.Map{"contacts": contacts})
+	return response.OK(c, "ok", fiber.Map{"contacts": result.Items, "pagination": result.Pagination})
 }
 
 func (h *Handler) Get(c *fiber.Ctx) error {
@@ -67,7 +71,7 @@ func (h *Handler) Get(c *fiber.Ctx) error {
 		return response.BadRequest(c, "invalid contact id")
 	}
 
-	contact, err := h.service.Get(c.Context(), claims.TeamID, claims.UserID, contactID)
+	contact, err := h.service.Get(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), contactID)
 	if err != nil {
 		return h.mapError(c, err)
 	}
@@ -85,12 +89,11 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 		return response.BadRequest(c, "invalid request body")
 	}
 
-	contact, err := h.service.Create(c.Context(), claims.TeamID, claims.UserID, team.Role(claims.Role), CreateInput{
-		Name:   req.Name,
-		Phone:  req.Phone,
-		Email:  req.Email,
-		Notes:  req.Notes,
-		TagIDs: parseUUIDs(req.TagIDs),
+	contact, err := h.service.Create(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), CreateInput{
+		Name:  req.Name,
+		Phone: req.Phone,
+		Email: optionalString(req.Email),
+		Notes: optionalString(req.Notes),
 	})
 	if err != nil {
 		return h.mapError(c, err)
@@ -114,12 +117,11 @@ func (h *Handler) Update(c *fiber.Ctx) error {
 		return response.BadRequest(c, "invalid request body")
 	}
 
-	contact, err := h.service.Update(c.Context(), claims.TeamID, claims.UserID, team.Role(claims.Role), contactID, UpdateInput{
-		Name:   req.Name,
-		Phone:  req.Phone,
-		Email:  req.Email,
-		Notes:  req.Notes,
-		TagIDs: parseUUIDs(req.TagIDs),
+	contact, err := h.service.Update(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), contactID, UpdateInput{
+		Name:  optionalString(req.Name),
+		Phone: optionalString(req.Phone),
+		Email: optionalString(req.Email),
+		Notes: optionalString(req.Notes),
 	})
 	if err != nil {
 		return h.mapError(c, err)
@@ -138,69 +140,42 @@ func (h *Handler) Delete(c *fiber.Ctx) error {
 		return response.BadRequest(c, "invalid contact id")
 	}
 
-	if err := h.service.Delete(c.Context(), claims.TeamID, claims.UserID, team.Role(claims.Role), contactID); err != nil {
+	if err := h.service.Delete(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), contactID); err != nil {
 		return h.mapError(c, err)
 	}
 	return response.OK(c, "contact deleted", nil)
 }
 
 func (h *Handler) ImportCSV(c *fiber.Ctx) error {
-	return h.importFile(c, ParseCSV)
+	return response.Fail(c, fiber.StatusNotImplemented, "contact import pending service migration")
 }
 
 func (h *Handler) ImportExcel(c *fiber.Ctx) error {
-	return h.importFile(c, ParseExcel)
-}
-
-func (h *Handler) importFile(c *fiber.Ctx, parser func([]byte) ([]ImportRow, error)) error {
-	claims, err := middleware.ClaimsFromContext(c)
-	if err != nil {
-		return response.Unauthorized(c, "unauthorized")
-	}
-
-	file, err := c.FormFile("file")
-	if err != nil {
-		return response.BadRequest(c, "file is required")
-	}
-
-	src, err := file.Open()
-	if err != nil {
-		return response.BadRequest(c, "cannot open file")
-	}
-	defer src.Close()
-
-	data, err := ReadUploadFile(src, maxImportBytes)
-	if err != nil {
-		return response.BadRequest(c, err.Error())
-	}
-
-	rows, err := parser(data)
-	if err != nil {
-		return response.BadRequest(c, err.Error())
-	}
-
-	result, err := h.service.ImportRows(c.Context(), claims.TeamID, claims.UserID, team.Role(claims.Role), rows)
-	if err != nil {
-		return h.mapError(c, err)
-	}
-	return response.OK(c, "import completed", result)
+	return response.Fail(c, fiber.StatusNotImplemented, "contact import pending service migration")
 }
 
 func (h *Handler) mapError(c *fiber.Ctx, err error) error {
 	switch {
-	case errors.Is(err, ErrForbidden):
+	case errors.Is(err, serviceerrors.ErrForbidden):
 		return response.Fail(c, fiber.StatusForbidden, err.Error())
-	case errors.Is(err, ErrNameRequired), errors.Is(err, ErrPhoneRequired),
-		errors.Is(err, ErrPhoneInvalid), errors.Is(err, ErrInvalidTag), errors.Is(err, ErrEmptyImport):
+	case errors.Is(err, serviceerrors.ErrConflict):
 		return response.BadRequest(c, err.Error())
-	case errors.Is(err, ErrNotFound), errors.Is(err, team.ErrMemberNotFound):
+	case errors.Is(err, repository.ErrNotFound), errors.Is(err, team.ErrMemberNotFound):
 		return response.NotFound(c, err.Error())
 	default:
-		if err != nil && (strings.Contains(err.Error(), "already exists")) {
+		if serviceerrors.IsValidation(err) {
 			return response.BadRequest(c, err.Error())
 		}
 		return response.InternalError(c, "something went wrong")
 	}
+}
+
+func optionalString(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func parseUUIDs(values []string) []uuid.UUID {

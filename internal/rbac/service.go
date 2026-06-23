@@ -57,6 +57,25 @@ func (s *Service) Require(roleName, code string) bool {
 	return ok
 }
 
+// PermissionsForRole returns a copy of the permission snapshot for a role name.
+func (s *Service) PermissionsForRole(roleName string) map[string]bool {
+	roleName = strings.ToLower(strings.TrimSpace(roleName))
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cache == nil {
+		return map[string]bool{}
+	}
+	perms, ok := s.cache[roleName]
+	if !ok {
+		return map[string]bool{}
+	}
+	out := make(map[string]bool, len(perms))
+	for code, granted := range perms {
+		out[code] = granted
+	}
+	return out
+}
+
 func (s *Service) ListRoles(ctx context.Context) ([]Role, error) {
 	return s.repo.ListRoles(ctx)
 }

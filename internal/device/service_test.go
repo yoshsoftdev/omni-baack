@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/omnichannel/omni-chan-v2/internal/config"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
 	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
 )
@@ -98,11 +99,27 @@ func (m *mockTeamRepo) FindMemberByID(ctx context.Context, teamID, memberID uuid
 func (m *mockTeamRepo) ListMembers(ctx context.Context, teamID uuid.UUID) ([]team.MemberWithUser, error) {
 	return nil, nil
 }
-func (m *mockTeamRepo) UpdateMemberRole(ctx context.Context, teamID, memberID uuid.UUID, role team.Role) error {
+func (m *mockTeamRepo) ListMembersFiltered(ctx context.Context, teamID uuid.UUID, filter team.ListMembersFilter) ([]team.MemberWithUser, error) {
+	return nil, nil
+}
+func (m *mockTeamRepo) UpdateMemberRole(ctx context.Context, teamID, memberID uuid.UUID, role team.Role, roleID uuid.UUID) error {
+	return nil
+}
+func (m *mockTeamRepo) UpdateMemberStatus(ctx context.Context, teamID, memberID uuid.UUID, status team.MemberStatus) error {
 	return nil
 }
 func (m *mockTeamRepo) SoftDeleteMember(ctx context.Context, teamID, memberID uuid.UUID) error {
 	return nil
+}
+func (m *mockTeamRepo) FindRoleIDByName(ctx context.Context, name string) (uuid.UUID, error) {
+	return uuid.Nil, team.ErrNotFound
+}
+func (m *mockTeamRepo) GetWorkspaceDetail(ctx context.Context, teamID uuid.UUID) (*team.WorkspaceDetail, error) {
+	return nil, team.ErrNotFound
+}
+func (m *mockTeamRepo) CreateInvitation(ctx context.Context, inv *team.Invitation) error { return nil }
+func (m *mockTeamRepo) ListInvitations(ctx context.Context, teamID uuid.UUID) ([]team.Invitation, error) {
+	return nil, nil
 }
 
 func TestService_Create(t *testing.T) {
@@ -116,7 +133,7 @@ func TestService_Create(t *testing.T) {
 			},
 		},
 	}
-	svc := NewService(deviceRepo, teamRepo, metaclient.NewClient(""))
+	svc := NewService(deviceRepo, teamRepo, metaclient.NewClient(""), config.MetaConfig{})
 
 	created, err := svc.Create(context.Background(), teamID, userID, team.RoleOwner, CreateInput{Name: "Sales WA"})
 	if err != nil {
@@ -138,7 +155,7 @@ func TestService_Connect_MetaRequired(t *testing.T) {
 			},
 		},
 	}
-	svc := NewService(deviceRepo, teamRepo, metaclient.NewClient(""))
+	svc := NewService(deviceRepo, teamRepo, metaclient.NewClient(""), config.MetaConfig{})
 
 	created, err := svc.Create(context.Background(), teamID, userID, team.RoleOwner, CreateInput{Name: "Sales WA"})
 	if err != nil {
@@ -160,7 +177,7 @@ func TestService_Create_ForbiddenForAgent(t *testing.T) {
 				ID: uuid.New(), TeamID: teamID, UserID: userID, Role: team.RoleAgent,
 			},
 		},
-	}, metaclient.NewClient(""))
+	}, metaclient.NewClient(""), config.MetaConfig{})
 
 	_, err := svc.Create(context.Background(), teamID, userID, team.RoleAgent, CreateInput{Name: "WA"})
 	if err != ErrForbidden {

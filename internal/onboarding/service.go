@@ -25,8 +25,8 @@ var (
 
 type Service struct {
 	devices       device.Repository
-	contacts      *contact.Service
-	conversations *conversation.Service
+	contacts      contact.Repository
+	conversations conversation.Repository
 	messages      message.Repository
 	teams         team.Repository
 	meta          *metaclient.Client
@@ -34,8 +34,8 @@ type Service struct {
 
 func NewService(
 	devices device.Repository,
-	contacts *contact.Service,
-	conversations *conversation.Service,
+	contacts contact.Repository,
+	conversations conversation.Repository,
 	messages message.Repository,
 	teams team.Repository,
 	meta *metaclient.Client,
@@ -167,7 +167,7 @@ func (s *Service) handleContactSync(ctx context.Context, event *metaclient.Conta
 		name = rawPhone
 	}
 
-	if _, err := s.contacts.FindOrCreateByPhone(ctx, dev.TeamID, rawPhone, name); err != nil {
+	if _, err := findOrCreateContact(ctx, s.contacts, dev.TeamID, rawPhone, name); err != nil {
 		return err
 	}
 
@@ -202,11 +202,11 @@ func (s *Service) handleHistory(ctx context.Context, event *metaclient.HistoryEv
 
 	for _, thread := range event.Threads {
 		contactPhone := phone.Normalize(thread.ContactPhone)
-		contactEntity, err := s.contacts.FindOrCreateByPhone(ctx, dev.TeamID, contactPhone, contactPhone)
+		contactEntity, err := findOrCreateContact(ctx, s.contacts, dev.TeamID, contactPhone, contactPhone)
 		if err != nil {
 			return err
 		}
-		conv, err := s.conversations.FindOrCreate(ctx, dev.TeamID, contactEntity.ID, dev.ID)
+		conv, err := findOrCreateConversation(ctx, s.conversations, dev.TeamID, contactEntity.ID, dev.ID)
 		if err != nil {
 			return err
 		}
@@ -221,15 +221,15 @@ func (s *Service) handleHistory(ctx context.Context, event *metaclient.HistoryEv
 			}
 
 			direction := message.DirectionInbound
-			senderPhone := phone.Normalize(histMsg.From)
+			sender := phone.Normalize(histMsg.From)
+			var recipient *string
 			if businessPhone != "" && phone.Normalize(histMsg.From) == businessPhone {
 				direction = message.DirectionOutbound
-				senderPhone = contactPhone
+				recipient = &contactPhone
 			}
 
 			sentAt := metaclient.ParseUnixTimestamp(histMsg.Timestamp)
-			deviceID := dev.ID
-			contactID := contactEntity.ID
+			channelID := dev.ID
 			wamid := histMsg.ID
 			now := time.Now().UTC()
 
@@ -237,21 +237,20 @@ func (s *Service) handleHistory(ctx context.Context, event *metaclient.HistoryEv
 				ID:             uuid.New(),
 				TeamID:         dev.TeamID,
 				ConversationID: conv.ID,
-				DeviceID:       &deviceID,
-				ContactID:      &contactID,
+				ChannelID:      &channelID,
 				WAMID:          &wamid,
 				Direction:      direction,
+				Sender:         sender,
+				Recipient:      recipient,
 				Content:        histMsg.Body,
-				SenderPhone:    senderPhone,
-				SenderName:     contactEntity.Name,
-				SentAt:         sentAt,
+				ContentType:    message.ContentText,
+				ReceivedAt:     sentAt,
 				CreatedAt:      now,
-				UpdatedAt:      now,
 			}
 			if err := s.messages.Create(ctx, msg); err != nil {
 				return err
 			}
-			if err := s.conversations.TouchFromMessage(ctx, conv, histMsg.Body, direction == message.DirectionInbound); err != nil {
+			if err := touchConversationFromMessage(ctx, s.conversations, conv, histMsg.Body, direction == message.DirectionInbound); err != nil {
 				return err
 			}
 			dev.HistoryMessagesSynced++
@@ -278,11 +277,11 @@ func (s *Service) handleMessageEcho(ctx context.Context, event *metaclient.Messa
 	}
 
 	contactPhone := phone.Normalize(event.To)
-	contactEntity, err := s.contacts.FindOrCreateByPhone(ctx, dev.TeamID, contactPhone, contactPhone)
+	contactEntity, err := findOrCreateContact(ctx, s.contacts, dev.TeamID, contactPhone, contactPhone)
 	if err != nil {
 		return err
 	}
-	conv, err := s.conversations.FindOrCreate(ctx, dev.TeamID, contactEntity.ID, dev.ID)
+	conv, err := findOrCreateConversation(ctx, s.conversations, dev.TeamID, contactEntity.ID, dev.ID)
 	if err != nil {
 		return err
 	}
@@ -294,31 +293,29 @@ func (s *Service) handleMessageEcho(ctx context.Context, event *metaclient.Messa
 	}
 
 	sentAt := metaclient.ParseUnixTimestamp(event.Timestamp)
-	deviceID := dev.ID
-	contactID := contactEntity.ID
+	channelID := dev.ID
 	wamid := event.ID
 	now := time.Now().UTC()
-	senderPhone := phone.Normalize(event.From)
+	recipient := contactPhone
 
 	msg := &message.Message{
 		ID:             uuid.New(),
 		TeamID:         dev.TeamID,
 		ConversationID: conv.ID,
-		DeviceID:       &deviceID,
-		ContactID:      &contactID,
+		ChannelID:      &channelID,
 		WAMID:          &wamid,
 		Direction:      message.DirectionOutbound,
+		Sender:         phone.Normalize(event.From),
+		Recipient:      &recipient,
 		Content:        event.Body,
-		SenderPhone:    senderPhone,
-		SenderName:     dev.Name,
-		SentAt:         sentAt,
+		ContentType:    message.ContentText,
+		ReceivedAt:     sentAt,
 		CreatedAt:      now,
-		UpdatedAt:      now,
 	}
 	if err := s.messages.Create(ctx, msg); err != nil {
 		return err
 	}
-	return s.conversations.TouchFromMessage(ctx, conv, event.Body, false)
+	return touchConversationFromMessage(ctx, s.conversations, conv, event.Body, false)
 }
 
 func (s *Service) completeOnboarding(ctx context.Context, dev *device.Device) error {

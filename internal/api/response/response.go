@@ -33,28 +33,5 @@ func Accepted(c *fiber.Ctx, message string, data interface{}) error {
 }
 
 func Fail(c *fiber.Ctx, status int, message string) error {
-	return c.Status(status).JSON(Body{
-		Success: false,
-		Message: message,
-	})
-}
-
-func BadRequest(c *fiber.Ctx, message string) error {
-	return Fail(c, fiber.StatusBadRequest, message)
-}
-
-func Unauthorized(c *fiber.Ctx, message string) error {
-	return Fail(c, fiber.StatusUnauthorized, message)
-}
-
-func NotFound(c *fiber.Ctx, message string) error {
-	return Fail(c, fiber.StatusNotFound, message)
-}
-
-func InternalError(c *fiber.Ctx, message string) error {
-	return Fail(c, fiber.StatusInternalServerError, message)
-}
-
-func Forbidden(c *fiber.Ctx, message string) error {
-	return Fail(c, fiber.StatusForbidden, message)
+	return fail(c, status, CodeInternalError, message)
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 )
 
 type mockTagRepo struct {
@@ -25,6 +26,15 @@ func (m *mockTagRepo) FindByID(ctx context.Context, teamID, tagID uuid.UUID) (*T
 }
 func (m *mockTagRepo) ListByTeam(ctx context.Context, teamID uuid.UUID) ([]Tag, error) {
 	return nil, nil
+}
+func (m *mockTagRepo) List(ctx context.Context, teamID uuid.UUID, filter ListFilter, page repository.PageParams) (repository.Page[Tag], error) {
+	return repository.Page[Tag]{}, nil
+}
+func (m *mockTagRepo) AssignContact(ctx context.Context, teamID, tagID, contactID uuid.UUID) error {
+	return nil
+}
+func (m *mockTagRepo) UnassignContact(ctx context.Context, teamID, tagID, contactID uuid.UUID) error {
+	return nil
 }
 func (m *mockTagRepo) Update(ctx context.Context, tag *Tag) error { return nil }
 func (m *mockTagRepo) SoftDelete(ctx context.Context, teamID, tagID uuid.UUID) error {
@@ -57,11 +67,25 @@ func (m *mockTeamRepo) FindMemberByID(ctx context.Context, teamID, memberID uuid
 func (m *mockTeamRepo) ListMembers(ctx context.Context, teamID uuid.UUID) ([]team.MemberWithUser, error) {
 	return nil, nil
 }
-func (m *mockTeamRepo) UpdateMemberRole(ctx context.Context, teamID, memberID uuid.UUID, role team.Role) error {
+func (m *mockTeamRepo) ListMembersFiltered(ctx context.Context, teamID uuid.UUID, filter team.ListMembersFilter) ([]team.MemberWithUser, error) {
+	return nil, nil
+}
+func (m *mockTeamRepo) UpdateMemberRole(ctx context.Context, teamID, memberID uuid.UUID, role team.Role, roleID uuid.UUID) error {
 	return nil
 }
-func (m *mockTeamRepo) SoftDeleteMember(ctx context.Context, teamID, memberID uuid.UUID) error {
+func (m *mockTeamRepo) UpdateMemberStatus(ctx context.Context, teamID, memberID uuid.UUID, status team.MemberStatus) error {
 	return nil
+}
+func (m *mockTeamRepo) SoftDeleteMember(ctx context.Context, teamID, memberID uuid.UUID) error { return nil }
+func (m *mockTeamRepo) FindRoleIDByName(ctx context.Context, name string) (uuid.UUID, error) {
+	return uuid.Nil, team.ErrNotFound
+}
+func (m *mockTeamRepo) GetWorkspaceDetail(ctx context.Context, teamID uuid.UUID) (*team.WorkspaceDetail, error) {
+	return nil, team.ErrNotFound
+}
+func (m *mockTeamRepo) CreateInvitation(ctx context.Context, inv *team.Invitation) error { return nil }
+func (m *mockTeamRepo) ListInvitations(ctx context.Context, teamID uuid.UUID) ([]team.Invitation, error) {
+	return nil, nil
 }
 
 func TestService_Create(t *testing.T) {
@@ -73,7 +97,7 @@ func TestService_Create(t *testing.T) {
 		},
 	})
 
-	tag, err := svc.Create(context.Background(), teamID, userID, team.RoleOwner, CreateInput{Name: "VIP"})
+	tag, err := svc.Create(context.Background(), teamID, userID, string(team.RoleOwner), CreateInput{Name: "VIP"})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

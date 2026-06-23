@@ -210,6 +210,7 @@ func (createTestSegmentRepo) ReplaceMembers(context.Context, uuid.UUID, []uuid.U
 func (createTestSegmentRepo) ListMemberContactIDs(context.Context, uuid.UUID, repository.PageParams) ([]uuid.UUID, int64, error) {
 	return nil, 0, nil
 }
+func (createTestSegmentRepo) CountMembers(context.Context, uuid.UUID) (int64, error) { return 0, nil }
 
 type createTestRbacRepo struct{}
 

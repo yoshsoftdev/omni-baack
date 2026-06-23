@@ -42,6 +42,24 @@ func (m *mockUserRepo) FindByID(ctx context.Context, id uuid.UUID) (*user.User, 
 	return nil, user.ErrNotFound
 }
 
+func (m *mockUserRepo) Update(ctx context.Context, u *user.User) error { return nil }
+
+func (m *mockUserRepo) UpdateLastActive(ctx context.Context, id uuid.UUID, at time.Time) error {
+	return nil
+}
+
+func (m *mockUserRepo) SoftDelete(ctx context.Context, id uuid.UUID) error { return nil }
+
+func (m *mockUserRepo) CreateRefreshToken(ctx context.Context, t *user.RefreshToken) error { return nil }
+
+func (m *mockUserRepo) FindRefreshTokenByHash(ctx context.Context, hash string) (*user.RefreshToken, error) {
+	return nil, user.ErrNotFound
+}
+
+func (m *mockUserRepo) RevokeRefreshToken(ctx context.Context, id uuid.UUID, at time.Time) error {
+	return nil
+}
+
 type mockTeamRepo struct {
 	teams   map[uuid.UUID]*team.Team
 	members []team.Member

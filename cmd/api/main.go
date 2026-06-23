@@ -9,31 +9,38 @@ import (
 	"time"
 
 	"github.com/omnichannel/omni-chan-v2/internal/api"
+	"github.com/omnichannel/omni-chan-v2/internal/api/v1/handler"
+	v1 "github.com/omnichannel/omni-chan-v2/internal/api/v1"
 	"github.com/omnichannel/omni-chan-v2/internal/eventconsumer"
 	"github.com/omnichannel/omni-chan-v2/internal/auth"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign"
+	"github.com/omnichannel/omni-chan-v2/internal/channel"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
+	"github.com/omnichannel/omni-chan-v2/internal/dashboard"
 	"github.com/omnichannel/omni-chan-v2/internal/device"
 	"github.com/omnichannel/omni-chan-v2/internal/message"
-	metahandler "github.com/omnichannel/omni-chan-v2/internal/meta"
 	"github.com/omnichannel/omni-chan-v2/internal/onboarding"
-	"github.com/omnichannel/omni-chan-v2/internal/otp"
+	"github.com/omnichannel/omni-chan-v2/internal/quota"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
+	"github.com/omnichannel/omni-chan-v2/internal/report"
+	"github.com/omnichannel/omni-chan-v2/internal/segment"
 	"github.com/omnichannel/omni-chan-v2/internal/storage"
 	"github.com/omnichannel/omni-chan-v2/internal/tag"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 	wsserver "github.com/omnichannel/omni-chan-v2/internal/websocket"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
 	"github.com/omnichannel/omni-chan-v2/internal/user"
+	"github.com/omnichannel/omni-chan-v2/internal/workspace"
 	"github.com/omnichannel/omni-chan-v2/internal/websocket/hub"
 	jwtmanager "github.com/omnichannel/omni-chan-v2/pkg/jwt"
-	"github.com/omnichannel/omni-chan-v2/pkg/database"
 	"github.com/omnichannel/omni-chan-v2/pkg/campaignqueue"
+	"github.com/omnichannel/omni-chan-v2/pkg/database"
 	"github.com/omnichannel/omni-chan-v2/pkg/logger"
 	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
 	"github.com/omnichannel/omni-chan-v2/pkg/migrate"
+	"github.com/omnichannel/omni-chan-v2/pkg/uow"
 	redisclient "github.com/omnichannel/omni-chan-v2/pkg/redis"
 	sharedconfig "github.com/omnichannel/omni-chan-v2/shared/config"
 	sharednats "github.com/omnichannel/omni-chan-v2/shared/nats"
@@ -98,53 +105,54 @@ func main() {
 
 	userRepo := user.NewRepository(db)
 	teamRepo := team.NewRepository(db)
+	channelRepo := channel.NewRepository(db)
+	segmentRepo := segment.NewRepository(db)
+	contactRepo := contact.NewRepository(db)
+	quotaSvc := quota.NewService(teamRepo, channelRepo, contactRepo)
 	refreshRepo := auth.NewRefreshRepository(db)
 	authService := auth.NewService(userRepo, teamRepo, refreshRepo, jwt, cfg.JWT)
-	authHandler := auth.NewHandler(authService)
-
-	teamService := team.NewService(teamRepo, userRepo, rbacService)
-	teamHandler := team.NewHandler(teamService)
-	teamMgmtHandler := team.NewMgmtHandler(teamService, rbacService)
-
-	metaClient := metaclient.NewClient(cfg.Meta.APIVersion)
-
-	deviceRepo := device.NewRepository(db)
-	deviceService := device.NewService(deviceRepo, teamRepo, metaClient, cfg.Meta)
-	deviceHandler := device.NewHandler(deviceService)
-
-	tagRepo := tag.NewRepository(db)
-	tagService := tag.NewService(tagRepo, teamRepo)
-	tagHandler := tag.NewHandler(tagService)
-
-	contactRepo := contact.NewRepository(db)
-	contactService := contact.NewService(contactRepo, tagRepo, teamRepo)
-	contactHandler := contact.NewHandler(contactService)
-
-	conversationRepo := conversation.NewRepository(db)
-	conversationService := conversation.NewService(conversationRepo, teamRepo, wsHub)
-	conversationHandler := conversation.NewHandler(conversationService)
-
-	messageRepo := message.NewRepository(db)
-	messageService := message.NewService(messageRepo, conversationService, contactService, deviceRepo, teamRepo, userRepo, metaClient, wsHub)
-	messageHandler := message.NewHandler(messageService)
-	onboardingService := onboarding.NewService(deviceRepo, contactService, conversationService, messageRepo, teamRepo, metaClient)
-	onboardingHandler := onboarding.NewHandler(onboardingService)
-	metaHandler := metahandler.NewHandler(cfg.Meta)
+	actorResolver := auth.NewResolver(teamRepo, rbacService)
 
 	templateRepo := template.NewRepository(db)
-	templateService := template.NewService(templateRepo, deviceRepo, teamRepo, metaClient)
-	templateHandler := template.NewHandler(templateService)
+	campaignRepo := campaign.NewRepository(db)
+
+	workspaceService := workspace.NewService(
+		teamRepo, quotaSvc, rbacService,
+		channelRepo, templateRepo, contactRepo, campaignRepo,
+		workspace.NewSnapshotRepository(db),
+	)
+	channelService := channel.NewService(channelRepo, teamRepo, quotaSvc, rbacService)
+	teamService := team.NewService(teamRepo, userRepo, quotaSvc, rbacService)
+	segmentService := segment.NewService(segmentRepo, teamRepo, rbacService)
+
+	metaClient := metaclient.NewClient(cfg.Meta.APIVersion)
+	deviceRepo := device.NewRepository(db)
+
+	tagRepo := tag.NewRepository(db)
+	tagService := tag.NewService(tagRepo, teamRepo, rbacService)
+
+	contactService := contact.NewService(contactRepo, teamRepo, quotaSvc, rbacService)
+
+	conversationRepo := conversation.NewRepository(db)
+	conversationService := conversation.NewService(conversationRepo, contactRepo, teamRepo, rbacService)
+
+	messageRepo := message.NewRepository(db)
+	messageService := message.NewService(messageRepo, conversationRepo, teamRepo, rbacService)
+	onboardingService := onboarding.NewService(deviceRepo, contactRepo, conversationRepo, messageRepo, teamRepo, metaClient)
+
+	templateService := template.NewService(templateRepo, channelRepo, teamRepo, rbacService)
 
 	campaignQueue := campaignqueue.NewRedisQueue(rdb.Client)
-	campaignRepo := campaign.NewRepository(db)
-	campaignService := campaign.NewService(campaignRepo, contactRepo, deviceRepo, templateRepo, teamRepo, campaignQueue)
-	campaignHandler := campaign.NewHandler(campaignService)
+	campaignTx := uow.NewCampaignRunner(db)
+	campaignService := campaign.NewService(campaignRepo, campaignTx, teamRepo, channelRepo, templateRepo, segmentRepo, rbacService)
 	campaignWorker := campaign.NewWorker(campaignRepo, contactRepo, deviceRepo, templateRepo, campaignQueue, metaClient, messageService, log)
 	campaignScheduler := campaign.NewScheduler(campaignService, log)
 
-	otpRepo := otp.NewRepository(db)
-	otpService := otp.NewService(otpRepo, deviceRepo, metaClient, cfg.OTP.DefaultDeviceSlug)
-	otpHandler := otp.NewHandler(otpService, cfg.Meta.VerifyToken)
+	reportRepo := report.NewRepository(db)
+	reportService := report.NewService(reportRepo, teamRepo, rbacService)
+
+	dashboardRepo := dashboard.NewRepository(db)
+	dashboardService := dashboard.NewService(dashboardRepo, teamRepo, workspaceService, rbacService)
 
 	go campaignWorker.Start(ctx)
 	go campaignScheduler.Start(ctx)
@@ -154,23 +162,27 @@ func main() {
 	}
 
 	app := api.NewRouter(api.Deps{
-		Config:              cfg,
-		Logger:              log,
-		DB:                  db,
-		AuthHandler:         authHandler,
-		TeamHandler:         teamHandler,
-		TeamMgmtHandler:     teamMgmtHandler,
-		DeviceHandler:       deviceHandler,
-		MetaHandler:         metaHandler,
-		ContactHandler:      contactHandler,
-		TagHandler:          tagHandler,
-		ConversationHandler: conversationHandler,
-		MessageHandler:      messageHandler,
-		TemplateHandler:     templateHandler,
-		CampaignHandler:     campaignHandler,
-		OnboardingHandler:   onboardingHandler,
-		OTPHandler:          otpHandler,
-		JWT:                 jwt,
+		Config: cfg,
+		Logger: log,
+		DB:     db,
+		JWT:    jwt,
+		V1: v1.Deps{
+			Auth:         handler.NewAuthHandler(authService),
+			Workspace:    handler.NewWorkspaceHandler(workspaceService),
+			Team:         handler.NewTeamHandler(teamService, rbacService),
+			Channel:      handler.NewChannelHandler(channelService),
+			Template:     handler.NewTemplateHandler(templateService),
+			Contact:      handler.NewContactHandler(contactService),
+			Segment:      handler.NewSegmentHandler(segmentService),
+			Tag:          handler.NewTagHandler(tagService),
+			Campaign:     handler.NewCampaignHandler(campaignService),
+			Report:       handler.NewReportHandler(reportService),
+			Conversation: handler.NewConversationHandler(conversationService),
+			Message:      handler.NewMessageHandler(messageService),
+			Dashboard:    handler.NewDashboardHandler(dashboardService),
+			ActorResolver: actorResolver,
+			JWT:           jwt,
+		},
 	})
 
 	wsserver.Register(app, wsHub, jwt, log)

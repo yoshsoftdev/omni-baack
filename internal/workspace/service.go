@@ -8,22 +8,49 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/omnichannel/omni-chan-v2/internal/campaign"
+	"github.com/omnichannel/omni-chan-v2/internal/channel"
+	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/quota"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
+	"github.com/omnichannel/omni-chan-v2/internal/template"
 	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 	"github.com/omnichannel/omni-chan-v2/pkg/slug"
 )
 
 // Service (WorkspaceService) manages workspace settings.
 type Service struct {
-	teams team.Repository
-	quota *quota.Service
-	rbac  *rbac.Service
+	teams     team.Repository
+	quota     *quota.Service
+	rbac      *rbac.Service
+	channels  channel.Repository
+	templates template.Repository
+	contacts  contact.Repository
+	campaigns campaign.Repository
+	snapshots SnapshotRepository
 }
 
-func NewService(teams team.Repository, quotaSvc *quota.Service, rbacSvc *rbac.Service) *Service {
-	return &Service{teams: teams, quota: quotaSvc, rbac: rbacSvc}
+func NewService(
+	teams team.Repository,
+	quotaSvc *quota.Service,
+	rbacSvc *rbac.Service,
+	channels channel.Repository,
+	templates template.Repository,
+	contacts contact.Repository,
+	campaigns campaign.Repository,
+	snapshots SnapshotRepository,
+) *Service {
+	return &Service{
+		teams:     teams,
+		quota:     quotaSvc,
+		rbac:      rbacSvc,
+		channels:  channels,
+		templates: templates,
+		contacts:  contacts,
+		campaigns: campaigns,
+		snapshots: snapshots,
+	}
 }
 
 type UpdateInput struct {

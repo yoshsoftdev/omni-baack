@@ -8,6 +8,8 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/api/middleware"
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
+	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
 
 type Handler struct {
@@ -33,11 +35,15 @@ func (h *Handler) List(c *fiber.Ctx) error {
 		return response.BadRequest(c, "invalid conversation id")
 	}
 
-	messages, err := h.service.List(c.Context(), claims.TeamID, claims.UserID, conversationID)
+	page := repository.PageParams{
+		Page:     c.QueryInt("page", 1),
+		PageSize: c.QueryInt("limit", 50),
+	}
+	result, err := h.service.ListByConversation(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), conversationID, ListFilter{}, page)
 	if err != nil {
 		return h.mapError(c, err)
 	}
-	return response.OK(c, "ok", fiber.Map{"messages": messages})
+	return response.OK(c, "ok", fiber.Map{"messages": result.Items, "pagination": result.Pagination})
 }
 
 func (h *Handler) Send(c *fiber.Ctx) error {
@@ -56,8 +62,11 @@ func (h *Handler) Send(c *fiber.Ctx) error {
 		return response.BadRequest(c, "invalid request body")
 	}
 
-	msg, err := h.service.Send(c.Context(), claims.TeamID, claims.UserID, conversationID, SendInput{
-		Content: req.Content,
+	msg, err := h.service.Create(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), CreateInput{
+		ConversationID: conversationID,
+		Direction:      DirectionOutbound,
+		Sender:         claims.UserID.String(),
+		Content:        req.Content,
 	})
 	if err != nil {
 		return h.mapError(c, err)
@@ -67,11 +76,14 @@ func (h *Handler) Send(c *fiber.Ctx) error {
 
 func (h *Handler) mapError(c *fiber.Ctx, err error) error {
 	switch {
-	case errors.Is(err, ErrInvalidContent), errors.Is(err, ErrDeviceNotConnected):
-		return response.BadRequest(c, err.Error())
-	case errors.Is(err, ErrDeviceNotFound), errors.Is(err, ErrConversationNotFound), errors.Is(err, team.ErrMemberNotFound):
+	case errors.Is(err, serviceerrors.ErrForbidden):
+		return response.Fail(c, fiber.StatusForbidden, err.Error())
+	case errors.Is(err, repository.ErrNotFound), errors.Is(err, team.ErrMemberNotFound):
 		return response.NotFound(c, err.Error())
 	default:
+		if serviceerrors.IsValidation(err) {
+			return response.BadRequest(c, err.Error())
+		}
 		return response.InternalError(c, err.Error())
 	}
 }

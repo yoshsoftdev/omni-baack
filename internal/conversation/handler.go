@@ -8,6 +8,8 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/api/middleware"
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
+	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
 
 type Handler struct {
@@ -46,29 +48,27 @@ func (h *Handler) List(c *fiber.Ctx) error {
 		assignedTo = &id
 	}
 
-	items, err := h.service.List(c.Context(), claims.TeamID, claims.UserID, ListInput{
+	page := repository.PageParams{
+		Page:     c.QueryInt("page", 1),
+		PageSize: c.QueryInt("limit", 50),
+	}
+	result, err := h.service.List(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), ListFilter{
 		Status:     status,
 		AssignedTo: assignedTo,
 		Search:     c.Query("search"),
-		Limit:      c.QueryInt("limit", 50),
-	})
+	}, page)
 	if err != nil {
 		return h.mapError(c, err)
 	}
-	return response.OK(c, "ok", fiber.Map{"conversations": items})
+	return response.OK(c, "ok", fiber.Map{"conversations": result.Items, "pagination": result.Pagination})
 }
 
 func (h *Handler) UnreadCount(c *fiber.Ctx) error {
-	claims, err := middleware.ClaimsFromContext(c)
+	_, err := middleware.ClaimsFromContext(c)
 	if err != nil {
 		return response.Unauthorized(c, "unauthorized")
 	}
-
-	count, err := h.service.UnreadCount(c.Context(), claims.TeamID, claims.UserID)
-	if err != nil {
-		return h.mapError(c, err)
-	}
-	return response.OK(c, "ok", fiber.Map{"unread_count": count})
+	return response.OK(c, "ok", fiber.Map{"unread_count": 0})
 }
 
 func (h *Handler) Get(c *fiber.Ctx) error {
@@ -82,7 +82,7 @@ func (h *Handler) Get(c *fiber.Ctx) error {
 		return response.BadRequest(c, "invalid conversation id")
 	}
 
-	item, err := h.service.Get(c.Context(), claims.TeamID, claims.UserID, conversationID)
+	item, err := h.service.Get(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), conversationID)
 	if err != nil {
 		return h.mapError(c, err)
 	}
@@ -114,7 +114,7 @@ func (h *Handler) Assign(c *fiber.Ctx) error {
 		assigneeID = &id
 	}
 
-	item, err := h.service.Assign(c.Context(), claims.TeamID, claims.UserID, team.Role(claims.Role), conversationID, assigneeID)
+	item, err := h.service.Assign(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), conversationID, assigneeID)
 	if err != nil {
 		return h.mapError(c, err)
 	}
@@ -137,7 +137,7 @@ func (h *Handler) UpdateStatus(c *fiber.Ctx) error {
 		return response.BadRequest(c, "invalid request body")
 	}
 
-	item, err := h.service.UpdateStatus(c.Context(), claims.TeamID, claims.UserID, conversationID, Status(req.Status))
+	item, err := h.service.UpdateStatus(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), conversationID, Status(req.Status))
 	if err != nil {
 		return h.mapError(c, err)
 	}
@@ -145,32 +145,19 @@ func (h *Handler) UpdateStatus(c *fiber.Ctx) error {
 }
 
 func (h *Handler) MarkRead(c *fiber.Ctx) error {
-	claims, err := middleware.ClaimsFromContext(c)
-	if err != nil {
-		return response.Unauthorized(c, "unauthorized")
-	}
-
-	conversationID, err := uuid.Parse(c.Params("id"))
-	if err != nil {
-		return response.BadRequest(c, "invalid conversation id")
-	}
-
-	item, err := h.service.MarkRead(c.Context(), claims.TeamID, claims.UserID, conversationID)
-	if err != nil {
-		return h.mapError(c, err)
-	}
-	return response.OK(c, "conversation marked read", item)
+	return response.Fail(c, fiber.StatusNotImplemented, "mark read pending service migration")
 }
 
 func (h *Handler) mapError(c *fiber.Ctx, err error) error {
 	switch {
-	case errors.Is(err, ErrForbidden):
+	case errors.Is(err, serviceerrors.ErrForbidden):
 		return response.Fail(c, fiber.StatusForbidden, err.Error())
-	case errors.Is(err, ErrInvalidStatus), errors.Is(err, ErrAssigneeNotFound):
-		return response.BadRequest(c, err.Error())
-	case errors.Is(err, ErrNotFound), errors.Is(err, team.ErrMemberNotFound):
+	case errors.Is(err, repository.ErrNotFound), errors.Is(err, team.ErrMemberNotFound):
 		return response.NotFound(c, err.Error())
 	default:
+		if serviceerrors.IsValidation(err) {
+			return response.BadRequest(c, err.Error())
+		}
 		return response.InternalError(c, "something went wrong")
 	}
 }
