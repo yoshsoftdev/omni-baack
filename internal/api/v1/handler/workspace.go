@@ -80,6 +80,18 @@ func (h *WorkspaceHandler) GetReadiness(c *fiber.Ctx) error {
 	return response.OK(c, "ok", readiness)
 }
 
+func (h *WorkspaceHandler) RefreshReadiness(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	readiness, err := h.svc.RefreshReadiness(c.Context(), actor.TeamID, actor.UserID, actor.Role)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "readiness refreshed", readiness)
+}
+
 func (h *WorkspaceHandler) GetOnboarding(c *fiber.Ctx) error {
 	actor, err := requireActor(c)
 	if err != nil {

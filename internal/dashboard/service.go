@@ -105,10 +105,7 @@ func (s *Service) GetOverview(ctx context.Context, teamID, userID uuid.UUID, act
 
 	readinessScore := 0
 	if s.workspace != nil {
-		readiness, err := s.workspace.GetReadiness(ctx, teamID, userID, actorRole)
-		if err == nil && readiness != nil {
-			readinessScore = readiness.Score
-		}
+		readinessScore = s.workspace.ReadinessScoreFromSnapshot(ctx, teamID)
 	}
 
 	return &Overview{

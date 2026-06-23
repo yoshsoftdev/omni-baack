@@ -55,7 +55,47 @@ func (s *Service) GetReadiness(ctx context.Context, teamID, userID uuid.UUID, ac
 	if err := s.ensureMember(ctx, teamID, userID); err != nil {
 		return nil, err
 	}
+	if s.snapshots != nil {
+		if snap, err := s.snapshots.FindByTeam(ctx, teamID); err == nil {
+			return readinessFromSnapshot(snap), nil
+		}
+	}
 	return computeReadiness(ctx, s.readinessDeps(), teamID)
+}
+
+func (s *Service) RefreshReadiness(ctx context.Context, teamID, userID uuid.UUID, actorRole string) (*ReadinessResult, error) {
+	if err := s.authorize(actorRole, rbac.PermUserView); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	var onboarding *OnboardingState
+	if s.snapshots != nil {
+		if existing, err := s.snapshots.FindByTeam(ctx, teamID); err == nil {
+			onboarding = existing.Onboarding
+		}
+	}
+	return refreshReadinessSnapshot(ctx, s.readinessDeps(), teamID, onboarding)
+}
+
+func (s *Service) ReadinessScoreFromSnapshot(ctx context.Context, teamID uuid.UUID) int {
+	if s.snapshots == nil {
+		return 0
+	}
+	snap, err := s.snapshots.FindByTeam(ctx, teamID)
+	if err != nil {
+		return 0
+	}
+	return snap.Score
+}
+
+func readinessFromSnapshot(snap *ReadinessSnapshot) *ReadinessResult {
+	return &ReadinessResult{
+		Score:  snap.Score,
+		Status: snap.Status,
+		Checks: snap.Checks,
+	}
 }
 
 func computeReadiness(ctx context.Context, deps readinessDeps, teamID uuid.UUID) (*ReadinessResult, error) {
@@ -71,26 +111,33 @@ func computeReadiness(ctx context.Context, deps readinessDeps, teamID uuid.UUID)
 	}
 	score := calculateReadinessScore(completed, totalReadinessChecks)
 	status := resolveReadinessStatus(score)
-	result := &ReadinessResult{
+	return &ReadinessResult{
 		Score:  score,
 		Status: status,
 		Checks: checks,
+	}, nil
+}
+
+func refreshReadinessSnapshot(ctx context.Context, deps readinessDeps, teamID uuid.UUID, onboarding *OnboardingState) (*ReadinessResult, error) {
+	result, err := computeReadiness(ctx, deps, teamID)
+	if err != nil {
+		return nil, err
 	}
-	if deps.snapshots != nil {
-		var onboarding *OnboardingState
-		if existing, err := deps.snapshots.FindByTeam(ctx, teamID); err == nil {
-			onboarding = existing.Onboarding
-		}
-		_ = deps.snapshots.Upsert(ctx, &ReadinessSnapshot{
-			TeamID:         teamID,
-			Score:          score,
-			CompletedCount: completed,
-			TotalCount:     totalReadinessChecks,
-			Status:         status,
-			Checks:         checks,
-			Onboarding:     onboarding,
-			ComputedAt:     time.Now().UTC(),
-		})
+	if deps.snapshots == nil {
+		return result, nil
+	}
+	completed := countCompleted(result.Checks)
+	if err := deps.snapshots.Upsert(ctx, &ReadinessSnapshot{
+		TeamID:         teamID,
+		Score:          result.Score,
+		CompletedCount: completed,
+		TotalCount:     totalReadinessChecks,
+		Status:         result.Status,
+		Checks:         result.Checks,
+		Onboarding:     onboarding,
+		ComputedAt:     time.Now().UTC(),
+	}); err != nil {
+		return nil, serviceerrors.MapRepository(err)
 	}
 	return result, nil
 }

@@ -118,7 +118,10 @@ func (s *Service) ListLinkClicks(ctx context.Context, teamID, userID uuid.UUID, 
 	if err := s.ensureMember(ctx, teamID, userID); err != nil {
 		return repository.Page[LinkClick]{}, err
 	}
-	result, err := s.reports.ListLinkClicks(ctx, campaignID, page)
+	if _, err := s.reports.GetCampaignFunnel(ctx, teamID, campaignID); err != nil {
+		return repository.Page[LinkClick]{}, serviceerrors.MapRepository(err)
+	}
+	result, err := s.reports.ListLinkClicks(ctx, teamID, campaignID, page)
 	if err != nil {
 		return repository.Page[LinkClick]{}, serviceerrors.MapRepository(err)
 	}

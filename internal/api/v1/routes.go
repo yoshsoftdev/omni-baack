@@ -30,6 +30,7 @@ func Register(router fiber.Router, deps Deps) {
 		workspace.Patch("/", deps.Workspace.Update)
 		workspace.Get("/quotas", deps.Workspace.GetQuotas)
 		workspace.Get("/readiness", deps.Workspace.GetReadiness)
+		workspace.Post("/readiness/refresh", deps.Workspace.RefreshReadiness)
 	}
 
 	if deps.Team != nil {

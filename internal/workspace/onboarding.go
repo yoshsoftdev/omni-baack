@@ -3,7 +3,6 @@ package workspace
 import (
 	"context"
 	"sort"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
@@ -25,10 +24,7 @@ func (s *Service) GetOnboarding(ctx context.Context, teamID, userID uuid.UUID, a
 	if err := s.ensureMember(ctx, teamID, userID); err != nil {
 		return nil, err
 	}
-	state, score, err := s.loadOnboardingState(ctx, teamID)
-	if err != nil {
-		return nil, err
-	}
+	state, score := s.readOnboardingFromSnapshot(ctx, teamID)
 	return &OnboardingSnapshot{
 		CurrentStep:    state.CurrentStep,
 		CompletedSteps: state.CompletedSteps,
@@ -47,10 +43,7 @@ func (s *Service) CompleteOnboardingStep(ctx context.Context, teamID, userID uui
 		return serviceerrors.NewValidation("step", "must be between 1 and 6")
 	}
 
-	state, _, err := s.loadOnboardingState(ctx, teamID)
-	if err != nil {
-		return err
-	}
+	state, _ := s.readOnboardingFromSnapshot(ctx, teamID)
 	if !containsStep(state.CompletedSteps, step) {
 		state.CompletedSteps = append(state.CompletedSteps, step)
 		sort.Ints(state.CompletedSteps)
@@ -62,40 +55,25 @@ func (s *Service) CompleteOnboardingStep(ctx context.Context, teamID, userID uui
 		}
 	}
 
-	readiness, err := computeReadiness(ctx, s.readinessDeps(), teamID)
-	if err != nil {
-		return err
-	}
-	if s.snapshots == nil {
-		return nil
-	}
-	return serviceerrors.MapRepository(s.snapshots.Upsert(ctx, &ReadinessSnapshot{
-		TeamID:         teamID,
-		Score:          readiness.Score,
-		CompletedCount: countCompleted(readiness.Checks),
-		TotalCount:     totalReadinessChecks,
-		Status:         readiness.Status,
-		Checks:         readiness.Checks,
-		Onboarding:     state,
-		ComputedAt:     time.Now().UTC(),
-	}))
+	_, err := refreshReadinessSnapshot(ctx, s.readinessDeps(), teamID, state)
+	return err
 }
 
-func (s *Service) loadOnboardingState(ctx context.Context, teamID uuid.UUID) (*OnboardingState, int, error) {
-	readiness, err := computeReadiness(ctx, s.readinessDeps(), teamID)
-	if err != nil {
-		return nil, 0, err
-	}
+func (s *Service) readOnboardingFromSnapshot(ctx context.Context, teamID uuid.UUID) (*OnboardingState, int) {
 	state := &OnboardingState{CurrentStep: 1, CompletedSteps: []int{}}
+	score := 0
 	if s.snapshots != nil {
-		if existing, err := s.snapshots.FindByTeam(ctx, teamID); err == nil && existing.Onboarding != nil {
-			state = existing.Onboarding
+		if existing, err := s.snapshots.FindByTeam(ctx, teamID); err == nil {
+			if existing.Onboarding != nil {
+				state = existing.Onboarding
+			}
+			score = existing.Score
 		}
 	}
 	if len(state.CompletedSteps) == 0 {
 		state.CompletedSteps = []int{}
 	}
-	return state, readiness.Score, nil
+	return state, score
 }
 
 func containsStep(steps []int, step int) bool {

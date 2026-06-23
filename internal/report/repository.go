@@ -22,7 +22,7 @@ type Repository interface {
 	ListCampaignFunnels(ctx context.Context, teamID uuid.UUID, range_ DateRange, page repository.PageParams) (repository.Page[CampaignFunnel], error)
 
 	RecordLinkClick(ctx context.Context, click *LinkClick) error
-	ListLinkClicks(ctx context.Context, campaignID uuid.UUID, page repository.PageParams) (repository.Page[LinkClick], error)
+	ListLinkClicks(ctx context.Context, teamID, campaignID uuid.UUID, page repository.PageParams) (repository.Page[LinkClick], error)
 }
 
 type PostgresRepository struct {
@@ -172,18 +172,24 @@ func (r *PostgresRepository) RecordLinkClick(ctx context.Context, click *LinkCli
 	return repository.MapError(err)
 }
 
-func (r *PostgresRepository) ListLinkClicks(ctx context.Context, campaignID uuid.UUID, page repository.PageParams) (repository.Page[LinkClick], error) {
+func (r *PostgresRepository) ListLinkClicks(ctx context.Context, teamID, campaignID uuid.UUID, page repository.PageParams) (repository.Page[LinkClick], error) {
 	page = page.Normalize()
 	var total int64
-	if err := r.db.Pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM campaign_link_clicks WHERE campaign_id = $1`, campaignID,
-	).Scan(&total); err != nil {
+	if err := r.db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM campaign_link_clicks cl
+		INNER JOIN campaigns c ON c.id = cl.campaign_id AND c.team_id = $1 AND c.deleted_at IS NULL
+		WHERE cl.campaign_id = $2 AND cl.team_id = $1
+	`, teamID, campaignID).Scan(&total); err != nil {
 		return repository.Page[LinkClick]{}, err
 	}
 	rows, err := r.db.Pool.Query(ctx, `
-		SELECT id, campaign_id, recipient_id, team_id, url, clicked_at, user_agent, device_type
-		FROM campaign_link_clicks WHERE campaign_id = $1 ORDER BY clicked_at DESC LIMIT $2 OFFSET $3
-	`, campaignID, page.Limit(), page.Offset())
+		SELECT cl.id, cl.campaign_id, cl.recipient_id, cl.team_id, cl.url, cl.clicked_at, cl.user_agent, cl.device_type
+		FROM campaign_link_clicks cl
+		INNER JOIN campaigns c ON c.id = cl.campaign_id AND c.team_id = $1 AND c.deleted_at IS NULL
+		WHERE cl.campaign_id = $2 AND cl.team_id = $1
+		ORDER BY cl.clicked_at DESC LIMIT $3 OFFSET $4
+	`, teamID, campaignID, page.Limit(), page.Offset())
 	if err != nil {
 		return repository.Page[LinkClick]{}, err
 	}
