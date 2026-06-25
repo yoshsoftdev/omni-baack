@@ -29,6 +29,8 @@ type createRequest struct {
 	ChannelID       string          `json:"channel_id"`
 	TemplateID      string          `json:"template_id"`
 	VariableMapping json.RawMessage `json:"variable_mapping"`
+	SegmentID       string          `json:"segment_id"`
+	SegmentIDs      []string        `json:"segment_ids"`
 	ContactIDs      []string        `json:"contact_ids"`
 	TagIDs          []string        `json:"tag_ids"`
 	ScheduledAt     *string         `json:"scheduled_at"`
@@ -92,7 +94,17 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 		sendMode = SendLater
 	}
 
-	audiences := make([]AudienceInput, 0, len(req.ContactIDs)+len(req.TagIDs))
+	segmentIDs := parseUUIDs(req.SegmentIDs)
+	if len(segmentIDs) == 0 && strings.TrimSpace(req.SegmentID) != "" {
+		if id, parseErr := uuid.Parse(strings.TrimSpace(req.SegmentID)); parseErr == nil {
+			segmentIDs = append(segmentIDs, id)
+		}
+	}
+
+	audiences := make([]AudienceInput, 0, len(req.ContactIDs)+len(req.TagIDs)+len(segmentIDs))
+	for _, id := range segmentIDs {
+		audiences = append(audiences, AudienceInput{SourceType: AudienceSegment, SourceID: id})
+	}
 	for _, id := range parseUUIDs(req.ContactIDs) {
 		audiences = append(audiences, AudienceInput{SourceType: AudienceContact, SourceID: id})
 	}
@@ -104,6 +116,7 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 		Name:            strings.TrimSpace(req.Name),
 		ChannelID:       channelID,
 		TemplateID:      templateID,
+		SegmentID:       nil,
 		Audiences:       audiences,
 		VariableMapping: req.VariableMapping,
 		SendMode:        sendMode,

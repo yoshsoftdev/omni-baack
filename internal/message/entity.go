@@ -35,20 +35,20 @@ const (
 )
 
 type Message struct {
-	ID             uuid.UUID
-	ConversationID uuid.UUID
-	TeamID         uuid.UUID
-	ChannelID      *uuid.UUID
-	Direction      Direction
-	Sender         string
-	Recipient      *string
-	Content        string
-	ContentType    ContentType
-	WAMID          *string
-	Status         *Status
-	RawPayload     []byte
-	ReceivedAt     time.Time
-	CreatedAt      time.Time
+	ID             uuid.UUID   `json:"id"`
+	ConversationID uuid.UUID   `json:"conversation_id"`
+	TeamID         uuid.UUID   `json:"team_id"`
+	ChannelID      *uuid.UUID  `json:"channel_id,omitempty"`
+	Direction      Direction   `json:"direction"`
+	Sender         string      `json:"sender"`
+	Recipient      *string     `json:"recipient,omitempty"`
+	Content        string      `json:"content"`
+	ContentType    ContentType `json:"content_type"`
+	WAMID          *string     `json:"wamid,omitempty"`
+	Status         *Status     `json:"status,omitempty"`
+	RawPayload     []byte      `json:"-"`
+	ReceivedAt     time.Time   `json:"received_at"`
+	CreatedAt      time.Time   `json:"created_at"`
 }
 
 type ListFilter struct {

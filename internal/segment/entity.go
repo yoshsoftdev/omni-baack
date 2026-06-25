@@ -27,27 +27,27 @@ const (
 )
 
 type Segment struct {
-	ID              uuid.UUID
-	TeamID          uuid.UUID
-	Name            string
-	Description     string
-	Color           string
-	ContactCount    int
-	IsDynamic       bool
-	LastEvaluatedAt *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	DeletedAt       *time.Time
+	ID              uuid.UUID  `json:"id"`
+	TeamID          uuid.UUID  `json:"team_id"`
+	Name            string     `json:"name"`
+	Description     string     `json:"description"`
+	Color           string     `json:"color"`
+	ContactCount    int        `json:"contact_count"`
+	IsDynamic       bool       `json:"is_dynamic"`
+	LastEvaluatedAt *time.Time `json:"last_evaluated_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	DeletedAt       *time.Time `json:"deleted_at,omitempty"`
 }
 
 type Rule struct {
-	ID        uuid.UUID
-	SegmentID uuid.UUID
-	Field     RuleField
-	Operator  RuleOperator
-	Value     string
-	SortOrder int
-	CreatedAt time.Time
+	ID        uuid.UUID    `json:"id"`
+	SegmentID uuid.UUID    `json:"segment_id"`
+	Field     RuleField    `json:"field"`
+	Operator  RuleOperator `json:"operator"`
+	Value     string       `json:"value"`
+	SortOrder int          `json:"sort_order"`
+	CreatedAt time.Time    `json:"created_at"`
 }
 
 type ListFilter struct {

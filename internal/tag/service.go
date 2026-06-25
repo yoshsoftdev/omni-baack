@@ -37,6 +37,20 @@ func (s *Service) authorize(role, perm string) error {
 	return serviceerrors.ErrForbidden
 }
 
+func (s *Service) authorizeAny(role string, perms ...string) error {
+	if s.rbac == nil && role != "" {
+		return nil
+	}
+	if s.rbac != nil {
+		for _, perm := range perms {
+			if s.rbac.Require(role, perm) {
+				return nil
+			}
+		}
+	}
+	return serviceerrors.ErrForbidden
+}
+
 func (s *Service) ensureMember(ctx context.Context, teamID, userID uuid.UUID) error {
 	_, err := s.teams.FindMemberByUser(ctx, teamID, userID)
 	if err != nil {
@@ -156,9 +170,8 @@ func (s *Service) Delete(ctx context.Context, teamID, userID uuid.UUID, actorRol
 }
 
 func (s *Service) Assign(ctx context.Context, teamID, userID uuid.UUID, actorRole string, tagID, contactID uuid.UUID) error {
-	if err := s.authorize(actorRole, rbac.PermTagUpdate); err != nil {
-		return err
-	}
+	// Tag assignment is treated as a collaborative inbox action.
+	// Any valid team member can attach tags to contacts.
 	if err := s.ensureMember(ctx, teamID, userID); err != nil {
 		return err
 	}
@@ -166,9 +179,7 @@ func (s *Service) Assign(ctx context.Context, teamID, userID uuid.UUID, actorRol
 }
 
 func (s *Service) Unassign(ctx context.Context, teamID, userID uuid.UUID, actorRole string, tagID, contactID uuid.UUID) error {
-	if err := s.authorize(actorRole, rbac.PermTagUpdate); err != nil {
-		return err
-	}
+	// Same policy as Assign: team membership is sufficient.
 	if err := s.ensureMember(ctx, teamID, userID); err != nil {
 		return err
 	}

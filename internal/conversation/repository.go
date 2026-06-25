@@ -193,7 +193,7 @@ func (r *PostgresRepository) ApplyInboxSync(ctx context.Context, teamID, id uuid
 			status = $1,
 			unread_count = $2,
 			last_message_preview = CASE WHEN $3 <> '' THEN $3 ELSE last_message_preview END,
-			last_message_at = CASE WHEN $12 THEN $4 ELSE last_message_at END,
+			last_message_at = CASE WHEN $10 THEN $4 ELSE last_message_at END,
 			last_customer_message_at = COALESCE($5, last_customer_message_at),
 			last_agent_message_at = COALESCE($6, last_agent_message_at),
 			first_response_at = CASE WHEN $7 THEN COALESCE(first_response_at, NOW()) ELSE first_response_at END,

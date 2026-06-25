@@ -127,23 +127,46 @@ func (r *PostgresRepository) AssignContact(ctx context.Context, teamID, tagID, c
 			INSERT INTO contact_tags (contact_id, tag_id, created_at)
 			VALUES ($1,$2,NOW()) ON CONFLICT DO NOTHING
 		`, contactID, tagID)
+		if err != nil {
+			return repository.MapError(err)
+		}
+		_, err = tx.Exec(ctx, `
+			UPDATE tags SET contact_count = (
+				SELECT COUNT(*)::int
+				FROM contact_tags ct
+				INNER JOIN contacts c ON c.id = ct.contact_id AND c.deleted_at IS NULL
+				WHERE ct.tag_id = $1
+			), updated_at = NOW()
+			WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL
+		`, tagID, teamID)
 		return repository.MapError(err)
 	})
 }
 
 func (r *PostgresRepository) UnassignContact(ctx context.Context, teamID, tagID, contactID uuid.UUID) error {
-	tag, err := r.db.Pool.Exec(ctx, `
-		DELETE FROM contact_tags ct
-		USING tags t
-		WHERE ct.tag_id = t.id AND t.team_id = $1 AND ct.tag_id = $2 AND ct.contact_id = $3 AND t.deleted_at IS NULL
-	`, teamID, tagID, contactID)
-	if err != nil {
+	return r.db.WithTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			DELETE FROM contact_tags ct
+			USING tags t
+			WHERE ct.tag_id = t.id AND t.team_id = $1 AND ct.tag_id = $2 AND ct.contact_id = $3 AND t.deleted_at IS NULL
+		`, teamID, tagID, contactID)
+		if err != nil {
+			return repository.MapError(err)
+		}
+		if tag.RowsAffected() == 0 {
+			return repository.ErrNotFound
+		}
+		_, err = tx.Exec(ctx, `
+			UPDATE tags SET contact_count = (
+				SELECT COUNT(*)::int
+				FROM contact_tags ct
+				INNER JOIN contacts c ON c.id = ct.contact_id AND c.deleted_at IS NULL
+				WHERE ct.tag_id = $1
+			), updated_at = NOW()
+			WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL
+		`, tagID, teamID)
 		return repository.MapError(err)
-	}
-	if tag.RowsAffected() == 0 {
-		return repository.ErrNotFound
-	}
-	return nil
+	})
 }
 
 func (r *PostgresRepository) ListContactIDsByTag(ctx context.Context, teamID, tagID uuid.UUID) ([]uuid.UUID, error) {

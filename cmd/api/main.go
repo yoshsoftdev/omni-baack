@@ -166,7 +166,12 @@ func main() {
 	conversationService.SetInboxSync(inboxSync)
 
 	messageRepo := message.NewRepository(db)
-	messageService := message.NewService(messageRepo, conversationRepo, teamRepo, rbacService)
+	messageService := message.NewService(messageRepo, conversationRepo, teamRepo, rbacService, &message.OutboundDeps{
+		Channels: channelRepo,
+		Contacts: contactRepo,
+		Meta:     metaClient,
+		Cipher:   tokenCipher,
+	})
 	onboardingService := onboarding.NewService(deviceRepo, contactRepo, conversationRepo, messageRepo, teamRepo, metaClient)
 
 	templateService := template.NewService(templateRepo, channelRepo, teamRepo, rbacService, metaSyncService)

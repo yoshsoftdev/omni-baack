@@ -35,23 +35,23 @@ const (
 )
 
 type Conversation struct {
-	ID                    uuid.UUID
-	TeamID                uuid.UUID
-	ContactID             uuid.UUID
-	ChannelID             *uuid.UUID
-	ChannelType           ChannelType
-	Status                Status
-	AssignedTo            *uuid.UUID
-	UnreadCount           int
-	LastMessagePreview    string
-	LastMessageAt         *time.Time
-	FirstResponseAt       *time.Time
-	LastCustomerMessageAt *time.Time
-	LastAgentMessageAt    *time.Time
-	ResolutionAt          *time.Time
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	DeletedAt             *time.Time
+	ID                    uuid.UUID    `json:"id"`
+	TeamID                uuid.UUID    `json:"team_id"`
+	ContactID             uuid.UUID    `json:"contact_id"`
+	ChannelID             *uuid.UUID   `json:"channel_id,omitempty"`
+	ChannelType           ChannelType  `json:"channel_type"`
+	Status                Status       `json:"status"`
+	AssignedTo            *uuid.UUID   `json:"assigned_to,omitempty"`
+	UnreadCount           int          `json:"unread_count"`
+	LastMessagePreview    string       `json:"last_message_preview"`
+	LastMessageAt         *time.Time   `json:"last_message_at,omitempty"`
+	FirstResponseAt       *time.Time   `json:"first_response_at,omitempty"`
+	LastCustomerMessageAt *time.Time   `json:"last_customer_message_at,omitempty"`
+	LastAgentMessageAt    *time.Time   `json:"last_agent_message_at,omitempty"`
+	ResolutionAt          *time.Time   `json:"resolution_at,omitempty"`
+	CreatedAt             time.Time    `json:"created_at"`
+	UpdatedAt             time.Time    `json:"updated_at"`
+	DeletedAt             *time.Time   `json:"deleted_at,omitempty"`
 }
 
 type ListFilter struct {

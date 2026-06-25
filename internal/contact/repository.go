@@ -18,6 +18,7 @@ type Repository interface {
 	FindByPhone(ctx context.Context, teamID uuid.UUID, phone string) (*Contact, error)
 	List(ctx context.Context, teamID uuid.UUID, filter ListFilter, page repository.PageParams) (repository.Page[Contact], error)
 	ListByIDs(ctx context.Context, teamID uuid.UUID, ids []uuid.UUID) ([]Contact, error)
+	ListTagsByContactIDs(ctx context.Context, teamID uuid.UUID, contactIDs []uuid.UUID) (map[uuid.UUID][]TagRef, error)
 	Update(ctx context.Context, c *Contact) error
 	SoftDelete(ctx context.Context, teamID, id uuid.UUID) error
 	CountByTeam(ctx context.Context, teamID uuid.UUID) (int64, error)
@@ -138,6 +139,36 @@ func (r *PostgresRepository) ListByIDs(ctx context.Context, teamID uuid.UUID, id
 			return nil, err
 		}
 		out = append(out, *c)
+	}
+	return out, rows.Err()
+}
+
+func (r *PostgresRepository) ListTagsByContactIDs(ctx context.Context, teamID uuid.UUID, contactIDs []uuid.UUID) (map[uuid.UUID][]TagRef, error) {
+	out := make(map[uuid.UUID][]TagRef)
+	if len(contactIDs) == 0 {
+		return out, nil
+	}
+
+	rows, err := r.db.Pool.Query(ctx, `
+		SELECT ct.contact_id, t.id, t.name, t.color
+		FROM contact_tags ct
+		INNER JOIN tags t ON t.id = ct.tag_id AND t.team_id = $1 AND t.deleted_at IS NULL
+		INNER JOIN contacts c ON c.id = ct.contact_id AND c.team_id = $1 AND c.deleted_at IS NULL
+		WHERE ct.contact_id = ANY($2)
+		ORDER BY t.name ASC
+	`, teamID, contactIDs)
+	if err != nil {
+		return nil, repository.MapError(err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var contactID uuid.UUID
+		var tag TagRef
+		if err := rows.Scan(&contactID, &tag.ID, &tag.Name, &tag.Color); err != nil {
+			return nil, err
+		}
+		out[contactID] = append(out[contactID], tag)
 	}
 	return out, rows.Err()
 }

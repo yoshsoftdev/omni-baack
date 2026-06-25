@@ -19,6 +19,7 @@ type Service struct {
 	conversations conversation.Repository
 	teams         team.Repository
 	rbac          *rbac.Service
+	outbound      *OutboundDeps
 }
 
 func NewService(
@@ -26,12 +27,14 @@ func NewService(
 	conversations conversation.Repository,
 	teams team.Repository,
 	rbacSvc *rbac.Service,
+	outbound *OutboundDeps,
 ) *Service {
 	return &Service{
 		messages:      messages,
 		conversations: conversations,
 		teams:         teams,
 		rbac:          rbacSvc,
+		outbound:      outbound,
 	}
 }
 

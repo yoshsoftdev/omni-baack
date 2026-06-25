@@ -60,12 +60,7 @@ func (h *MessageHandler) Send(c *fiber.Ctx) error {
 	if err != nil {
 		return mapError(c, err)
 	}
-	msg, err := h.svc.Create(c.Context(), actor.TeamID, actor.UserID, actor.Role, message.CreateInput{
-		ConversationID: conversationID,
-		Direction:      message.DirectionOutbound,
-		Sender:         actor.UserID.String(),
-		Content:        req.Content,
-	})
+	msg, err := h.svc.SendReply(c.Context(), actor.TeamID, actor.UserID, actor.Role, conversationID, req.Content)
 	if err != nil {
 		return mapError(c, err)
 	}
