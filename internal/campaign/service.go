@@ -18,13 +18,24 @@ import (
 
 // Service (CampaignService) manages broadcast campaigns and draft execution artifacts.
 type Service struct {
-	campaigns Repository
-	tx        UnitOfWorkRunner
-	teams     team.Repository
-	channels  channel.Repository
-	templates template.Repository
-	segments  segment.Repository
-	rbac      *rbac.Service
+	campaigns   Repository
+	tx          UnitOfWorkRunner
+	teams       team.Repository
+	channels    channel.Repository
+	templates   template.Repository
+	segments    segment.Repository
+	rbac        *rbac.Service
+	cancelFlags CancelFlagStore
+}
+
+// ServiceOption configures optional campaign service dependencies.
+type ServiceOption func(*Service)
+
+// WithCancelFlags enables Redis cancel flag propagation on campaign cancel.
+func WithCancelFlags(store CancelFlagStore) ServiceOption {
+	return func(s *Service) {
+		s.cancelFlags = store
+	}
 }
 
 func NewService(
@@ -35,8 +46,9 @@ func NewService(
 	templates template.Repository,
 	segments segment.Repository,
 	rbacSvc *rbac.Service,
+	opts ...ServiceOption,
 ) *Service {
-	return &Service{
+	s := &Service{
 		campaigns: campaigns,
 		tx:        tx,
 		teams:     teams,
@@ -45,6 +57,10 @@ func NewService(
 		segments:  segments,
 		rbac:      rbacSvc,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 type AudienceInput struct {
@@ -128,6 +144,11 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 		"segment_id": input.SegmentID,
 	})
 
+	initialStatus := StatusDraft
+	if input.SendMode == SendLater {
+		initialStatus = StatusScheduled
+	}
+
 	c := &Campaign{
 		ID:              campaignID,
 		TeamID:          teamID,
@@ -136,7 +157,7 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 		SegmentID:       input.SegmentID,
 		Name:            strings.TrimSpace(input.Name),
 		Description:     input.Description,
-		Status:          StatusDraft,
+		Status:          initialStatus,
 		VariableMapping: variableMapping,
 		SampleValues:    input.SampleValues,
 		Timezone:        input.Timezone,

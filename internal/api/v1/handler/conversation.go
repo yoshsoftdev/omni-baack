@@ -46,6 +46,7 @@ func (h *ConversationHandler) List(c *fiber.Ctx) error {
 	if err != nil {
 		return response.BadRequest(c, "invalid assigned_to")
 	}
+	view := conversation.InboxView(strings.TrimSpace(c.Query("view")))
 	params, err := pageParams(c)
 	if err != nil {
 		return mapError(c, err)
@@ -54,6 +55,7 @@ func (h *ConversationHandler) List(c *fiber.Ctx) error {
 		Status:     status,
 		AssignedTo: assignedTo,
 		Search:     strings.TrimSpace(c.Query("search")),
+		View:       view,
 	}, params)
 	if err != nil {
 		return mapError(c, err)
@@ -155,4 +157,20 @@ func (h *ConversationHandler) UpdateStatus(c *fiber.Ctx) error {
 		return mapError(c, err)
 	}
 	return response.OK(c, "conversation updated", conv)
+}
+
+func (h *ConversationHandler) MarkRead(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid conversation id")
+	}
+	conv, err := h.svc.MarkRead(c.Context(), actor.TeamID, actor.UserID, actor.Role, id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "conversation marked read", conv)
 }

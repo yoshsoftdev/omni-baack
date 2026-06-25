@@ -15,10 +15,17 @@ import (
 
 // Service (ChannelService) manages WhatsApp channels for a workspace.
 type Service struct {
-	channels  Repository
-	teams     team.Repository
-	quota     *quota.Service
-	rbac      *rbac.Service
+	channels Repository
+	teams    team.Repository
+	quota    *quota.Service
+	rbac     *rbac.Service
+	cipher   TokenCipher
+	meta     ManualConnectMetaClient
+}
+
+// TokenCipher encrypts Meta access tokens for storage.
+type TokenCipher interface {
+	Encrypt(plaintext string) ([]byte, error)
 }
 
 func NewService(
@@ -26,13 +33,23 @@ func NewService(
 	teams team.Repository,
 	quotaSvc *quota.Service,
 	rbacSvc *rbac.Service,
+	cipher TokenCipher,
+	meta ManualConnectMetaClient,
 ) *Service {
 	return &Service{
 		channels: channels,
 		teams:    teams,
 		quota:    quotaSvc,
 		rbac:     rbacSvc,
+		cipher:   cipher,
+		meta:     meta,
 	}
+}
+
+type ManualConnectInput struct {
+	AccessToken   string
+	WABAID        string
+	PhoneNumberID string
 }
 
 type CreateInput struct {
@@ -40,6 +57,7 @@ type CreateInput struct {
 	Provider       string
 	ConnectionType *ConnectionType
 	PhoneNumber    *string
+	Manual         *ManualConnectInput
 }
 
 type UpdateInput struct {
@@ -85,6 +103,12 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 		provider = "meta_whatsapp"
 	}
 
+	if input.Manual != nil {
+		if _, err := s.verifyManualConnect(ctx, *input.Manual); err != nil {
+			return nil, err
+		}
+	}
+
 	now := time.Now().UTC()
 	ch := &Channel{
 		ID:             uuid.New(),
@@ -109,7 +133,63 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 	if err := serviceerrors.MapRepository(s.channels.UpsertOnboarding(ctx, ob)); err != nil {
 		return nil, err
 	}
+
+	if input.Manual != nil {
+		if err := s.applyManualConnect(ctx, ch, input.Manual); err != nil {
+			return nil, err
+		}
+		updated, err := s.channels.FindByID(ctx, teamID, ch.ID)
+		if err != nil {
+			return nil, serviceerrors.MapRepository(err)
+		}
+		return updated, nil
+	}
 	return ch, nil
+}
+
+func (s *Service) applyManualConnect(ctx context.Context, ch *Channel, manual *ManualConnectInput) error {
+	token := strings.TrimSpace(manual.AccessToken)
+	wabaID := strings.TrimSpace(manual.WABAID)
+	phoneNumberID := strings.TrimSpace(manual.PhoneNumberID)
+	if token == "" || wabaID == "" || phoneNumberID == "" {
+		return serviceerrors.NewValidation("manual_connect", "access_token, waba_id, and phone_number_id are required")
+	}
+	if s.cipher == nil {
+		return serviceerrors.NewValidation("manual_connect", "token encryption is not configured")
+	}
+
+	now := time.Now().UTC()
+	connType := ConnectionManual
+	ch.Status = StatusConnected
+	ch.ConnectionType = &connType
+	ch.WABAID = &wabaID
+	ch.PhoneNumberID = &phoneNumberID
+	ch.IsCoex = false
+	ch.LastConnectedAt = &now
+	ch.UpdatedAt = now
+	if err := s.channels.Update(ctx, ch); err != nil {
+		return serviceerrors.MapRepository(err)
+	}
+
+	enc, err := s.cipher.Encrypt(token)
+	if err != nil {
+		return err
+	}
+	if err := s.channels.UpsertCredentials(ctx, &Credentials{
+		ChannelID:      ch.ID,
+		AccessTokenEnc: enc,
+		UpdatedAt:      now,
+	}); err != nil {
+		return serviceerrors.MapRepository(err)
+	}
+
+	ob := &Onboarding{
+		ChannelID:   ch.ID,
+		Status:      OnboardingCompleted,
+		CompletedAt: &now,
+		UpdatedAt:   now,
+	}
+	return serviceerrors.MapRepository(s.channels.UpsertOnboarding(ctx, ob))
 }
 
 func (s *Service) Get(ctx context.Context, teamID, userID uuid.UUID, actorRole string, channelID uuid.UUID) (*Channel, error) {

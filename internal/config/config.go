@@ -34,11 +34,12 @@ type OTPConfig struct {
 }
 
 type MetaConfig struct {
-	AppID       string
-	AppSecret   string
-	ConfigID    string
-	VerifyToken string
-	APIVersion  string
+	AppID              string
+	AppSecret          string
+	ConfigID           string
+	VerifyToken        string
+	APIVersion         string
+	TokenEncryptionKey string
 }
 
 type AppConfig struct {
@@ -124,11 +125,12 @@ func Load() (*Config, error) {
 			RefreshTTL:    getEnvDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
 		},
 		Meta: MetaConfig{
-			AppID:       getEnv("META_APP_ID", ""),
-			AppSecret:   getEnv("META_APP_SECRET", ""),
-			ConfigID:    getEnv("META_EMBEDDED_CONFIG_ID", ""),
-			VerifyToken: getEnv("META_VERIFY_TOKEN", ""),
-			APIVersion:  getEnv("META_API_VERSION", "v21.0"),
+			AppID:              getEnv("META_APP_ID", ""),
+			AppSecret:          getEnv("META_APP_SECRET", ""),
+			ConfigID:           getEnv("META_EMBEDDED_CONFIG_ID", ""),
+			VerifyToken:        getEnv("META_VERIFY_TOKEN", ""),
+			APIVersion:         getEnv("META_API_VERSION", "v21.0"),
+			TokenEncryptionKey: getEnv("META_TOKEN_ENCRYPTION_KEY", ""),
 		},
 		OTP: OTPConfig{
 			DefaultDeviceSlug: getEnv("OTP_DEFAULT_DEVICE_SLUG", "dgos-waba"),
@@ -171,6 +173,10 @@ func (c *Config) Validate() error {
 	}
 	if c.Meta.VerifyToken == "" && c.App.Env == "development" {
 		c.Meta.VerifyToken = "dev-meta-verify-token"
+	}
+	if c.Meta.TokenEncryptionKey == "" && c.App.Env == "development" {
+		// Dev-only fallback; production must set META_TOKEN_ENCRYPTION_KEY explicitly.
+		c.Meta.TokenEncryptionKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 	}
 	if c.NATS.InternalToken == "" && c.App.Env == "development" {
 		c.NATS.InternalToken = "dev-internal-token"

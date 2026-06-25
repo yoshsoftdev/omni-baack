@@ -32,17 +32,17 @@ func (r *PostgresRepository) Create(ctx context.Context, m *Message) error {
 	_, err := r.db.Pool.Exec(ctx, `
 		INSERT INTO messages (
 			id, conversation_id, team_id, channel_id, direction, sender, recipient,
-			content, content_type, wamid, status, received_at, created_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			content, content_type, wamid, status, raw_payload, received_at, created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 	`, m.ID, m.ConversationID, m.TeamID, m.ChannelID, string(m.Direction), m.Sender, m.Recipient,
-		m.Content, string(m.ContentType), m.WAMID, statusPtr(m.Status), m.ReceivedAt, m.CreatedAt)
+		m.Content, string(m.ContentType), m.WAMID, statusPtr(m.Status), nullableJSON(m.RawPayload), m.ReceivedAt, m.CreatedAt)
 	return repository.MapError(err)
 }
 
 func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID) (*Message, error) {
 	return scanMessage(r.db.Pool.QueryRow(ctx, `
 		SELECT id, conversation_id, team_id, channel_id, direction, sender, recipient,
-			content, content_type, wamid, status, received_at, created_at
+			content, content_type, wamid, status, raw_payload, received_at, created_at
 		FROM messages WHERE id = $1 AND team_id = $2
 		ORDER BY created_at DESC LIMIT 1
 	`, id, teamID))
@@ -51,7 +51,7 @@ func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID)
 func (r *PostgresRepository) FindByWAMID(ctx context.Context, wamid string) (*Message, error) {
 	return scanMessage(r.db.Pool.QueryRow(ctx, `
 		SELECT id, conversation_id, team_id, channel_id, direction, sender, recipient,
-			content, content_type, wamid, status, received_at, created_at
+			content, content_type, wamid, status, raw_payload, received_at, created_at
 		FROM messages WHERE wamid = $1
 		ORDER BY created_at DESC LIMIT 1
 	`, wamid))
@@ -76,7 +76,7 @@ func (r *PostgresRepository) ListByConversation(ctx context.Context, teamID, con
 	args = append(args, page.Limit(), page.Offset())
 	rows, err := r.db.Pool.Query(ctx, fmt.Sprintf(`
 		SELECT id, conversation_id, team_id, channel_id, direction, sender, recipient,
-			content, content_type, wamid, status, received_at, created_at
+			content, content_type, wamid, status, raw_payload, received_at, created_at
 		FROM messages WHERE %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d
 	`, where, len(args)-1, len(args)), args...)
 	if err != nil {
@@ -118,6 +118,13 @@ func statusPtr(s *Status) *string {
 	return &v
 }
 
+func nullableJSON(b []byte) any {
+	if len(b) == 0 {
+		return nil
+	}
+	return b
+}
+
 func scanMessage(row pgx.Row) (*Message, error) { return scanMessageRow(row) }
 
 func scanMessageRow(row pgx.Row) (*Message, error) {
@@ -126,7 +133,7 @@ func scanMessageRow(row pgx.Row) (*Message, error) {
 	var status *string
 	err := row.Scan(
 		&m.ID, &m.ConversationID, &m.TeamID, &m.ChannelID, &direction, &m.Sender, &m.Recipient,
-		&m.Content, &contentType, &m.WAMID, &status, &m.ReceivedAt, &m.CreatedAt,
+		&m.Content, &contentType, &m.WAMID, &status, &m.RawPayload, &m.ReceivedAt, &m.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

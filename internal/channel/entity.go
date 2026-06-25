@@ -33,20 +33,22 @@ const (
 
 // Channel is a workspace WhatsApp channel (API: ChannelDTO).
 type Channel struct {
-	ID              uuid.UUID
-	TeamID          uuid.UUID
-	Name            string
-	Provider        string
-	Status          Status
-	ConnectionType  *ConnectionType
-	PhoneNumber     *string
-	WABAID          *string
-	PhoneNumberID   *string
-	IsCoex          bool
-	LastConnectedAt *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	DeletedAt       *time.Time
+	ID              uuid.UUID        `json:"id"`
+	TeamID          uuid.UUID        `json:"team_id"`
+	Name            string           `json:"name"`
+	Provider        string           `json:"provider"`
+	Status          Status           `json:"status"`
+	ConnectionType  *ConnectionType  `json:"connection_type,omitempty"`
+	PhoneNumber     *string          `json:"phone_number,omitempty"`
+	WABAID          *string          `json:"waba_id,omitempty"`
+	PhoneNumberID   *string          `json:"phone_number_id,omitempty"`
+	BusinessID      *string          `json:"business_id,omitempty"`
+	IsCoex          bool             `json:"is_coex"`
+	HealthMetadata  []byte           `json:"-"`
+	LastConnectedAt *time.Time       `json:"last_connected_at,omitempty"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+	DeletedAt       *time.Time       `json:"deleted_at,omitempty"`
 }
 
 type Credentials struct {

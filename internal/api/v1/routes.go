@@ -9,6 +9,10 @@ import (
 func Register(router fiber.Router, deps Deps) {
 	router.Get("/health", health)
 
+	if deps.Webhook != nil {
+		router.Get("/webhook/meta", deps.Webhook.VerifyMeta)
+	}
+
 	if deps.JWT == nil {
 		return
 	}
@@ -48,7 +52,12 @@ func Register(router fiber.Router, deps Deps) {
 	if deps.Channel != nil {
 		channels := protected.Group("/channels")
 		channels.Get("/", deps.Channel.List)
+		channels.Post("/manual/verify", deps.Channel.VerifyManualConnect)
 		channels.Post("/", deps.Channel.Create)
+		channels.Get("/:id/health", deps.Channel.Health)
+		channels.Post("/:id/embedded-signup/start", deps.Channel.StartEmbeddedSignup)
+		channels.Get("/:id/embedded-signup/:session_id", deps.Channel.GetEmbeddedSignupStatus)
+		channels.Post("/:id/embedded-signup/:session_id/complete", deps.Channel.CompleteEmbeddedSignup)
 		channels.Get("/:id", deps.Channel.Get)
 		channels.Patch("/:id", deps.Channel.Update)
 		channels.Delete("/:id", deps.Channel.Delete)
@@ -57,8 +66,10 @@ func Register(router fiber.Router, deps Deps) {
 	if deps.Template != nil {
 		templates := protected.Group("/templates")
 		templates.Get("/", deps.Template.List)
-		templates.Get("/:id", deps.Template.Get)
+		templates.Get("/sync/history", deps.Template.SyncHistory)
+		templates.Get("/sync/history/:id", deps.Template.GetSyncHistory)
 		templates.Post("/sync", deps.Template.Sync)
+		templates.Get("/:id", deps.Template.Get)
 	}
 
 	if deps.Contact != nil {
@@ -101,6 +112,12 @@ func Register(router fiber.Router, deps Deps) {
 		campaigns.Post("/:id/cancel", deps.Campaign.Cancel)
 	}
 
+	if deps.Operations != nil {
+		ops := protected.Group("/operations")
+		ops.Get("/broadcast", deps.Operations.BroadcastStatus)
+		ops.Get("/workers", deps.Operations.WorkerStatus)
+	}
+
 	if deps.Report != nil {
 		reports := protected.Group("/reports")
 		reports.Get("/dashboard", deps.Report.Dashboard)
@@ -117,6 +134,7 @@ func Register(router fiber.Router, deps Deps) {
 		conversations.Get("/:id", deps.Conversation.Get)
 		conversations.Post("/:id/assign", deps.Conversation.Assign)
 		conversations.Patch("/:id/status", deps.Conversation.UpdateStatus)
+		conversations.Post("/:id/read", deps.Conversation.MarkRead)
 		if deps.Message != nil {
 			conversations.Get("/:id/messages", deps.Message.List)
 			conversations.Post("/:id/messages", deps.Message.Send)
@@ -131,6 +149,11 @@ func Register(router fiber.Router, deps Deps) {
 
 	if deps.Dashboard != nil {
 		protected.Get("/dashboard", deps.Dashboard.Get)
+	}
+
+	if deps.Meta != nil {
+		meta := protected.Group("/meta")
+		meta.Get("/embedded-config", deps.Meta.EmbeddedConfig)
 	}
 }
 

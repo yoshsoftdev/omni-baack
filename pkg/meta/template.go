@@ -20,8 +20,18 @@ type MessageTemplate struct {
 }
 
 type TemplateParameter struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type       string       `json:"type"`
+	Text       string       `json:"text,omitempty"`
+	Image      *MediaObject `json:"image,omitempty"`
+	Video      *MediaObject `json:"video,omitempty"`
+	Document   *MediaObject `json:"document,omitempty"`
+	CouponCode string       `json:"coupon_code,omitempty"`
+}
+
+// MediaObject references media for template header parameters.
+type MediaObject struct {
+	Link string `json:"link,omitempty"`
+	ID   string `json:"id,omitempty"`
 }
 
 type TemplateComponent struct {
@@ -56,45 +66,65 @@ func BuildKodeOTPComponents(code string) []TemplateComponent {
 type listTemplatesResponse struct {
 	Data   []MessageTemplate `json:"data"`
 	Paging struct {
-		Next string `json:"next"`
+		Next  string `json:"next"`
+		After string `json:"after"`
 	} `json:"paging"`
+}
+
+func (c *Client) listTemplatesURL(wabaID, after string) string {
+	base := c.graphURL(fmt.Sprintf(
+		"/%s/%s/message_templates?fields=id,name,language,status,category,components&limit=100",
+		c.apiVersion,
+		wabaID,
+	))
+	if after != "" {
+		return base + "&after=" + after
+	}
+	return base
+}
+
+// ListMessageTemplatesPage fetches a single page of templates. after is the Graph API cursor.
+func (c *Client) ListMessageTemplatesPage(ctx context.Context, wabaID, accessToken, after string) ([]MessageTemplate, string, error) {
+	url := c.listTemplatesURL(wabaID, after)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("meta list templates: %w", err)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return nil, "", NewAPIError(resp.StatusCode, string(body))
+	}
+
+	var result listTemplatesResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, "", fmt.Errorf("decode templates: %w", err)
+	}
+	return result.Data, result.Paging.After, nil
 }
 
 func (c *Client) ListMessageTemplates(ctx context.Context, wabaID, accessToken string) ([]MessageTemplate, error) {
 	var all []MessageTemplate
-	url := fmt.Sprintf(
-		"https://graph.facebook.com/%s/%s/message_templates?fields=id,name,language,status,category,components&limit=100",
-		c.apiVersion,
-		wabaID,
-	)
-
-	for url != "" {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	after := ""
+	for {
+		page, nextAfter, err := c.ListMessageTemplatesPage(ctx, wabaID, accessToken, after)
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("meta list templates: %w", err)
+		all = append(all, page...)
+		if nextAfter == "" {
+			break
 		}
-
-		body, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-
-		if resp.StatusCode >= 400 {
-			return nil, fmt.Errorf("meta list templates error: %s", strings.TrimSpace(string(body)))
-		}
-
-		var result listTemplatesResponse
-		if err := json.Unmarshal(body, &result); err != nil {
-			return nil, fmt.Errorf("decode templates: %w", err)
-		}
-		all = append(all, result.Data...)
-		url = result.Paging.Next
+		after = nextAfter
 	}
-
 	return all, nil
 }
 
@@ -139,7 +169,7 @@ func (c *Client) SendTemplateMessage(
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("meta send template error: %s", strings.TrimSpace(string(respBody)))
+		return "", NewAPIError(resp.StatusCode, string(respBody))
 	}
 
 	var result sendMessageResponse

@@ -67,6 +67,73 @@ func (r *recordingCampaignRepo) FindRecipientByWAMID(context.Context, string) (*
 func (r *recordingCampaignRepo) ApplyCounterDelta(context.Context, uuid.UUID, campaign.CounterDelta) error {
 	return nil
 }
+func (r *recordingCampaignRepo) UpdateRecipientDelivery(context.Context, uuid.UUID, campaign.RecipientStatus, campaign.RecipientStatus, campaign.RecipientDeliveryUpdate) error {
+	return nil
+}
+func (r *recordingCampaignRepo) FindRecipientByWAMIDForTeam(context.Context, uuid.UUID, string) (*campaign.Recipient, error) {
+	return nil, repository.ErrNotFound
+}
+func (r *recordingCampaignRepo) CountNonTerminalRecipients(context.Context, uuid.UUID) (int, error) {
+	return 0, nil
+}
+func (r *recordingCampaignRepo) CompleteCampaign(context.Context, uuid.UUID, uuid.UUID, time.Time) error {
+	return nil
+}
+func (r *recordingCampaignRepo) AggregateRecipientStatusCounts(context.Context, uuid.UUID) (campaign.RecipientStatusCounts, error) {
+	return campaign.RecipientStatusCounts{}, nil
+}
+func (r *recordingCampaignRepo) SetCampaignCounters(context.Context, uuid.UUID, campaign.RecipientStatusCounts) error {
+	return nil
+}
+func (r *recordingCampaignRepo) RepairCampaignCounters(context.Context, uuid.UUID) (bool, error) {
+	return false, nil
+}
+func (r *recordingCampaignRepo) ListCampaignIDsForReconciliation(context.Context, time.Time) ([]uuid.UUID, error) {
+	return nil, nil
+}
+func (r *recordingCampaignRepo) ClaimDueScheduled(context.Context, time.Time, int) ([]campaign.Campaign, error) {
+	return nil, nil
+}
+func (r *recordingCampaignRepo) TransitionCampaignToQueued(context.Context, uuid.UUID, uuid.UUID) error {
+	return nil
+}
+func (r *recordingCampaignRepo) ListPendingJobs(context.Context, int) ([]campaign.BroadcastJob, error) {
+	return nil, nil
+}
+func (r *recordingCampaignRepo) FindJobByID(context.Context, uuid.UUID) (*campaign.BroadcastJob, error) {
+	return nil, repository.ErrNotFound
+}
+func (r *recordingCampaignRepo) CountRecipientsByJob(context.Context, uuid.UUID) (int, error) {
+	return 0, nil
+}
+func (r *recordingCampaignRepo) CountBatchesByJob(context.Context, uuid.UUID) (int, error) {
+	return 0, nil
+}
+func (r *recordingCampaignRepo) UpdateCampaignTotalContacts(context.Context, uuid.UUID, int) error {
+	return nil
+}
+func (r *recordingCampaignRepo) PlanBatchesForJob(context.Context, uuid.UUID, int) ([]campaign.BroadcastBatch, error) {
+	return nil, nil
+}
+func (r *recordingCampaignRepo) MarkBatchesQueued(context.Context, []uuid.UUID) error { return nil }
+func (r *recordingCampaignRepo) ListStaleProcessingBatches(context.Context, time.Time, int) ([]campaign.BroadcastBatch, error) {
+	return nil, nil
+}
+func (r *recordingCampaignRepo) RequeueStaleBatch(context.Context, uuid.UUID) error { return nil }
+func (r *recordingCampaignRepo) ResetSendingRecipientsWithoutWAMID(context.Context, uuid.UUID) error {
+	return nil
+}
+func (r *recordingCampaignRepo) InsertOutbox(context.Context, string, []byte) error { return nil }
+func (r *recordingCampaignRepo) ListPendingOutbox(context.Context, int) ([]campaign.OutboxMessage, error) {
+	return nil, nil
+}
+func (r *recordingCampaignRepo) MarkOutboxPublished(context.Context, uuid.UUID) error { return nil }
+func (r *recordingCampaignRepo) TransitionCampaignToQueuedForSend(context.Context, uuid.UUID, uuid.UUID) error {
+	return nil
+}
+func (r *recordingCampaignRepo) CancelCampaignExecution(context.Context, uuid.UUID, uuid.UUID, string) error {
+	return nil
+}
 
 type stubFactory struct {
 	repo campaign.Repository

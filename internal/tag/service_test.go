@@ -40,6 +40,9 @@ func (m *mockTagRepo) Update(ctx context.Context, tag *Tag) error { return nil }
 func (m *mockTagRepo) SoftDelete(ctx context.Context, teamID, tagID uuid.UUID) error {
 	return nil
 }
+func (m *mockTagRepo) ListContactIDsByTag(context.Context, uuid.UUID, uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
 
 type mockTeamRepo struct {
 	members map[string]team.Member

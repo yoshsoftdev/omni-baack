@@ -85,6 +85,73 @@ func (s *spyCampaignRepo) FindRecipientByWAMID(context.Context, string) (*Recipi
 func (s *spyCampaignRepo) ApplyCounterDelta(context.Context, uuid.UUID, CounterDelta) error {
 	return nil
 }
+func (s *spyCampaignRepo) UpdateRecipientDelivery(context.Context, uuid.UUID, RecipientStatus, RecipientStatus, RecipientDeliveryUpdate) error {
+	return nil
+}
+func (s *spyCampaignRepo) FindRecipientByWAMIDForTeam(context.Context, uuid.UUID, string) (*Recipient, error) {
+	return nil, repository.ErrNotFound
+}
+func (s *spyCampaignRepo) CountNonTerminalRecipients(context.Context, uuid.UUID) (int, error) {
+	return 0, nil
+}
+func (s *spyCampaignRepo) CompleteCampaign(context.Context, uuid.UUID, uuid.UUID, time.Time) error {
+	return nil
+}
+func (s *spyCampaignRepo) AggregateRecipientStatusCounts(context.Context, uuid.UUID) (RecipientStatusCounts, error) {
+	return RecipientStatusCounts{}, nil
+}
+func (s *spyCampaignRepo) SetCampaignCounters(context.Context, uuid.UUID, RecipientStatusCounts) error {
+	return nil
+}
+func (s *spyCampaignRepo) RepairCampaignCounters(context.Context, uuid.UUID) (bool, error) {
+	return false, nil
+}
+func (s *spyCampaignRepo) ListCampaignIDsForReconciliation(context.Context, time.Time) ([]uuid.UUID, error) {
+	return nil, nil
+}
+func (s *spyCampaignRepo) ClaimDueScheduled(context.Context, time.Time, int) ([]Campaign, error) {
+	return nil, nil
+}
+func (s *spyCampaignRepo) TransitionCampaignToQueued(context.Context, uuid.UUID, uuid.UUID) error {
+	return nil
+}
+func (s *spyCampaignRepo) ListPendingJobs(context.Context, int) ([]BroadcastJob, error) {
+	return nil, nil
+}
+func (s *spyCampaignRepo) FindJobByID(context.Context, uuid.UUID) (*BroadcastJob, error) {
+	return nil, repository.ErrNotFound
+}
+func (s *spyCampaignRepo) CountRecipientsByJob(context.Context, uuid.UUID) (int, error) {
+	return 0, nil
+}
+func (s *spyCampaignRepo) CountBatchesByJob(context.Context, uuid.UUID) (int, error) {
+	return 0, nil
+}
+func (s *spyCampaignRepo) UpdateCampaignTotalContacts(context.Context, uuid.UUID, int) error {
+	return nil
+}
+func (s *spyCampaignRepo) PlanBatchesForJob(context.Context, uuid.UUID, int) ([]BroadcastBatch, error) {
+	return nil, nil
+}
+func (s *spyCampaignRepo) MarkBatchesQueued(context.Context, []uuid.UUID) error { return nil }
+func (s *spyCampaignRepo) ListStaleProcessingBatches(context.Context, time.Time, int) ([]BroadcastBatch, error) {
+	return nil, nil
+}
+func (s *spyCampaignRepo) RequeueStaleBatch(context.Context, uuid.UUID) error { return nil }
+func (s *spyCampaignRepo) ResetSendingRecipientsWithoutWAMID(context.Context, uuid.UUID) error {
+	return nil
+}
+func (s *spyCampaignRepo) InsertOutbox(context.Context, string, []byte) error { return nil }
+func (s *spyCampaignRepo) ListPendingOutbox(context.Context, int) ([]OutboxMessage, error) {
+	return nil, nil
+}
+func (s *spyCampaignRepo) MarkOutboxPublished(context.Context, uuid.UUID) error { return nil }
+func (s *spyCampaignRepo) TransitionCampaignToQueuedForSend(context.Context, uuid.UUID, uuid.UUID) error {
+	return nil
+}
+func (s *spyCampaignRepo) CancelCampaignExecution(context.Context, uuid.UUID, uuid.UUID, string) error {
+	return nil
+}
 
 type createTestTeamRepo struct {
 	member *team.Member
@@ -168,6 +235,14 @@ func (m *createTestChannelRepo) DeleteCredentials(context.Context, uuid.UUID) er
 func (m *createTestChannelRepo) UpsertOnboarding(context.Context, *channel.Onboarding) error {
 	return nil
 }
+func (m *createTestChannelRepo) CountMetaReady(context.Context, uuid.UUID) (int64, error) { return 0, nil }
+func (m *createTestChannelRepo) FindByPhoneNumberID(context.Context, string) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
+func (m *createTestChannelRepo) FindByWABAID(context.Context, string) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
+func (m *createTestChannelRepo) UpdateHealthMetadata(context.Context, uuid.UUID, []byte) error { return nil }
 
 type createTestTemplateRepo struct {
 	teamID     uuid.UUID
@@ -194,6 +269,18 @@ func (m *createTestTemplateRepo) List(context.Context, uuid.UUID, template.ListF
 }
 func (m *createTestTemplateRepo) UpsertFromSync(context.Context, *template.Template) error { return nil }
 func (m *createTestTemplateRepo) SoftDelete(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+func (m *createTestTemplateRepo) SoftDeleteExceptMetaIDs(context.Context, uuid.UUID, uuid.UUID, []string) (int64, error) {
+	return 0, nil
+}
+func (m *createTestTemplateRepo) FindByMetaTemplateID(context.Context, uuid.UUID, uuid.UUID, string) (*template.Template, error) {
+	return nil, repository.ErrNotFound
+}
+func (m *createTestTemplateRepo) HasRecentSync(context.Context, uuid.UUID, time.Duration) (bool, error) {
+	return false, nil
+}
+func (m *createTestTemplateRepo) UpdateFromWebhook(context.Context, uuid.UUID, uuid.UUID, string, string, template.Status, *string, time.Time) error {
+	return nil
+}
 
 type createTestSegmentRepo struct{}
 

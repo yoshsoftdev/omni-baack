@@ -33,8 +33,19 @@ type Repository interface {
 	CreateAudienceSnapshot(ctx context.Context, snap *AudienceSnapshot) error
 	BulkCreateRecipients(ctx context.Context, recipients []Recipient, snapshotAt time.Time) error
 	UpdateRecipientStatus(ctx context.Context, id uuid.UUID, from, to RecipientStatus, wamid *string, lastError *string) error
+	UpdateRecipientDelivery(ctx context.Context, id uuid.UUID, from, to RecipientStatus, update RecipientDeliveryUpdate) error
 	FindRecipientByWAMID(ctx context.Context, wamid string) (*Recipient, error)
+	FindRecipientByWAMIDForTeam(ctx context.Context, teamID uuid.UUID, wamid string) (*Recipient, error)
 	ApplyCounterDelta(ctx context.Context, campaignID uuid.UUID, delta CounterDelta) error
+	CountNonTerminalRecipients(ctx context.Context, campaignID uuid.UUID) (int, error)
+	CompleteCampaign(ctx context.Context, teamID, campaignID uuid.UUID, completedAt time.Time) error
+	AggregateRecipientStatusCounts(ctx context.Context, campaignID uuid.UUID) (RecipientStatusCounts, error)
+	SetCampaignCounters(ctx context.Context, campaignID uuid.UUID, counts RecipientStatusCounts) error
+	RepairCampaignCounters(ctx context.Context, campaignID uuid.UUID) (bool, error)
+	ListCampaignIDsForReconciliation(ctx context.Context, updatedSince time.Time) ([]uuid.UUID, error)
+
+	TransitionCampaignToQueuedForSend(ctx context.Context, teamID, campaignID uuid.UUID) error
+	CancelCampaignExecution(ctx context.Context, teamID, campaignID uuid.UUID, reason string) error
 }
 
 type PostgresRepository struct {
@@ -323,15 +334,26 @@ func (r *PostgresRepository) BulkCreateRecipients(ctx context.Context, recipient
 }
 
 func (r *PostgresRepository) UpdateRecipientStatus(ctx context.Context, id uuid.UUID, from, to RecipientStatus, wamid *string, lastError *string) error {
+	return r.UpdateRecipientDelivery(ctx, id, from, to, RecipientDeliveryUpdate{
+		WAMID:     wamid,
+		LastError: lastError,
+	})
+}
+
+func (r *PostgresRepository) UpdateRecipientDelivery(ctx context.Context, id uuid.UUID, from, to RecipientStatus, update RecipientDeliveryUpdate) error {
 	tag, err := r.q.Exec(ctx, `
-		UPDATE campaign_recipients SET status = $1, wamid = COALESCE($2, wamid), last_error = $3,
+		UPDATE campaign_recipients SET status = $1, wamid = COALESCE($2, wamid),
+			last_error = COALESCE($3, last_error), failure_code = COALESCE($4, failure_code),
+			provider_response = COALESCE($5, provider_response),
+			attempt_count = CASE WHEN $6 THEN attempt_count + 1 ELSE attempt_count END,
 			sent_at = CASE WHEN $1 = 'sent' THEN NOW() ELSE sent_at END,
 			delivered_at = CASE WHEN $1 = 'delivered' THEN NOW() ELSE delivered_at END,
 			read_at = CASE WHEN $1 = 'read' THEN NOW() ELSE read_at END,
 			failed_at = CASE WHEN $1 = 'failed' THEN NOW() ELSE failed_at END,
 			updated_at = NOW()
-		WHERE id = $4 AND status = $5
-	`, string(to), wamid, lastError, id, string(from))
+		WHERE id = $7 AND status = $8
+	`, string(to), update.WAMID, update.LastError, update.FailureCode, nullableJSON(update.ProviderResponse),
+		update.IncrementAttempt, id, string(from))
 	if err != nil {
 		return repository.MapError(err)
 	}
@@ -347,6 +369,130 @@ func (r *PostgresRepository) FindRecipientByWAMID(ctx context.Context, wamid str
 			attempt_count, last_error, failure_code, wamid, sent_at, delivered_at, read_at, failed_at, created_at, updated_at
 		FROM campaign_recipients WHERE wamid = $1 LIMIT 1
 	`, wamid))
+}
+
+func (r *PostgresRepository) FindRecipientByWAMIDForTeam(ctx context.Context, teamID uuid.UUID, wamid string) (*Recipient, error) {
+	return scanRecipient(r.q.QueryRow(ctx, `
+		SELECT id, campaign_id, team_id, contact_id, job_id, batch_id, phone, status,
+			attempt_count, last_error, failure_code, wamid, sent_at, delivered_at, read_at, failed_at, created_at, updated_at
+		FROM campaign_recipients WHERE wamid = $1 AND team_id = $2 LIMIT 1
+	`, wamid, teamID))
+}
+
+func (r *PostgresRepository) CountNonTerminalRecipients(ctx context.Context, campaignID uuid.UUID) (int, error) {
+	var count int
+	err := r.q.QueryRow(ctx, `
+		SELECT COUNT(*)::int FROM campaign_recipients
+		WHERE campaign_id = $1
+		  AND status NOT IN ('read', 'failed', 'cancelled', 'skipped')
+	`, campaignID).Scan(&count)
+	if err != nil {
+		return 0, repository.MapError(err)
+	}
+	return count, nil
+}
+
+func (r *PostgresRepository) CompleteCampaign(ctx context.Context, teamID, campaignID uuid.UUID, completedAt time.Time) error {
+	tag, err := r.q.Exec(ctx, `
+		UPDATE campaigns SET status = 'completed', completed_at = $1, updated_at = NOW()
+		WHERE id = $2 AND team_id = $3 AND deleted_at IS NULL
+		  AND status IN ('sending', 'queued', 'scheduled')
+	`, completedAt, campaignID, teamID)
+	if err != nil {
+		return repository.MapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (r *PostgresRepository) AggregateRecipientStatusCounts(ctx context.Context, campaignID uuid.UUID) (RecipientStatusCounts, error) {
+	var counts RecipientStatusCounts
+	err := r.q.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE status IN ('sent', 'delivered', 'read'))::int,
+			COUNT(*) FILTER (WHERE status IN ('delivered', 'read'))::int,
+			COUNT(*) FILTER (WHERE status = 'read')::int,
+			COUNT(*) FILTER (WHERE status = 'failed')::int
+		FROM campaign_recipients WHERE campaign_id = $1
+	`, campaignID).Scan(&counts.Sent, &counts.Delivered, &counts.Read, &counts.Failed)
+	if err != nil {
+		return RecipientStatusCounts{}, repository.MapError(err)
+	}
+	return counts, nil
+}
+
+func (r *PostgresRepository) SetCampaignCounters(ctx context.Context, campaignID uuid.UUID, counts RecipientStatusCounts) error {
+	_, err := r.q.Exec(ctx, `
+		UPDATE campaigns SET
+			sent_count = $1,
+			delivered_count = $2,
+			read_count = $3,
+			failed_count = $4,
+			updated_at = NOW()
+		WHERE id = $5
+	`, counts.Sent, counts.Delivered, counts.Read, counts.Failed, campaignID)
+	return repository.MapError(err)
+}
+
+func (r *PostgresRepository) RepairCampaignCounters(ctx context.Context, campaignID uuid.UUID) (bool, error) {
+	var repaired bool
+	err := r.q.QueryRow(ctx, `
+		WITH agg AS (
+			SELECT
+				COUNT(*) FILTER (WHERE status IN ('sent', 'delivered', 'read'))::int AS sent,
+				COUNT(*) FILTER (WHERE status IN ('delivered', 'read'))::int AS delivered,
+				COUNT(*) FILTER (WHERE status = 'read')::int AS read,
+				COUNT(*) FILTER (WHERE status = 'failed')::int AS failed
+			FROM campaign_recipients WHERE campaign_id = $1
+		)
+		UPDATE campaigns c SET
+			sent_count = agg.sent,
+			delivered_count = agg.delivered,
+			read_count = agg.read,
+			failed_count = agg.failed,
+			updated_at = NOW()
+		FROM agg
+		WHERE c.id = $1
+		  AND (
+			c.sent_count IS DISTINCT FROM agg.sent OR
+			c.delivered_count IS DISTINCT FROM agg.delivered OR
+			c.read_count IS DISTINCT FROM agg.read OR
+			c.failed_count IS DISTINCT FROM agg.failed
+		  )
+		RETURNING true
+	`, campaignID).Scan(&repaired)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, repository.MapError(err)
+	}
+	return repaired, nil
+}
+
+func (r *PostgresRepository) ListCampaignIDsForReconciliation(ctx context.Context, updatedSince time.Time) ([]uuid.UUID, error) {
+	rows, err := r.q.Query(ctx, `
+		SELECT id FROM campaigns
+		WHERE deleted_at IS NULL
+		  AND status IN ('sending', 'completed', 'failed')
+		  AND updated_at >= $1
+	`, updatedSince)
+	if err != nil {
+		return nil, repository.MapError(err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, repository.MapError(err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (r *PostgresRepository) ApplyCounterDelta(ctx context.Context, campaignID uuid.UUID, delta CounterDelta) error {

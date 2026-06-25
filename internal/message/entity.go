@@ -46,6 +46,7 @@ type Message struct {
 	ContentType    ContentType
 	WAMID          *string
 	Status         *Status
+	RawPayload     []byte
 	ReceivedAt     time.Time
 	CreatedAt      time.Time
 }

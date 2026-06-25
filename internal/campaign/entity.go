@@ -190,3 +190,20 @@ type CounterDelta struct {
 	Read      int
 	Failed    int
 }
+
+// RecipientDeliveryUpdate carries optional fields applied on status transition.
+type RecipientDeliveryUpdate struct {
+	WAMID            *string
+	LastError        *string
+	FailureCode      *string
+	ProviderResponse json.RawMessage
+	IncrementAttempt bool
+}
+
+// RecipientStatusCounts aggregates recipient rows for reconciliation.
+type RecipientStatusCounts struct {
+	Sent      int
+	Delivered int
+	Read      int
+	Failed    int
+}

@@ -21,14 +21,15 @@ import (
 
 // Service (WorkspaceService) manages workspace settings.
 type Service struct {
-	teams     team.Repository
-	quota     *quota.Service
-	rbac      *rbac.Service
-	channels  channel.Repository
-	templates template.Repository
-	contacts  contact.Repository
-	campaigns campaign.Repository
-	snapshots SnapshotRepository
+	teams        team.Repository
+	quota        *quota.Service
+	rbac         *rbac.Service
+	channels     channel.Repository
+	templates    template.Repository
+	contacts     contact.Repository
+	campaigns    campaign.Repository
+	snapshots    SnapshotRepository
+	syncChecker  templateSyncChecker
 }
 
 func NewService(
@@ -40,16 +41,18 @@ func NewService(
 	contacts contact.Repository,
 	campaigns campaign.Repository,
 	snapshots SnapshotRepository,
+	syncChecker templateSyncChecker,
 ) *Service {
 	return &Service{
-		teams:     teams,
-		quota:     quotaSvc,
-		rbac:      rbacSvc,
-		channels:  channels,
-		templates: templates,
-		contacts:  contacts,
-		campaigns: campaigns,
-		snapshots: snapshots,
+		teams:       teams,
+		quota:       quotaSvc,
+		rbac:        rbacSvc,
+		channels:    channels,
+		templates:   templates,
+		contacts:    contacts,
+		campaigns:   campaigns,
+		snapshots:   snapshots,
+		syncChecker: syncChecker,
 	}
 }
 
@@ -162,6 +165,12 @@ func (s *Service) Update(ctx context.Context, teamID, userID uuid.UUID, actorRol
 		}
 	}
 	return t, nil
+}
+
+// RefreshReadinessInternal recomputes and persists readiness without an actor (system use).
+func (s *Service) RefreshReadinessInternal(ctx context.Context, teamID uuid.UUID) error {
+	_, err := refreshReadinessSnapshot(ctx, s.readinessDeps(), teamID, nil)
+	return err
 }
 
 func (s *Service) GetQuotas(ctx context.Context, teamID, userID uuid.UUID, actorRole string) (*quota.Snapshot, error) {

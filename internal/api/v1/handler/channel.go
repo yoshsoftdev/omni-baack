@@ -7,21 +7,31 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/api/v1/dto"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
+	metasvc "github.com/omnichannel/omni-chan-v2/internal/meta"
 )
 
 type ChannelHandler struct {
-	svc *channel.Service
+	svc             *channel.Service
+	health          *metasvc.HealthService
+	embeddedSignup  *metasvc.EmbeddedSignupService
 }
 
-func NewChannelHandler(svc *channel.Service) *ChannelHandler {
-	return &ChannelHandler{svc: svc}
+func NewChannelHandler(
+	svc *channel.Service,
+	health *metasvc.HealthService,
+	embeddedSignup *metasvc.EmbeddedSignupService,
+) *ChannelHandler {
+	return &ChannelHandler{svc: svc, health: health, embeddedSignup: embeddedSignup}
 }
 
 type createChannelRequest struct {
-	Name           string `json:"name"`
-	Provider       string `json:"provider"`
-	ConnectionType string `json:"connection_type"`
-	PhoneNumber    string `json:"phone_number"`
+	Name            string `json:"name"`
+	Provider        string `json:"provider"`
+	ConnectionType  string `json:"connection_type"`
+	PhoneNumber     string `json:"phone_number"`
+	AccessToken     string `json:"access_token"`
+	WABAID          string `json:"waba_id"`
+	PhoneNumberID   string `json:"phone_number_id"`
 }
 
 type updateChannelRequest struct {
@@ -63,6 +73,32 @@ func (h *ChannelHandler) Get(c *fiber.Ctx) error {
 	return response.OK(c, "ok", ch)
 }
 
+type verifyManualConnectRequest struct {
+	AccessToken   string `json:"access_token"`
+	WABAID        string `json:"waba_id"`
+	PhoneNumberID string `json:"phone_number_id"`
+}
+
+func (h *ChannelHandler) VerifyManualConnect(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	var req verifyManualConnectRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	result, err := h.svc.VerifyManualConnect(c.Context(), actor.TeamID, actor.UserID, actor.Role, channel.ManualConnectInput{
+		AccessToken:   req.AccessToken,
+		WABAID:        req.WABAID,
+		PhoneNumberID: req.PhoneNumberID,
+	})
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "manual connection verified", result)
+}
+
 func (h *ChannelHandler) Create(c *fiber.Ctx) error {
 	actor, err := requireActor(c)
 	if err != nil {
@@ -80,11 +116,24 @@ func (h *ChannelHandler) Create(c *fiber.Ctx) error {
 		ct := channel.ConnectionType(req.ConnectionType)
 		connType = &ct
 	}
+	var manual *channel.ManualConnectInput
+	if strings.TrimSpace(req.AccessToken) != "" || strings.TrimSpace(req.WABAID) != "" || strings.TrimSpace(req.PhoneNumberID) != "" {
+		manual = &channel.ManualConnectInput{
+			AccessToken:   req.AccessToken,
+			WABAID:        req.WABAID,
+			PhoneNumberID: req.PhoneNumberID,
+		}
+		if connType == nil {
+			ct := channel.ConnectionManual
+			connType = &ct
+		}
+	}
 	ch, err := h.svc.Create(c.Context(), actor.TeamID, actor.UserID, actor.Role, channel.CreateInput{
 		Name:           req.Name,
 		Provider:       req.Provider,
 		ConnectionType: connType,
 		PhoneNumber:    optionalString(req.PhoneNumber),
+		Manual:         manual,
 	})
 	if err != nil {
 		return mapError(c, err)
@@ -128,4 +177,106 @@ func (h *ChannelHandler) Delete(c *fiber.Ctx) error {
 		return mapError(c, err)
 	}
 	return response.OK(c, "channel deleted", nil)
+}
+
+func (h *ChannelHandler) Health(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid channel id")
+	}
+	if h.health == nil {
+		return response.FeatureNotAvailable(c, "channel health checks are not configured")
+	}
+	result, err := h.health.CheckChannel(c.Context(), actor.TeamID, id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", result)
+}
+
+func (h *ChannelHandler) StartEmbeddedSignup(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid channel id")
+	}
+	if h.embeddedSignup == nil {
+		return response.FeatureNotAvailable(c, "embedded signup is not configured")
+	}
+	result, err := h.embeddedSignup.StartEmbeddedSignup(c.Context(), actor.TeamID, id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "embedded signup started", result)
+}
+
+type completeEmbeddedSignupRequest struct {
+	Code          string `json:"code"`
+	OAuthState    string `json:"oauth_state"`
+	BusinessID    string `json:"business_id"`
+	WABAID        string `json:"waba_id"`
+	PhoneNumberID string `json:"phone_number_id"`
+}
+
+func (h *ChannelHandler) CompleteEmbeddedSignup(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	channelID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid channel id")
+	}
+	sessionID := c.Params("session_id")
+	if sessionID == "" {
+		return response.BadRequest(c, "session_id is required")
+	}
+	var req completeEmbeddedSignupRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	if h.embeddedSignup == nil {
+		return response.FeatureNotAvailable(c, "embedded signup is not configured")
+	}
+	result, err := h.embeddedSignup.CompleteEmbeddedSignup(c.Context(), actor.TeamID, channelID, sessionID, metasvc.CompleteEmbeddedSignupInput{
+		Code:          req.Code,
+		OAuthState:    req.OAuthState,
+		BusinessID:    req.BusinessID,
+		WABAID:        req.WABAID,
+		PhoneNumberID: req.PhoneNumberID,
+	})
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "embedded signup completed", result)
+}
+
+func (h *ChannelHandler) GetEmbeddedSignupStatus(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	channelID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid channel id")
+	}
+	sessionID := c.Params("session_id")
+	if sessionID == "" {
+		return response.BadRequest(c, "session_id is required")
+	}
+	if h.embeddedSignup == nil {
+		return response.FeatureNotAvailable(c, "embedded signup is not configured")
+	}
+	result, err := h.embeddedSignup.GetEmbeddedSignupStatus(c.Context(), actor.TeamID, channelID, sessionID)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", result)
 }

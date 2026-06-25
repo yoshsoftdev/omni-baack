@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -15,9 +16,13 @@ import (
 type Repository interface {
 	Create(ctx context.Context, t *Template) error
 	FindByID(ctx context.Context, teamID, id uuid.UUID) (*Template, error)
+	FindByMetaTemplateID(ctx context.Context, teamID, channelID uuid.UUID, metaTemplateID string) (*Template, error)
 	List(ctx context.Context, teamID uuid.UUID, filter ListFilter, page repository.PageParams) (repository.Page[Template], error)
 	UpsertFromSync(ctx context.Context, t *Template) error
 	SoftDelete(ctx context.Context, teamID, id uuid.UUID) error
+	SoftDeleteExceptMetaIDs(ctx context.Context, teamID, channelID uuid.UUID, keepMetaIDs []string) (int64, error)
+	HasRecentSync(ctx context.Context, teamID uuid.UUID, within time.Duration) (bool, error)
+	UpdateFromWebhook(ctx context.Context, teamID, channelID uuid.UUID, metaTemplateID, name string, status Status, category *string, updatedAt time.Time) error
 }
 
 type PostgresRepository struct {
@@ -50,6 +55,16 @@ func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID)
 		FROM templates WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL
 	`
 	return scanTemplate(r.db.Pool.QueryRow(ctx, query, id, teamID))
+}
+
+func (r *PostgresRepository) FindByMetaTemplateID(ctx context.Context, teamID, channelID uuid.UUID, metaTemplateID string) (*Template, error) {
+	query := `
+		SELECT id, channel_id, team_id, waba_id, meta_template_id, name, language,
+			category, status, preview, components, variable_count, last_sync_at, created_at, updated_at, deleted_at
+		FROM templates
+		WHERE team_id = $1 AND channel_id = $2 AND meta_template_id = $3 AND deleted_at IS NULL
+	`
+	return scanTemplate(r.db.Pool.QueryRow(ctx, query, teamID, channelID, metaTemplateID))
 }
 
 func (r *PostgresRepository) List(ctx context.Context, teamID uuid.UUID, filter ListFilter, page repository.PageParams) (repository.Page[Template], error) {
@@ -123,6 +138,61 @@ func (r *PostgresRepository) SoftDelete(ctx context.Context, teamID, id uuid.UUI
 		`UPDATE templates SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL`,
 		id, teamID,
 	)
+	if err != nil {
+		return repository.MapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (r *PostgresRepository) SoftDeleteExceptMetaIDs(ctx context.Context, teamID, channelID uuid.UUID, keepMetaIDs []string) (int64, error) {
+	if len(keepMetaIDs) == 0 {
+		tag, err := r.db.Pool.Exec(ctx, `
+			UPDATE templates SET deleted_at = NOW(), updated_at = NOW()
+			WHERE team_id = $1 AND channel_id = $2 AND deleted_at IS NULL
+		`, teamID, channelID)
+		if err != nil {
+			return 0, repository.MapError(err)
+		}
+		return tag.RowsAffected(), nil
+	}
+	tag, err := r.db.Pool.Exec(ctx, `
+		UPDATE templates SET deleted_at = NOW(), updated_at = NOW()
+		WHERE team_id = $1 AND channel_id = $2 AND deleted_at IS NULL
+			AND meta_template_id <> ALL($3::text[])
+	`, teamID, channelID, keepMetaIDs)
+	if err != nil {
+		return 0, repository.MapError(err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (r *PostgresRepository) HasRecentSync(ctx context.Context, teamID uuid.UUID, within time.Duration) (bool, error) {
+	since := time.Now().UTC().Add(-within)
+	var exists bool
+	err := r.db.Pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM templates
+			WHERE team_id = $1 AND deleted_at IS NULL AND last_sync_at >= $2
+		)
+	`, teamID, since).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("has recent template sync: %w", err)
+	}
+	return exists, nil
+}
+
+func (r *PostgresRepository) UpdateFromWebhook(ctx context.Context, teamID, channelID uuid.UUID, metaTemplateID, name string, status Status, category *string, updatedAt time.Time) error {
+	tag, err := r.db.Pool.Exec(ctx, `
+		UPDATE templates SET
+			name = COALESCE(NULLIF($4, ''), name),
+			status = $5,
+			category = COALESCE($6, category),
+			updated_at = $7
+		WHERE team_id = $1 AND channel_id = $2 AND meta_template_id = $3 AND deleted_at IS NULL
+	`, teamID, channelID, metaTemplateID, name, string(status), category, updatedAt)
 	if err != nil {
 		return repository.MapError(err)
 	}

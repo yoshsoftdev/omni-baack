@@ -19,6 +19,7 @@ type Service struct {
 	channels  channel.Repository
 	teams     team.Repository
 	rbac      *rbac.Service
+	sync      *SyncService
 }
 
 func NewService(
@@ -26,12 +27,14 @@ func NewService(
 	channels channel.Repository,
 	teams team.Repository,
 	rbacSvc *rbac.Service,
+	syncSvc *SyncService,
 ) *Service {
 	return &Service{
 		templates: templates,
 		channels:  channels,
 		teams:     teams,
 		rbac:      rbacSvc,
+		sync:      syncSvc,
 	}
 }
 
@@ -118,4 +121,91 @@ func (s *Service) ValidateForCampaign(ctx context.Context, teamID, channelID, te
 		return serviceerrors.NewValidation("template_id", "template name is required")
 	}
 	return nil
+}
+
+func (s *Service) SyncFromMeta(ctx context.Context, teamID, userID uuid.UUID, actorRole string, channelID uuid.UUID) (*SyncResult, error) {
+	if err := s.authorize(actorRole, rbac.PermTemplateSync); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	if s.sync == nil {
+		return nil, serviceerrors.NewValidation("sync", "template sync is not configured")
+	}
+	return s.sync.SyncChannel(ctx, teamID, channelID)
+}
+
+func (s *Service) ListSyncHistory(ctx context.Context, teamID, userID uuid.UUID, actorRole string, filter SyncRunListFilter, page repository.PageParams) (repository.Page[SyncHistoryItem], error) {
+	if err := s.authorize(actorRole, rbac.PermTemplateView); err != nil {
+		return repository.Page[SyncHistoryItem]{}, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return repository.Page[SyncHistoryItem]{}, err
+	}
+	if s.sync == nil || s.sync.SyncRuns() == nil {
+		return repository.Page[SyncHistoryItem]{Items: []SyncHistoryItem{}, Pagination: repository.NewMeta(page.Page, page.PageSize, 0)}, nil
+	}
+	runs, err := s.sync.SyncRuns().List(ctx, teamID, filter, page)
+	if err != nil {
+		return repository.Page[SyncHistoryItem]{}, serviceerrors.MapRepository(err)
+	}
+	items := make([]SyncHistoryItem, 0, len(runs.Items))
+	for _, run := range runs.Items {
+		items = append(items, s.toSyncHistoryItem(ctx, teamID, run))
+	}
+	return repository.Page[SyncHistoryItem]{Items: items, Pagination: runs.Pagination}, nil
+}
+
+func (s *Service) GetSyncHistory(ctx context.Context, teamID, userID uuid.UUID, actorRole string, runID uuid.UUID) (*SyncHistoryItem, error) {
+	if err := s.authorize(actorRole, rbac.PermTemplateView); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	if s.sync == nil || s.sync.SyncRuns() == nil {
+		return nil, serviceerrors.ErrNotFound
+	}
+	run, err := s.sync.SyncRuns().FindByID(ctx, teamID, runID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	item := s.toSyncHistoryItem(ctx, teamID, *run)
+	return &item, nil
+}
+
+func (s *Service) GetSyncMetrics(ctx context.Context, teamID, userID uuid.UUID, actorRole string, channelID *uuid.UUID) (*SyncMetrics, error) {
+	if err := s.authorize(actorRole, rbac.PermTemplateView); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	if s.sync == nil || s.sync.SyncRuns() == nil {
+		return &SyncMetrics{}, nil
+	}
+	if channelID != nil {
+		return s.sync.SyncRuns().MetricsByChannel(ctx, teamID, *channelID)
+	}
+	return s.sync.SyncRuns().MetricsByTeam(ctx, teamID)
+}
+
+func (s *Service) toSyncHistoryItem(ctx context.Context, teamID uuid.UUID, run SyncRun) SyncHistoryItem {
+	channelName := ""
+	if ch, err := s.channels.FindByID(ctx, teamID, run.ChannelID); err == nil {
+		channelName = ch.Name
+	}
+	return SyncHistoryItem{
+		ID:          run.ID,
+		ChannelID:   run.ChannelID,
+		ChannelName: channelName,
+		Status:      run.Status,
+		StartedAt:   run.StartedAt,
+		CompletedAt: run.CompletedAt,
+		Created:     run.CreatedCount,
+		Updated:     run.UpdatedCount,
+		Removed:     run.RemovedCount,
+		ErrorCount:  run.ErrorCount,
+	}
 }

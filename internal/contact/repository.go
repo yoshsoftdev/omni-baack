@@ -17,6 +17,7 @@ type Repository interface {
 	FindByID(ctx context.Context, teamID, id uuid.UUID) (*Contact, error)
 	FindByPhone(ctx context.Context, teamID uuid.UUID, phone string) (*Contact, error)
 	List(ctx context.Context, teamID uuid.UUID, filter ListFilter, page repository.PageParams) (repository.Page[Contact], error)
+	ListByIDs(ctx context.Context, teamID uuid.UUID, ids []uuid.UUID) ([]Contact, error)
 	Update(ctx context.Context, c *Contact) error
 	SoftDelete(ctx context.Context, teamID, id uuid.UUID) error
 	CountByTeam(ctx context.Context, teamID uuid.UUID) (int64, error)
@@ -115,6 +116,30 @@ func (r *PostgresRepository) List(ctx context.Context, teamID uuid.UUID, filter 
 		items = append(items, *c)
 	}
 	return repository.Page[Contact]{Items: items, Pagination: repository.NewMeta(page.Page, page.PageSize, total)}, rows.Err()
+}
+
+func (r *PostgresRepository) ListByIDs(ctx context.Context, teamID uuid.UUID, ids []uuid.UUID) ([]Contact, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := r.db.Pool.Query(ctx, `
+		SELECT id, team_id, name, phone, email, notes, city, language, customer_type,
+			source, marketing_status, last_activity_at, import_job_id, created_at, updated_at, deleted_at
+		FROM contacts WHERE team_id = $1 AND id = ANY($2) AND deleted_at IS NULL
+	`, teamID, ids)
+	if err != nil {
+		return nil, repository.MapError(err)
+	}
+	defer rows.Close()
+	out := make([]Contact, 0, len(ids))
+	for rows.Next() {
+		c, err := scanContactRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *c)
+	}
+	return out, rows.Err()
 }
 
 func (r *PostgresRepository) Update(ctx context.Context, c *Contact) error {

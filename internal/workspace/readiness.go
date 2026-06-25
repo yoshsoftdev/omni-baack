@@ -15,7 +15,11 @@ import (
 	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
 
-const totalReadinessChecks = 5
+const totalReadinessChecks = 7
+
+type templateSyncChecker interface {
+	TeamRecentlySynced(ctx context.Context, teamID uuid.UUID) (bool, error)
+}
 
 type ReadinessCheck struct {
 	Key       string `json:"key"`
@@ -29,22 +33,24 @@ type ReadinessResult struct {
 }
 
 type readinessDeps struct {
-	channels  channel.Repository
-	templates template.Repository
-	contacts  contact.Repository
-	teams     team.Repository
-	campaigns campaign.Repository
-	snapshots SnapshotRepository
+	channels    channel.Repository
+	templates   template.Repository
+	contacts    contact.Repository
+	teams       team.Repository
+	campaigns   campaign.Repository
+	snapshots   SnapshotRepository
+	syncChecker templateSyncChecker
 }
 
 func (s *Service) readinessDeps() readinessDeps {
 	return readinessDeps{
-		channels:  s.channels,
-		templates: s.templates,
-		contacts:  s.contacts,
-		teams:     s.teams,
-		campaigns: s.campaigns,
-		snapshots: s.snapshots,
+		channels:    s.channels,
+		templates:   s.templates,
+		contacts:    s.contacts,
+		teams:       s.teams,
+		campaigns:   s.campaigns,
+		snapshots:   s.snapshots,
+		syncChecker: s.syncChecker,
 	}
 }
 
@@ -164,8 +170,29 @@ func evaluateReadinessChecks(ctx context.Context, deps readinessDeps, teamID uui
 	if err != nil {
 		return nil, serviceerrors.MapRepository(err)
 	}
+	metaReady, err := deps.channels.CountMetaReady(ctx, teamID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+
+	templatesRecentlySynced := false
+	if deps.templates != nil {
+		recent, err := deps.templates.HasRecentSync(ctx, teamID, 24*time.Hour)
+		if err != nil {
+			return nil, serviceerrors.MapRepository(err)
+		}
+		if !recent && deps.syncChecker != nil {
+			recent, err = deps.syncChecker.TeamRecentlySynced(ctx, teamID)
+			if err != nil {
+				return nil, err
+			}
+		}
+		templatesRecentlySynced = recent
+	}
 
 	return []ReadinessCheck{
+		{Key: "meta_connected", Completed: metaReady > 0},
+		{Key: "templates_recently_synced", Completed: templatesRecentlySynced},
 		{Key: "channel_connected", Completed: channelPage.Pagination.Total > 0},
 		{Key: "template_synced", Completed: templatePage.Pagination.Total > 0},
 		{Key: "contacts_available", Completed: contactCount > 0},

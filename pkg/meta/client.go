@@ -14,8 +14,9 @@ import (
 const defaultAPIVersion = "v21.0"
 
 type Client struct {
-	apiVersion string
-	httpClient *http.Client
+	apiVersion   string
+	httpClient   *http.Client
+	graphBaseURL string
 }
 
 func NewClient(apiVersion string) *Client {
@@ -26,6 +27,18 @@ func NewClient(apiVersion string) *Client {
 		apiVersion: apiVersion,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// SetBaseURL overrides the Graph API host (used in tests).
+func (c *Client) SetBaseURL(baseURL string) {
+	c.graphBaseURL = strings.TrimRight(baseURL, "/")
+}
+
+func (c *Client) graphURL(path string) string {
+	if c.graphBaseURL != "" {
+		return c.graphBaseURL + path
+	}
+	return "https://graph.facebook.com" + path
 }
 
 type PhoneNumber struct {

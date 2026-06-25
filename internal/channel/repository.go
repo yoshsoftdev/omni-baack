@@ -26,6 +26,10 @@ type Repository interface {
 
 	UpsertOnboarding(ctx context.Context, ob *Onboarding) error
 	FindOnboarding(ctx context.Context, channelID uuid.UUID) (*Onboarding, error)
+	CountMetaReady(ctx context.Context, teamID uuid.UUID) (int64, error)
+	FindByPhoneNumberID(ctx context.Context, phoneNumberID string) (*Channel, error)
+	FindByWABAID(ctx context.Context, wabaID string) (*Channel, error)
+	UpdateHealthMetadata(ctx context.Context, channelID uuid.UUID, metadata []byte) error
 }
 
 type PostgresRepository struct {
@@ -40,13 +44,17 @@ func (r *PostgresRepository) Create(ctx context.Context, ch *Channel) error {
 	query := `
 		INSERT INTO channels (
 			id, team_id, name, provider, status, connection_type,
-			phone_number, waba_id, phone_number_id, is_coex, last_connected_at,
+			phone_number, waba_id, phone_number_id, business_id, is_coex, health_metadata, last_connected_at,
 			created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 	`
+	health := ch.HealthMetadata
+	if len(health) == 0 {
+		health = []byte("{}")
+	}
 	_, err := r.db.Pool.Exec(ctx, query,
 		ch.ID, ch.TeamID, ch.Name, ch.Provider, string(ch.Status), ch.ConnectionType,
-		ch.PhoneNumber, ch.WABAID, ch.PhoneNumberID, ch.IsCoex, ch.LastConnectedAt,
+		ch.PhoneNumber, ch.WABAID, ch.PhoneNumberID, ch.BusinessID, ch.IsCoex, health, ch.LastConnectedAt,
 		ch.CreatedAt, ch.UpdatedAt,
 	)
 	return repository.MapError(err)
@@ -55,7 +63,7 @@ func (r *PostgresRepository) Create(ctx context.Context, ch *Channel) error {
 func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID) (*Channel, error) {
 	query := `
 		SELECT id, team_id, name, provider, status, connection_type,
-			phone_number, waba_id, phone_number_id, is_coex, last_connected_at,
+			phone_number, waba_id, phone_number_id, business_id, is_coex, health_metadata, last_connected_at,
 			created_at, updated_at, deleted_at
 		FROM channels WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL
 	`
@@ -84,7 +92,7 @@ func (r *PostgresRepository) List(ctx context.Context, teamID uuid.UUID, filter 
 	args = append(args, page.Limit(), page.Offset())
 	listQ := fmt.Sprintf(`
 		SELECT id, team_id, name, provider, status, connection_type,
-			phone_number, waba_id, phone_number_id, is_coex, last_connected_at,
+			phone_number, waba_id, phone_number_id, business_id, is_coex, health_metadata, last_connected_at,
 			created_at, updated_at, deleted_at
 		FROM channels WHERE %s
 		ORDER BY created_at DESC LIMIT $%d OFFSET $%d
@@ -114,13 +122,13 @@ func (r *PostgresRepository) Update(ctx context.Context, ch *Channel) error {
 	query := `
 		UPDATE channels SET
 			name = $1, status = $2, connection_type = $3, phone_number = $4,
-			waba_id = $5, phone_number_id = $6, is_coex = $7, last_connected_at = $8,
-			updated_at = $9
-		WHERE id = $10 AND team_id = $11 AND deleted_at IS NULL
+			waba_id = $5, phone_number_id = $6, business_id = $7, is_coex = $8, last_connected_at = $9,
+			updated_at = $10
+		WHERE id = $11 AND team_id = $12 AND deleted_at IS NULL
 	`
 	tag, err := r.db.Pool.Exec(ctx, query,
 		ch.Name, string(ch.Status), ch.ConnectionType, ch.PhoneNumber,
-		ch.WABAID, ch.PhoneNumberID, ch.IsCoex, ch.LastConnectedAt, ch.UpdatedAt,
+		ch.WABAID, ch.PhoneNumberID, ch.BusinessID, ch.IsCoex, ch.LastConnectedAt, ch.UpdatedAt,
 		ch.ID, ch.TeamID,
 	)
 	if err != nil {
@@ -230,6 +238,70 @@ func (r *PostgresRepository) FindOnboarding(ctx context.Context, channelID uuid.
 	return &ob, nil
 }
 
+func (r *PostgresRepository) CountMetaReady(ctx context.Context, teamID uuid.UUID) (int64, error) {
+	var count int64
+	err := r.db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM channels c
+		INNER JOIN channel_credentials cc ON cc.channel_id = c.id
+		INNER JOIN channel_onboarding co ON co.channel_id = c.id
+		WHERE c.team_id = $1
+			AND c.deleted_at IS NULL
+			AND c.status = 'connected'
+			AND co.status = 'completed'
+			AND c.waba_id IS NOT NULL
+			AND c.phone_number_id IS NOT NULL
+			AND (cc.token_expires_at IS NULL OR cc.token_expires_at > NOW())
+	`, teamID).Scan(&count)
+	if err != nil {
+		return 0, repository.MapError(err)
+	}
+	return count, nil
+}
+
+func (r *PostgresRepository) FindByPhoneNumberID(ctx context.Context, phoneNumberID string) (*Channel, error) {
+	query := `
+		SELECT id, team_id, name, provider, status, connection_type,
+			phone_number, waba_id, phone_number_id, business_id, is_coex, health_metadata, last_connected_at,
+			created_at, updated_at, deleted_at
+		FROM channels
+		WHERE phone_number_id = $1 AND deleted_at IS NULL
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`
+	return scanChannel(r.db.Pool.QueryRow(ctx, query, phoneNumberID))
+}
+
+func (r *PostgresRepository) FindByWABAID(ctx context.Context, wabaID string) (*Channel, error) {
+	query := `
+		SELECT id, team_id, name, provider, status, connection_type,
+			phone_number, waba_id, phone_number_id, business_id, is_coex, health_metadata, last_connected_at,
+			created_at, updated_at, deleted_at
+		FROM channels
+		WHERE waba_id = $1 AND deleted_at IS NULL
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`
+	return scanChannel(r.db.Pool.QueryRow(ctx, query, wabaID))
+}
+
+func (r *PostgresRepository) UpdateHealthMetadata(ctx context.Context, channelID uuid.UUID, metadata []byte) error {
+	if len(metadata) == 0 {
+		metadata = []byte("{}")
+	}
+	tag, err := r.db.Pool.Exec(ctx, `
+		UPDATE channels SET health_metadata = $1, updated_at = NOW()
+		WHERE id = $2 AND deleted_at IS NULL
+	`, metadata, channelID)
+	if err != nil {
+		return repository.MapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
 func scanChannel(row pgx.Row) (*Channel, error) {
 	ch, err := scanChannelRow(row)
 	if err != nil {
@@ -244,7 +316,7 @@ func scanChannelRow(row pgx.Row) (*Channel, error) {
 	var connType *string
 	err := row.Scan(
 		&ch.ID, &ch.TeamID, &ch.Name, &ch.Provider, &status, &connType,
-		&ch.PhoneNumber, &ch.WABAID, &ch.PhoneNumberID, &ch.IsCoex, &ch.LastConnectedAt,
+		&ch.PhoneNumber, &ch.WABAID, &ch.PhoneNumberID, &ch.BusinessID, &ch.IsCoex, &ch.HealthMetadata, &ch.LastConnectedAt,
 		&ch.CreatedAt, &ch.UpdatedAt, &ch.DeletedAt,
 	)
 	if err != nil {

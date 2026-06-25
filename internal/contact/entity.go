@@ -17,10 +17,11 @@ const (
 type Source string
 
 const (
-	SourceWhatsApp Source = "whatsapp"
-	SourceImport   Source = "import"
-	SourceManual   Source = "manual"
-	SourceAPI      Source = "api"
+	SourceWhatsApp    Source = "whatsapp"
+	SourceImport      Source = "import"
+	SourceManual      Source = "manual"
+	SourceAPI         Source = "api"
+	SourceMetaInbound Source = "meta_inbound"
 )
 
 type Contact struct {

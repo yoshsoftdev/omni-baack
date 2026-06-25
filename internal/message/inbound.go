@@ -1,0 +1,248 @@
+package message
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	sharedevents "github.com/omnichannel/omni-chan-v2/shared/events"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
+)
+
+// InboundInput is system-level input for webhook consumer ingestion (no RBAC).
+type InboundInput struct {
+	TeamID         uuid.UUID
+	ChannelID      uuid.UUID
+	ConversationID uuid.UUID
+	WAMID          string
+	Sender         string
+	Recipient      *string
+	Content        string
+	ContentType    ContentType
+	RawPayload     json.RawMessage
+	ReceivedAt     time.Time
+}
+
+// IngestInbound stores an inbound message idempotently by wamid.
+func (s *Service) IngestInbound(ctx context.Context, input InboundInput) (*Message, bool, error) {
+	wamid := strings.TrimSpace(input.WAMID)
+	if wamid == "" {
+		return nil, false, errors.New("wamid is required")
+	}
+	if existing, err := s.messages.FindByWAMID(ctx, wamid); err == nil && existing != nil {
+		return existing, false, nil
+	} else if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return nil, false, err
+	}
+
+	content := strings.TrimSpace(input.Content)
+	if content == "" {
+		content = previewForType(input.ContentType)
+	}
+	sender := strings.TrimSpace(input.Sender)
+	if sender == "" {
+		return nil, false, errors.New("sender is required")
+	}
+	contentType := input.ContentType
+	if contentType == "" {
+		contentType = ContentText
+	}
+
+	now := time.Now().UTC()
+	receivedAt := input.ReceivedAt
+	if receivedAt.IsZero() {
+		receivedAt = now
+	}
+	channelID := input.ChannelID
+	wamidCopy := wamid
+	m := &Message{
+		ID:             uuid.New(),
+		ConversationID: input.ConversationID,
+		TeamID:         input.TeamID,
+		ChannelID:      &channelID,
+		Direction:      DirectionInbound,
+		Sender:         sender,
+		Recipient:      input.Recipient,
+		Content:        content,
+		ContentType:    contentType,
+		WAMID:          &wamidCopy,
+		RawPayload:     input.RawPayload,
+		ReceivedAt:     receivedAt,
+		CreatedAt:      now,
+	}
+	if err := s.messages.Create(ctx, m); err != nil {
+		if existing, findErr := s.messages.FindByWAMID(ctx, wamid); findErr == nil && existing != nil {
+			return existing, false, nil
+		}
+		return nil, false, err
+	}
+	return m, true, nil
+}
+
+// ApplyDeliveryStatus updates message delivery status with monotonic progression.
+func (s *Service) ApplyDeliveryStatus(ctx context.Context, wamid string, status Status) error {
+	wamid = strings.TrimSpace(wamid)
+	if wamid == "" {
+		return errors.New("wamid is required")
+	}
+	m, err := s.messages.FindByWAMID(ctx, wamid)
+	if err != nil {
+		return err
+	}
+	if !shouldApplyStatus(m.Status, status) {
+		return nil
+	}
+	return s.messages.UpdateStatus(ctx, m.TeamID, m.ID, status)
+}
+
+func shouldApplyStatus(current *Status, next Status) bool {
+	if current == nil {
+		return true
+	}
+	if *current == next {
+		return false
+	}
+	if next == StatusFailed {
+		return *current != StatusRead
+	}
+	return statusRank(next) > statusRank(*current)
+}
+
+func statusRank(s Status) int {
+	switch s {
+	case StatusSent:
+		return 1
+	case StatusDelivered:
+		return 2
+	case StatusRead:
+		return 3
+	case StatusFailed:
+		return 4
+	default:
+		return 0
+	}
+}
+
+// ContentTypeFromMeta maps Meta message types to storage content types.
+func ContentTypeFromMeta(messageType string) ContentType {
+	switch strings.ToLower(strings.TrimSpace(messageType)) {
+	case "text":
+		return ContentText
+	case "image":
+		return ContentImage
+	case "video":
+		return ContentVideo
+	case "audio":
+		return ContentAudio
+	case "document":
+		return ContentDocument
+	case "template":
+		return ContentTemplate
+	default:
+		return ContentOther
+	}
+}
+
+// ExtractTextContent returns a display string from a Meta raw message payload.
+func ExtractTextContent(messageType string, raw json.RawMessage) string {
+	switch strings.ToLower(strings.TrimSpace(messageType)) {
+	case "text":
+		var body struct {
+			Text struct {
+				Body string `json:"body"`
+			} `json:"text"`
+		}
+		if err := json.Unmarshal(raw, &body); err == nil && body.Text.Body != "" {
+			return body.Text.Body
+		}
+	case "image", "video", "audio", "document", "sticker":
+		var media struct {
+			Image    *struct{ Caption string `json:"caption"` } `json:"image"`
+			Video    *struct{ Caption string `json:"caption"` } `json:"video"`
+			Audio    *struct{} `json:"audio"`
+			Document *struct{ Caption string `json:"caption"`; Filename string `json:"filename"` } `json:"document"`
+			Sticker  *struct{} `json:"sticker"`
+		}
+		if err := json.Unmarshal(raw, &media); err == nil {
+			switch messageType {
+			case "image":
+				if media.Image != nil && media.Image.Caption != "" {
+					return media.Image.Caption
+				}
+			case "video":
+				if media.Video != nil && media.Video.Caption != "" {
+					return media.Video.Caption
+				}
+			case "document":
+				if media.Document != nil {
+					if media.Document.Caption != "" {
+						return media.Document.Caption
+					}
+					return media.Document.Filename
+				}
+			}
+		}
+	case "location":
+		var loc struct {
+			Location struct {
+				Name    string `json:"name"`
+				Address string `json:"address"`
+			} `json:"location"`
+		}
+		if err := json.Unmarshal(raw, &loc); err == nil {
+			if loc.Location.Name != "" {
+				return loc.Location.Name
+			}
+			return loc.Location.Address
+		}
+	case "contacts":
+		return "Contact shared"
+	}
+	return previewForType(ContentTypeFromMeta(messageType))
+}
+
+func previewForType(ct ContentType) string {
+	switch ct {
+	case ContentImage:
+		return "Image"
+	case ContentVideo:
+		return "Video"
+	case ContentAudio:
+		return "Audio"
+	case ContentDocument:
+		return "Document"
+	case ContentTemplate:
+		return "Template message"
+	default:
+		return "Message"
+	}
+}
+
+// ParseMetaTimestamp parses Meta unix timestamp strings.
+func ParseMetaTimestamp(raw string) time.Time {
+	if raw == "" {
+		return time.Now().UTC()
+	}
+	if ts, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		return time.Unix(ts, 0).UTC()
+	}
+	return time.Now().UTC()
+}
+
+// DecodeMetaMessagePayload decodes canonical message payload.
+func DecodeMetaMessagePayload(payload []byte) (sharedevents.MetaMessagePayload, error) {
+	var p sharedevents.MetaMessagePayload
+	err := json.Unmarshal(payload, &p)
+	return p, err
+}
+
+// DecodeMetaStatusPayload decodes canonical status payload.
+func DecodeMetaStatusPayload(payload []byte) (sharedevents.MetaStatusPayload, error) {
+	var p sharedevents.MetaStatusPayload
+	err := json.Unmarshal(payload, &p)
+	return p, err
+}

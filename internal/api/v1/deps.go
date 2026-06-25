@@ -3,6 +3,7 @@ package v1
 import (
 	"github.com/omnichannel/omni-chan-v2/internal/api/v1/handler"
 	"github.com/omnichannel/omni-chan-v2/internal/auth"
+	metasvc "github.com/omnichannel/omni-chan-v2/internal/meta"
 	jwtmanager "github.com/omnichannel/omni-chan-v2/pkg/jwt"
 )
 
@@ -17,10 +18,13 @@ type Deps struct {
 	Segment      *handler.SegmentHandler
 	Tag          *handler.TagHandler
 	Campaign     *handler.CampaignHandler
+	Operations   *handler.OperationsHandler
 	Report       *handler.ReportHandler
 	Conversation *handler.ConversationHandler
 	Message      *handler.MessageHandler
 	Dashboard    *handler.DashboardHandler
+	Webhook      *handler.WebhookHandler
+	Meta         *metasvc.Handler
 	ActorResolver auth.ActorResolver
 	JWT           *jwtmanager.Manager
 }

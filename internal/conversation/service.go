@@ -20,6 +20,14 @@ type Service struct {
 	contacts      contact.Repository
 	teams         team.Repository
 	rbac          *rbac.Service
+	inbox         InboxSync
+}
+
+// InboxSync publishes inbox side-effects (realtime, assignment).
+type InboxSync interface {
+	OnStatusChange(ctx context.Context, teamID uuid.UUID, conv *Conversation) error
+	OnAssignment(ctx context.Context, teamID uuid.UUID, conv *Conversation) error
+	MarkRead(ctx context.Context, teamID, conversationID uuid.UUID) (*Conversation, error)
 }
 
 func NewService(
@@ -34,6 +42,10 @@ func NewService(
 		teams:         teams,
 		rbac:          rbacSvc,
 	}
+}
+
+func (s *Service) SetInboxSync(inbox InboxSync) {
+	s.inbox = inbox
 }
 
 type CreateInput struct {
@@ -120,6 +132,9 @@ func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID, actorRole 
 	if err := s.ensureMember(ctx, teamID, userID); err != nil {
 		return repository.Page[Conversation]{}, err
 	}
+	if filter.View == ViewMine {
+		filter.ActorID = &userID
+	}
 	result, err := s.conversations.List(ctx, teamID, filter, page)
 	if err != nil {
 		return repository.Page[Conversation]{}, serviceerrors.MapRepository(err)
@@ -145,7 +160,14 @@ func (s *Service) Assign(ctx context.Context, teamID, userID uuid.UUID, actorRol
 	if err := serviceerrors.MapRepository(s.conversations.UpdateAssignment(ctx, teamID, conversationID, assigneeID)); err != nil {
 		return nil, err
 	}
-	return s.conversations.FindByID(ctx, teamID, conversationID)
+	conv, err := s.conversations.FindByID(ctx, teamID, conversationID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	if s.inbox != nil {
+		_ = s.inbox.OnAssignment(ctx, teamID, conv)
+	}
+	return conv, nil
 }
 
 func (s *Service) UpdateStatus(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID, status Status) (*Conversation, error) {
@@ -158,7 +180,37 @@ func (s *Service) UpdateStatus(ctx context.Context, teamID, userID uuid.UUID, ac
 	if err := validateStatus(status); err != nil {
 		return nil, err
 	}
-	if err := serviceerrors.MapRepository(s.conversations.UpdateStatus(ctx, teamID, conversationID, status)); err != nil {
+	if status == StatusResolved || status == StatusClosed {
+		if err := serviceerrors.MapRepository(s.conversations.UpdateStatus(ctx, teamID, conversationID, status)); err != nil {
+			return nil, err
+		}
+	} else if err := serviceerrors.MapRepository(s.conversations.UpdateStatus(ctx, teamID, conversationID, status)); err != nil {
+		return nil, err
+	}
+	conv, err := s.conversations.FindByID(ctx, teamID, conversationID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	if s.inbox != nil {
+		_ = s.inbox.OnStatusChange(ctx, teamID, conv)
+	}
+	return conv, nil
+}
+
+func (s *Service) MarkRead(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID) (*Conversation, error) {
+	if err := s.authorize(actorRole, rbac.PermConversationView); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	if _, err := s.conversations.FindByID(ctx, teamID, conversationID); err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	if s.inbox != nil {
+		return s.inbox.MarkRead(ctx, teamID, conversationID)
+	}
+	if err := serviceerrors.MapRepository(s.conversations.MarkRead(ctx, teamID, conversationID)); err != nil {
 		return nil, err
 	}
 	return s.conversations.FindByID(ctx, teamID, conversationID)
@@ -181,7 +233,7 @@ func (s *Service) RecordInboundPreview(ctx context.Context, teamID uuid.UUID, co
 
 func validateStatus(status Status) error {
 	switch status {
-	case StatusOpen, StatusAssigned, StatusClosed:
+	case StatusOpen, StatusPending, StatusResolved, StatusClosed, StatusAssigned:
 		return nil
 	default:
 		return serviceerrors.NewValidation("status", "invalid value")

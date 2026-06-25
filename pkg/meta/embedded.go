@@ -43,7 +43,7 @@ func (c *Client) ExchangeEmbeddedCode(ctx context.Context, appID, appSecret, cod
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("exchange embedded code error: %s", strings.TrimSpace(string(body)))
+		return nil, NewAPIError(resp.StatusCode, string(body))
 	}
 
 	var token TokenResponse

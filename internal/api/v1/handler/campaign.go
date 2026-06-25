@@ -219,11 +219,41 @@ func (h *CampaignHandler) Delete(c *fiber.Ctx) error {
 }
 
 func (h *CampaignHandler) Send(c *fiber.Ctx) error {
-	return response.FeatureNotAvailable(c, "Campaign sending is not available yet")
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid campaign id")
+	}
+	result, err := h.svc.Send(c.Context(), actor.TeamID, actor.UserID, actor.Role, id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "campaign queued for send", result)
+}
+
+type cancelCampaignRequest struct {
+	Reason string `json:"reason"`
 }
 
 func (h *CampaignHandler) Cancel(c *fiber.Ctx) error {
-	return response.FeatureNotAvailable(c, "Campaign cancellation is not available yet")
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid campaign id")
+	}
+	var req cancelCampaignRequest
+	_ = c.BodyParser(&req)
+	camp, err := h.svc.Cancel(c.Context(), actor.TeamID, actor.UserID, actor.Role, id, strings.TrimSpace(req.Reason))
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "campaign cancelled", camp)
 }
 
 func parseUUIDList(values []string) []uuid.UUID {

@@ -19,6 +19,7 @@ type Repository interface {
 	SoftDelete(ctx context.Context, teamID, tagID uuid.UUID) error
 	AssignContact(ctx context.Context, teamID, tagID, contactID uuid.UUID) error
 	UnassignContact(ctx context.Context, teamID, tagID, contactID uuid.UUID) error
+	ListContactIDsByTag(ctx context.Context, teamID, tagID uuid.UUID) ([]uuid.UUID, error)
 }
 
 type PostgresRepository struct {
@@ -143,6 +144,28 @@ func (r *PostgresRepository) UnassignContact(ctx context.Context, teamID, tagID,
 		return repository.ErrNotFound
 	}
 	return nil
+}
+
+func (r *PostgresRepository) ListContactIDsByTag(ctx context.Context, teamID, tagID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.db.Pool.Query(ctx, `
+		SELECT DISTINCT c.id FROM contacts c
+		INNER JOIN contact_tags ct ON ct.contact_id = c.id
+		INNER JOIN tags t ON t.id = ct.tag_id AND t.team_id = $1 AND t.deleted_at IS NULL
+		WHERE ct.tag_id = $2 AND c.team_id = $1 AND c.deleted_at IS NULL
+	`, teamID, tagID)
+	if err != nil {
+		return nil, repository.MapError(err)
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func scanTag(row pgx.Row) (*Tag, error) {

@@ -22,6 +22,7 @@ const (
 	PermCampaignView        = "campaign.view"
 	PermCampaignCreate      = "campaign.create"
 	PermCampaignSend        = "campaign.send"
+	PermCampaignCancel      = "campaign.cancel"
 	PermTemplateView        = "template.view"
 	PermTemplateCreate      = "template.create"
 	PermTemplateSync        = "template.sync"
