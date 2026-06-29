@@ -144,6 +144,26 @@ func (m *mockTeamRepo) ListInvitations(ctx context.Context, teamID uuid.UUID) ([
 	return nil, nil
 }
 
+func (m *mockTeamRepo) FindInvitationByID(ctx context.Context, teamID, invitationID uuid.UUID) (*team.Invitation, error) {
+	return nil, team.ErrNotFound
+}
+
+func (m *mockTeamRepo) SoftDeleteInvitation(ctx context.Context, teamID, invitationID uuid.UUID) error {
+	return nil
+}
+
+func (m *mockTeamRepo) UpdateInvitationRole(ctx context.Context, teamID, invitationID uuid.UUID, role team.Role, roleID uuid.UUID) error {
+	return nil
+}
+
+func (m *mockTeamRepo) GetPendingInvitation(ctx context.Context, invitationID uuid.UUID) (*team.InvitationDetail, error) {
+	return nil, team.ErrNotFound
+}
+
+func (m *mockTeamRepo) MarkInvitationAccepted(ctx context.Context, invitationID uuid.UUID) error {
+	return nil
+}
+
 type mockRefreshRepo struct {
 	tokens map[string]*RefreshToken
 }

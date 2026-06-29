@@ -20,6 +20,7 @@ type MemberStatus string
 const (
 	MemberStatusActive   MemberStatus = "active"
 	MemberStatusInactive MemberStatus = "inactive"
+	MemberStatusInvited  MemberStatus = "invited"
 )
 
 type PlanType string
@@ -80,6 +81,12 @@ type Invitation struct {
 	Status    string
 	InvitedBy uuid.UUID
 	CreatedAt time.Time
+}
+
+type InvitationDetail struct {
+	Invitation
+	TeamName string `json:"team_name"`
+	TeamSlug string `json:"team_slug"`
 }
 
 type WorkspaceDetail struct {

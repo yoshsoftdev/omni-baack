@@ -61,6 +61,9 @@ func (r *lifecycleRepo) Update(context.Context, *Campaign) error                
 func (r *lifecycleRepo) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, Status) error  { return nil }
 func (r *lifecycleRepo) SoftDelete(context.Context, uuid.UUID, uuid.UUID) error            { return nil }
 func (r *lifecycleRepo) ListAudiences(context.Context, uuid.UUID) ([]Audience, error) { return nil, nil }
+func (r *lifecycleRepo) LoadListEnrichment(context.Context, uuid.UUID, []Campaign) (map[uuid.UUID]ListEnrichment, error) {
+	return map[uuid.UUID]ListEnrichment{}, nil
+}
 func (r *lifecycleRepo) CreateBatch(context.Context, *BroadcastBatch) error                { return nil }
 func (r *lifecycleRepo) UpdateBatch(context.Context, *BroadcastBatch) error                { return nil }
 func (r *lifecycleRepo) ListBatchesByJob(context.Context, uuid.UUID) ([]BroadcastBatch, error) {

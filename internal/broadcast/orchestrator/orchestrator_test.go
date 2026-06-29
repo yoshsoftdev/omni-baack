@@ -148,6 +148,10 @@ func (m *memStore) ListAudiences(context.Context, uuid.UUID) ([]campaign.Audienc
 	return m.audiences, nil
 }
 
+func (m *memStore) LoadListEnrichment(context.Context, uuid.UUID, []campaign.Campaign) (map[uuid.UUID]campaign.ListEnrichment, error) {
+	return map[uuid.UUID]campaign.ListEnrichment{}, nil
+}
+
 func (m *memStore) CreateAudienceSnapshot(context.Context, *campaign.AudienceSnapshot) error {
 	m.snapshots++
 	return nil

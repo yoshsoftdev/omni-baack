@@ -75,6 +75,22 @@ func (workspaceStubTeamRepo) ListInvitations(context.Context, uuid.UUID) ([]team
 	return nil, nil
 }
 
+func (workspaceStubTeamRepo) FindInvitationByID(context.Context, uuid.UUID, uuid.UUID) (*team.Invitation, error) {
+	return nil, team.ErrNotFound
+}
+
+func (workspaceStubTeamRepo) SoftDeleteInvitation(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+
+func (workspaceStubTeamRepo) UpdateInvitationRole(context.Context, uuid.UUID, uuid.UUID, team.Role, uuid.UUID) error {
+	return nil
+}
+
+func (workspaceStubTeamRepo) GetPendingInvitation(context.Context, uuid.UUID) (*team.InvitationDetail, error) {
+	return nil, team.ErrNotFound
+}
+
+func (workspaceStubTeamRepo) MarkInvitationAccepted(context.Context, uuid.UUID) error { return nil }
+
 type workspaceStubRBACRepo struct{}
 
 func (workspaceStubRBACRepo) LoadRolePermissions(context.Context) (map[string]map[string]bool, error) {

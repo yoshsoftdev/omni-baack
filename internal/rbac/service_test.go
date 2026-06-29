@@ -47,6 +47,15 @@ func (m *mockRepo) GetPermissionMatrix(ctx context.Context) ([]PermissionMatrixR
 	return nil, nil
 }
 
+func (m *mockRepo) CreateRole(ctx context.Context, role *Role) error { return nil }
+func (m *mockRepo) UpdateRole(ctx context.Context, role *Role) error   { return nil }
+func (m *mockRepo) SoftDeleteRole(ctx context.Context, id uuid.UUID) error {
+	return nil
+}
+func (m *mockRepo) ReplaceRolePermissions(ctx context.Context, roleID uuid.UUID, permissionCodes []string) error {
+	return nil
+}
+
 func TestHasPermission(t *testing.T) {
 	svc := NewService(&mockRepo{
 		matrix: map[string]map[string]bool{

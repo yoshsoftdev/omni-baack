@@ -2,6 +2,7 @@ package contact
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -19,9 +20,19 @@ type Repository interface {
 	List(ctx context.Context, teamID uuid.UUID, filter ListFilter, page repository.PageParams) (repository.Page[Contact], error)
 	ListByIDs(ctx context.Context, teamID uuid.UUID, ids []uuid.UUID) ([]Contact, error)
 	ListTagsByContactIDs(ctx context.Context, teamID uuid.UUID, contactIDs []uuid.UUID) (map[uuid.UUID][]TagRef, error)
+	SyncContactTags(ctx context.Context, teamID, contactID uuid.UUID, tagIDs []uuid.UUID) error
 	Update(ctx context.Context, c *Contact) error
 	SoftDelete(ctx context.Context, teamID, id uuid.UUID) error
 	CountByTeam(ctx context.Context, teamID uuid.UUID) (int64, error)
+	CountMarketingByTeam(ctx context.Context, teamID uuid.UUID) (map[MarketingStatus]int64, error)
+	LoadContactStats(ctx context.Context, teamID uuid.UUID, contactIDs []uuid.UUID) (map[uuid.UUID]ContactStats, error)
+	ListFieldDefinitions(ctx context.Context, teamID uuid.UUID) ([]FieldDefinition, error)
+	FindFieldDefinitionByID(ctx context.Context, teamID, id uuid.UUID) (*FieldDefinition, error)
+	CreateFieldDefinition(ctx context.Context, def *FieldDefinition) error
+	UpdateFieldDefinition(ctx context.Context, def *FieldDefinition) error
+	SoftDeleteFieldDefinition(ctx context.Context, teamID, id uuid.UUID) error
+	ListCustomFieldsByContactIDs(ctx context.Context, teamID uuid.UUID, contactIDs []uuid.UUID) (map[uuid.UUID][]CustomFieldValue, error)
+	UpsertCustomFieldValues(ctx context.Context, contactID uuid.UUID, values map[uuid.UUID]json.RawMessage) error
 }
 
 type PostgresRepository struct {
@@ -35,21 +46,21 @@ func NewRepository(db *database.DB) *PostgresRepository {
 func (r *PostgresRepository) Create(ctx context.Context, c *Contact) error {
 	query := `
 		INSERT INTO contacts (
-			id, team_id, name, phone, email, notes, city, language, customer_type,
-			source, marketing_status, last_activity_at, import_job_id, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+			id, team_id, name, phone, email, notes, city, country, province, company, job_title,
+			language, customer_type, source, marketing_status, last_activity_at, import_job_id, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 	`
 	_, err := r.db.Pool.Exec(ctx, query,
-		c.ID, c.TeamID, c.Name, c.Phone, c.Email, c.Notes, c.City, c.Language, c.CustomerType,
-		string(c.Source), string(c.MarketingStatus), c.LastActivityAt, c.ImportJobID, c.CreatedAt, c.UpdatedAt,
+		c.ID, c.TeamID, c.Name, c.Phone, c.Email, c.Notes, c.City, c.Country, c.Province, c.Company, c.JobTitle,
+		c.Language, c.CustomerType, string(c.Source), string(c.MarketingStatus), c.LastActivityAt, c.ImportJobID, c.CreatedAt, c.UpdatedAt,
 	)
 	return repository.MapError(err)
 }
 
 func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID) (*Contact, error) {
 	query := `
-		SELECT id, team_id, name, phone, email, notes, city, language, customer_type,
-			source, marketing_status, last_activity_at, import_job_id, created_at, updated_at, deleted_at
+		SELECT id, team_id, name, phone, email, notes, city, country, province, company, job_title,
+			language, customer_type, source, marketing_status, last_activity_at, import_job_id, created_at, updated_at, deleted_at
 		FROM contacts WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL
 	`
 	return scanContact(r.db.Pool.QueryRow(ctx, query, id, teamID))
@@ -57,8 +68,8 @@ func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID)
 
 func (r *PostgresRepository) FindByPhone(ctx context.Context, teamID uuid.UUID, phone string) (*Contact, error) {
 	query := `
-		SELECT id, team_id, name, phone, email, notes, city, language, customer_type,
-			source, marketing_status, last_activity_at, import_job_id, created_at, updated_at, deleted_at
+		SELECT id, team_id, name, phone, email, notes, city, country, province, company, job_title,
+			language, customer_type, source, marketing_status, last_activity_at, import_job_id, created_at, updated_at, deleted_at
 		FROM contacts WHERE team_id = $1 AND phone = $2 AND deleted_at IS NULL
 	`
 	return scanContact(r.db.Pool.QueryRow(ctx, query, teamID, phone))
@@ -97,8 +108,8 @@ func (r *PostgresRepository) List(ctx context.Context, teamID uuid.UUID, filter 
 
 	args = append(args, page.Limit(), page.Offset())
 	listQ := fmt.Sprintf(`
-		SELECT DISTINCT c.id, c.team_id, c.name, c.phone, c.email, c.notes, c.city, c.language, c.customer_type,
-			c.source, c.marketing_status, c.last_activity_at, c.import_job_id, c.created_at, c.updated_at, c.deleted_at
+		SELECT DISTINCT c.id, c.team_id, c.name, c.phone, c.email, c.notes, c.city, c.country, c.province, c.company, c.job_title,
+			c.language, c.customer_type, c.source, c.marketing_status, c.last_activity_at, c.import_job_id, c.created_at, c.updated_at, c.deleted_at
 		FROM contacts c%s WHERE %s ORDER BY c.created_at DESC LIMIT $%d OFFSET $%d
 	`, joins, where, len(args)-1, len(args))
 
@@ -124,8 +135,8 @@ func (r *PostgresRepository) ListByIDs(ctx context.Context, teamID uuid.UUID, id
 		return nil, nil
 	}
 	rows, err := r.db.Pool.Query(ctx, `
-		SELECT id, team_id, name, phone, email, notes, city, language, customer_type,
-			source, marketing_status, last_activity_at, import_job_id, created_at, updated_at, deleted_at
+		SELECT id, team_id, name, phone, email, notes, city, country, province, company, job_title,
+			language, customer_type, source, marketing_status, last_activity_at, import_job_id, created_at, updated_at, deleted_at
 		FROM contacts WHERE team_id = $1 AND id = ANY($2) AND deleted_at IS NULL
 	`, teamID, ids)
 	if err != nil {
@@ -176,13 +187,14 @@ func (r *PostgresRepository) ListTagsByContactIDs(ctx context.Context, teamID uu
 func (r *PostgresRepository) Update(ctx context.Context, c *Contact) error {
 	query := `
 		UPDATE contacts SET
-			name = $1, phone = $2, email = $3, notes = $4, city = $5, language = $6,
-			customer_type = $7, source = $8, marketing_status = $9, last_activity_at = $10, updated_at = $11
-		WHERE id = $12 AND team_id = $13 AND deleted_at IS NULL
+			name = $1, phone = $2, email = $3, notes = $4, city = $5, country = $6, province = $7,
+			company = $8, job_title = $9, language = $10, customer_type = $11, source = $12,
+			marketing_status = $13, last_activity_at = $14, updated_at = $15
+		WHERE id = $16 AND team_id = $17 AND deleted_at IS NULL
 	`
 	tag, err := r.db.Pool.Exec(ctx, query,
-		c.Name, c.Phone, c.Email, c.Notes, c.City, c.Language, c.CustomerType,
-		string(c.Source), string(c.MarketingStatus), c.LastActivityAt, c.UpdatedAt, c.ID, c.TeamID,
+		c.Name, c.Phone, c.Email, c.Notes, c.City, c.Country, c.Province, c.Company, c.JobTitle,
+		c.Language, c.CustomerType, string(c.Source), string(c.MarketingStatus), c.LastActivityAt, c.UpdatedAt, c.ID, c.TeamID,
 	)
 	if err != nil {
 		return repository.MapError(err)
@@ -223,8 +235,8 @@ func scanContactRow(row pgx.Row) (*Contact, error) {
 	var c Contact
 	var source, marketing string
 	err := row.Scan(
-		&c.ID, &c.TeamID, &c.Name, &c.Phone, &c.Email, &c.Notes, &c.City, &c.Language, &c.CustomerType,
-		&source, &marketing, &c.LastActivityAt, &c.ImportJobID, &c.CreatedAt, &c.UpdatedAt, &c.DeletedAt,
+		&c.ID, &c.TeamID, &c.Name, &c.Phone, &c.Email, &c.Notes, &c.City, &c.Country, &c.Province, &c.Company, &c.JobTitle,
+		&c.Language, &c.CustomerType, &source, &marketing, &c.LastActivityAt, &c.ImportJobID, &c.CreatedAt, &c.UpdatedAt, &c.DeletedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

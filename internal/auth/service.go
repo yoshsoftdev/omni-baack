@@ -23,6 +23,7 @@ var (
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrInvalidRefresh     = errors.New("invalid or expired refresh token")
 	ErrWeakPassword       = errors.New("password must be at least 8 characters")
+	ErrInvitationMismatch = errors.New("email does not match invitation")
 )
 
 type Service struct {
@@ -133,6 +134,102 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*Session, 
 	}
 
 	return s.issueSession(ctx, newUser, newTeam, string(team.RoleOwner))
+}
+
+type AcceptInviteInput struct {
+	InvitationID uuid.UUID
+	Name         string
+	Password     string
+}
+
+func (s *Service) GetInvitation(ctx context.Context, invitationID uuid.UUID) (*team.InvitationDetail, error) {
+	detail, err := s.teams.GetPendingInvitation(ctx, invitationID)
+	if err != nil {
+		return nil, err
+	}
+	if time.Now().UTC().After(detail.CreatedAt.Add(7 * 24 * time.Hour)) {
+		return nil, team.ErrInvitationExpired
+	}
+	return detail, nil
+}
+
+func (s *Service) AcceptInvitation(ctx context.Context, input AcceptInviteInput) (*Session, error) {
+	detail, err := s.GetInvitation(ctx, input.InvitationID)
+	if err := validatePassword(input.Password); err != nil {
+		return nil, err
+	}
+
+	invitedTeam, err := s.teams.FindByID(ctx, detail.TeamID)
+	if err != nil {
+		return nil, err
+	}
+
+	email := strings.ToLower(strings.TrimSpace(detail.Email))
+	found, err := s.users.FindByEmail(ctx, email)
+	if err != nil && !errors.Is(err, user.ErrNotFound) {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	if errors.Is(err, user.ErrNotFound) {
+		name := strings.TrimSpace(input.Name)
+		if name == "" {
+			name = strings.TrimSpace(detail.Name)
+		}
+		if name == "" {
+			return nil, fmt.Errorf("name is required")
+		}
+
+		hash, err := password.Hash(input.Password)
+		if err != nil {
+			return nil, fmt.Errorf("hash password: %w", err)
+		}
+
+		newUser := &user.User{
+			ID:           uuid.New(),
+			Email:        email,
+			PasswordHash: hash,
+			Name:         name,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		if err := s.users.Create(ctx, newUser); err != nil {
+			return nil, err
+		}
+		found = newUser
+	} else {
+		if !password.Verify(found.PasswordHash, input.Password) {
+			return nil, ErrInvalidCredentials
+		}
+		if strings.ToLower(found.Email) != email {
+			return nil, ErrInvitationMismatch
+		}
+	}
+
+	if _, err := s.teams.FindMemberByUser(ctx, detail.TeamID, found.ID); err == nil {
+		return nil, team.ErrAlreadyMember
+	} else if !errors.Is(err, team.ErrMemberNotFound) {
+		return nil, err
+	}
+
+	member := &team.Member{
+		ID:        uuid.New(),
+		TeamID:    detail.TeamID,
+		UserID:    found.ID,
+		Role:      detail.Role,
+		RoleID:    detail.RoleID,
+		Status:    team.MemberStatusActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.teams.CreateMember(ctx, member); err != nil {
+		return nil, err
+	}
+	if err := s.teams.MarkInvitationAccepted(ctx, input.InvitationID); err != nil {
+		return nil, err
+	}
+
+	return s.issueSession(ctx, found, invitedTeam, string(detail.Role))
 }
 
 func (s *Service) Login(ctx context.Context, input LoginInput) (*Session, error) {

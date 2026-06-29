@@ -92,6 +92,22 @@ func (stubTeamRepo) ListInvitations(context.Context, uuid.UUID) ([]team.Invitati
 	return nil, nil
 }
 
+func (stubTeamRepo) FindInvitationByID(context.Context, uuid.UUID, uuid.UUID) (*team.Invitation, error) {
+	return nil, team.ErrNotFound
+}
+
+func (stubTeamRepo) SoftDeleteInvitation(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+
+func (stubTeamRepo) UpdateInvitationRole(context.Context, uuid.UUID, uuid.UUID, team.Role, uuid.UUID) error {
+	return nil
+}
+
+func (stubTeamRepo) GetPendingInvitation(context.Context, uuid.UUID) (*team.InvitationDetail, error) {
+	return nil, team.ErrNotFound
+}
+
+func (stubTeamRepo) MarkInvitationAccepted(context.Context, uuid.UUID) error { return nil }
+
 type stubRBACRepo struct{}
 
 func (stubRBACRepo) LoadRolePermissions(context.Context) (map[string]map[string]bool, error) {

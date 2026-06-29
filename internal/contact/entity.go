@@ -39,12 +39,19 @@ type Contact struct {
 	Email           *string         `json:"email,omitempty"`
 	Notes           *string         `json:"notes,omitempty"`
 	City            *string         `json:"city,omitempty"`
+	Country         *string         `json:"country,omitempty"`
+	Province        *string         `json:"province,omitempty"`
+	Company         *string         `json:"company,omitempty"`
+	JobTitle        *string         `json:"job_title,omitempty"`
 	Language        *string         `json:"language,omitempty"`
 	CustomerType    *string         `json:"customer_type,omitempty"`
 	Source          Source          `json:"source"`
 	MarketingStatus MarketingStatus `json:"marketing_status"`
 	Tags            []TagRef        `json:"tags"`
+	CustomFields    []CustomFieldValue `json:"custom_fields,omitempty"`
 	LastActivityAt  *time.Time      `json:"last_activity_at,omitempty"`
+	ConversationsCount int          `json:"conversations_count"`
+	LastCampaign    *LastCampaignRef `json:"last_campaign,omitempty"`
 	ImportJobID     *uuid.UUID      `json:"import_job_id,omitempty"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`

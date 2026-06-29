@@ -22,6 +22,8 @@ var (
 	ErrUserNotFound      = errors.New("user not found, they must register first")
 )
 
+const invitationTTL = 7 * 24 * time.Hour
+
 // MemberLimiter checks workspace member quotas (implemented by quota.Service).
 type MemberLimiter interface {
 	AssertMemberHeadroom(ctx context.Context, teamID uuid.UUID) error
@@ -104,7 +106,15 @@ func (s *Service) ListUsers(ctx context.Context, teamID, userID uuid.UUID, actor
 	if _, err := s.teams.FindMemberByUser(ctx, teamID, userID); err != nil {
 		return nil, err
 	}
-	return s.teams.ListMembersFiltered(ctx, teamID, filter)
+	members, err := s.teams.ListMembersFiltered(ctx, teamID, filter)
+	if err != nil {
+		return nil, err
+	}
+	invitations, err := s.teams.ListInvitations(ctx, teamID)
+	if err != nil {
+		return nil, err
+	}
+	return mergeInvitedUsers(members, invitations, filter), nil
 }
 
 func (s *Service) AddMember(ctx context.Context, teamID, actorID uuid.UUID, actorRole string, email string, role Role) (*MemberWithUser, error) {
@@ -159,6 +169,17 @@ func (s *Service) InviteUser(ctx context.Context, teamID, actorID uuid.UUID, act
 		return nil, err
 	}
 	return inv, nil
+}
+
+func (s *Service) GetInvitationPublic(ctx context.Context, invitationID uuid.UUID) (*InvitationDetail, error) {
+	detail, err := s.teams.GetPendingInvitation(ctx, invitationID)
+	if err != nil {
+		return nil, err
+	}
+	if time.Now().UTC().After(detail.CreatedAt.Add(invitationTTL)) {
+		return nil, ErrInvitationExpired
+	}
+	return detail, nil
 }
 
 func (s *Service) addMemberInternal(ctx context.Context, teamID, actorID uuid.UUID, email string, role Role) (*MemberWithUser, error) {
@@ -230,36 +251,36 @@ func (s *Service) UpdateMemberRole(ctx context.Context, teamID, actorID uuid.UUI
 		return nil, err
 	}
 
-	target, err := s.teams.FindMemberByID(ctx, teamID, memberID)
+	roleID, err := s.teams.FindRoleIDByName(ctx, string(newRole))
 	if err != nil {
 		return nil, err
-	}
-	if target.Role == RoleOwner {
-		return nil, ErrCannotModifyOwner
 	}
 	if newRole == RoleOwner {
 		return nil, serviceerrors.NewValidation("role", "cannot assign owner role")
 	}
 
-	roleID, err := s.teams.FindRoleIDByName(ctx, string(newRole))
-	if err != nil {
-		return nil, err
-	}
-
-	if err := s.teams.UpdateMemberRole(ctx, teamID, memberID, newRole, roleID); err != nil {
-		return nil, err
-	}
-
-	members, err := s.teams.ListMembers(ctx, teamID)
-	if err != nil {
-		return nil, err
-	}
-	for _, m := range members {
-		if m.ID == memberID {
-			return &m, nil
+	target, err := s.teams.FindMemberByID(ctx, teamID, memberID)
+	if err == nil {
+		if target.Role == RoleOwner {
+			return nil, ErrCannotModifyOwner
 		}
+		if err := s.teams.UpdateMemberRole(ctx, teamID, memberID, newRole, roleID); err != nil {
+			return nil, err
+		}
+		return s.findListedUser(ctx, teamID, memberID)
 	}
-	return nil, ErrMemberNotFound
+	if !errors.Is(err, ErrMemberNotFound) {
+		return nil, err
+	}
+
+	inv, err := s.teams.FindInvitationByID(ctx, teamID, memberID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.teams.UpdateInvitationRole(ctx, teamID, memberID, newRole, roleID); err != nil {
+		return nil, err
+	}
+	return invitationToMember(inv, newRole, roleID), nil
 }
 
 func (s *Service) DeactivateMember(ctx context.Context, teamID, actorID uuid.UUID, actorRole string, memberID uuid.UUID) (*MemberWithUser, error) {
@@ -268,27 +289,29 @@ func (s *Service) DeactivateMember(ctx context.Context, teamID, actorID uuid.UUI
 	}
 
 	target, err := s.teams.FindMemberByID(ctx, teamID, memberID)
-	if err != nil {
-		return nil, err
-	}
-	if target.Role == RoleOwner {
-		return nil, ErrCannotModifyOwner
-	}
-
-	if err := s.teams.UpdateMemberStatus(ctx, teamID, memberID, MemberStatusInactive); err != nil {
-		return nil, err
-	}
-
-	members, err := s.teams.ListMembers(ctx, teamID)
-	if err != nil {
-		return nil, err
-	}
-	for _, m := range members {
-		if m.ID == memberID {
-			return &m, nil
+	if err == nil {
+		if target.Role == RoleOwner {
+			return nil, ErrCannotModifyOwner
 		}
+		if err := s.teams.UpdateMemberStatus(ctx, teamID, memberID, MemberStatusInactive); err != nil {
+			return nil, err
+		}
+		return s.findListedUser(ctx, teamID, memberID)
 	}
-	return nil, ErrMemberNotFound
+	if !errors.Is(err, ErrMemberNotFound) {
+		return nil, err
+	}
+
+	inv, err := s.teams.FindInvitationByID(ctx, teamID, memberID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.teams.SoftDeleteInvitation(ctx, teamID, memberID); err != nil {
+		return nil, err
+	}
+	member := invitationToMember(inv, inv.Role, inv.RoleID)
+	member.Status = MemberStatusInactive
+	return member, nil
 }
 
 func (s *Service) RemoveMember(ctx context.Context, teamID, actorID uuid.UUID, actorRole string, memberID uuid.UUID) error {
@@ -297,14 +320,20 @@ func (s *Service) RemoveMember(ctx context.Context, teamID, actorID uuid.UUID, a
 	}
 
 	target, err := s.teams.FindMemberByID(ctx, teamID, memberID)
-	if err != nil {
+	if err == nil {
+		if target.Role == RoleOwner {
+			return ErrCannotModifyOwner
+		}
+		return s.teams.SoftDeleteMember(ctx, teamID, memberID)
+	}
+	if !errors.Is(err, ErrMemberNotFound) {
 		return err
 	}
-	if target.Role == RoleOwner {
-		return ErrCannotModifyOwner
-	}
 
-	return s.teams.SoftDeleteMember(ctx, teamID, memberID)
+	if _, err := s.teams.FindInvitationByID(ctx, teamID, memberID); err != nil {
+		return err
+	}
+	return s.teams.SoftDeleteInvitation(ctx, teamID, memberID)
 }
 
 func (s *Service) GetWorkspace(ctx context.Context, teamID, userID uuid.UUID, actorRole string) (*WorkspaceDetail, error) {
@@ -361,4 +390,63 @@ func (s *Service) assertMemberHeadroom(ctx context.Context, teamID uuid.UUID) er
 		return serviceerrors.ErrQuotaExceeded
 	}
 	return nil
+}
+
+func mergeInvitedUsers(members []MemberWithUser, invitations []Invitation, filter ListMembersFilter) []MemberWithUser {
+	memberEmails := make(map[string]struct{}, len(members))
+	for _, member := range members {
+		memberEmails[strings.ToLower(member.Email)] = struct{}{}
+	}
+
+	search := strings.ToLower(strings.TrimSpace(filter.Search))
+	for _, invitation := range invitations {
+		email := strings.ToLower(strings.TrimSpace(invitation.Email))
+		if _, exists := memberEmails[email]; exists {
+			continue
+		}
+		if filter.Role != "" && string(invitation.Role) != filter.Role {
+			continue
+		}
+		if search != "" {
+			name := strings.ToLower(invitation.Name)
+			if !strings.Contains(name, search) && !strings.Contains(email, search) {
+				continue
+			}
+		}
+		members = append(members, MemberWithUser{
+			ID:        invitation.ID,
+			Email:     invitation.Email,
+			Name:      invitation.Name,
+			Role:      invitation.Role,
+			RoleID:    invitation.RoleID,
+			Status:    MemberStatusInvited,
+			CreatedAt: invitation.CreatedAt,
+		})
+	}
+	return members
+}
+
+func invitationToMember(invitation *Invitation, role Role, roleID uuid.UUID) *MemberWithUser {
+	return &MemberWithUser{
+		ID:        invitation.ID,
+		Email:     invitation.Email,
+		Name:      invitation.Name,
+		Role:      role,
+		RoleID:    roleID,
+		Status:    MemberStatusInvited,
+		CreatedAt: invitation.CreatedAt,
+	}
+}
+
+func (s *Service) findListedUser(ctx context.Context, teamID, memberID uuid.UUID) (*MemberWithUser, error) {
+	members, err := s.teams.ListMembers(ctx, teamID)
+	if err != nil {
+		return nil, err
+	}
+	for _, member := range members {
+		if member.ID == memberID {
+			return &member, nil
+		}
+	}
+	return nil, ErrMemberNotFound
 }

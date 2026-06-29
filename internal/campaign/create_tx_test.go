@@ -64,6 +64,10 @@ func (s *spyCampaignRepo) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, St
 func (s *spyCampaignRepo) ListAudiences(context.Context, uuid.UUID) ([]Audience, error) {
 	return nil, nil
 }
+
+func (s *spyCampaignRepo) LoadListEnrichment(context.Context, uuid.UUID, []Campaign) (map[uuid.UUID]ListEnrichment, error) {
+	return map[uuid.UUID]ListEnrichment{}, nil
+}
 func (s *spyCampaignRepo) UpdateJob(context.Context, *BroadcastJob) error { return nil }
 func (s *spyCampaignRepo) FindActiveJobByCampaign(context.Context, uuid.UUID) (*BroadcastJob, error) {
 	return nil, repository.ErrNotFound
@@ -199,6 +203,22 @@ func (m *createTestTeamRepo) CreateInvitation(context.Context, *team.Invitation)
 func (m *createTestTeamRepo) ListInvitations(context.Context, uuid.UUID) ([]team.Invitation, error) {
 	return nil, nil
 }
+
+func (m *createTestTeamRepo) FindInvitationByID(context.Context, uuid.UUID, uuid.UUID) (*team.Invitation, error) {
+	return nil, team.ErrNotFound
+}
+
+func (m *createTestTeamRepo) SoftDeleteInvitation(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+
+func (m *createTestTeamRepo) UpdateInvitationRole(context.Context, uuid.UUID, uuid.UUID, team.Role, uuid.UUID) error {
+	return nil
+}
+
+func (m *createTestTeamRepo) GetPendingInvitation(context.Context, uuid.UUID) (*team.InvitationDetail, error) {
+	return nil, team.ErrNotFound
+}
+
+func (m *createTestTeamRepo) MarkInvitationAccepted(context.Context, uuid.UUID) error { return nil }
 
 type createTestChannelRepo struct {
 	channelID uuid.UUID

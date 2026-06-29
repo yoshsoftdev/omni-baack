@@ -61,6 +61,9 @@ func (m *memCampaignRepo) SoftDelete(context.Context, uuid.UUID, uuid.UUID) erro
 func (m *memCampaignRepo) ListAudiences(context.Context, uuid.UUID) ([]campaign.Audience, error) {
 	return nil, nil
 }
+func (m *memCampaignRepo) LoadListEnrichment(context.Context, uuid.UUID, []campaign.Campaign) (map[uuid.UUID]campaign.ListEnrichment, error) {
+	return map[uuid.UUID]campaign.ListEnrichment{}, nil
+}
 func (m *memCampaignRepo) CreateJob(context.Context, *campaign.BroadcastJob) error { return nil }
 func (m *memCampaignRepo) UpdateJob(context.Context, *campaign.BroadcastJob) error { return nil }
 func (m *memCampaignRepo) FindActiveJobByCampaign(context.Context, uuid.UUID) (*campaign.BroadcastJob, error) {

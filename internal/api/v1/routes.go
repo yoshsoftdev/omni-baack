@@ -24,6 +24,8 @@ func Register(router fiber.Router, deps Deps) {
 		authGroup.Post("/refresh", deps.Auth.Refresh)
 		authGroup.Post("/logout", deps.Auth.Logout)
 		authGroup.Get("/me", middleware.Auth(deps.JWT), middleware.ResolveActor(deps.ActorResolver), deps.Auth.Me)
+		router.Get("/invitations/:id", deps.Auth.GetInvitation)
+		router.Post("/invitations/:id/accept", deps.Auth.AcceptInvitation)
 	}
 
 	protected := router.Group("", middleware.Auth(deps.JWT), middleware.ResolveActor(deps.ActorResolver))
@@ -47,6 +49,12 @@ func Register(router fiber.Router, deps Deps) {
 		teams.Post("/users/:id/deactivate", deps.Team.DeactivateUser)
 		teams.Delete("/users/:id", deps.Team.RemoveUser)
 		teams.Get("/roles", deps.Team.ListRoles)
+		teams.Post("/roles", deps.Team.CreateRole)
+		teams.Get("/roles/:id", deps.Team.GetRole)
+		teams.Patch("/roles/:id", deps.Team.UpdateRole)
+		teams.Delete("/roles/:id", deps.Team.DeleteRole)
+		teams.Put("/roles/:id/permissions", deps.Team.UpdateRolePermissions)
+		teams.Get("/permissions", deps.Team.GetPermissions)
 	}
 
 	if deps.Channel != nil {
@@ -74,6 +82,11 @@ func Register(router fiber.Router, deps Deps) {
 
 	if deps.Contact != nil {
 		contacts := protected.Group("/contacts")
+		contacts.Get("/stats", deps.Contact.Stats)
+		contacts.Get("/field-definitions", deps.Contact.ListFieldDefinitions)
+		contacts.Post("/field-definitions", deps.Contact.CreateFieldDefinition)
+		contacts.Patch("/field-definitions/:id", deps.Contact.UpdateFieldDefinition)
+		contacts.Delete("/field-definitions/:id", deps.Contact.DeleteFieldDefinition)
 		contacts.Get("/", deps.Contact.List)
 		contacts.Post("/", deps.Contact.Create)
 		contacts.Get("/:id", deps.Contact.Get)

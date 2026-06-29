@@ -39,6 +39,8 @@ func MapError(err error) error {
 			return fmt.Errorf("%w: %s", ErrInvalidInput, pgErr.ConstraintName)
 		case "23514":
 			return fmt.Errorf("%w: %s", ErrInvalidInput, pgErr.ConstraintName)
+		case "22001":
+			return fmt.Errorf("%w: value too long for %s", ErrInvalidInput, pgErr.ColumnName)
 		}
 	}
 	if strings.Contains(strings.ToLower(err.Error()), "duplicate key") {

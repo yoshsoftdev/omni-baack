@@ -17,6 +17,8 @@ var (
 	ErrMemberNotFound = errors.New("team member not found")
 	ErrAlreadyMember  = errors.New("user is already a team member")
 	ErrInvitationExists = errors.New("invitation already pending")
+	ErrInvitationInvalid = errors.New("invitation is no longer valid")
+	ErrInvitationExpired   = errors.New("invitation has expired")
 )
 
 type ListMembersFilter struct {
@@ -41,6 +43,11 @@ type Repository interface {
 	GetWorkspaceDetail(ctx context.Context, teamID uuid.UUID) (*WorkspaceDetail, error)
 	CreateInvitation(ctx context.Context, inv *Invitation) error
 	ListInvitations(ctx context.Context, teamID uuid.UUID) ([]Invitation, error)
+	FindInvitationByID(ctx context.Context, teamID, invitationID uuid.UUID) (*Invitation, error)
+	SoftDeleteInvitation(ctx context.Context, teamID, invitationID uuid.UUID) error
+	UpdateInvitationRole(ctx context.Context, teamID, invitationID uuid.UUID, role Role, roleID uuid.UUID) error
+	GetPendingInvitation(ctx context.Context, invitationID uuid.UUID) (*InvitationDetail, error)
+	MarkInvitationAccepted(ctx context.Context, invitationID uuid.UUID) error
 }
 
 type PostgresRepository struct {
@@ -458,6 +465,106 @@ func (r *PostgresRepository) ListInvitations(ctx context.Context, teamID uuid.UU
 		invitations = append(invitations, inv)
 	}
 	return invitations, rows.Err()
+}
+
+func (r *PostgresRepository) FindInvitationByID(ctx context.Context, teamID, invitationID uuid.UUID) (*Invitation, error) {
+	query := `
+		SELECT ti.id, ti.team_id, ti.email, ti.name, ti.role_id, ro.name, ti.status, ti.invited_by, ti.created_at
+		FROM team_invitations ti
+		INNER JOIN roles ro ON ro.id = ti.role_id
+		WHERE ti.id = $1 AND ti.team_id = $2 AND ti.deleted_at IS NULL AND ti.status = 'pending'
+		LIMIT 1
+	`
+	var inv Invitation
+	var roleName string
+	err := r.db.Pool.QueryRow(ctx, query, invitationID, teamID).Scan(
+		&inv.ID, &inv.TeamID, &inv.Email, &inv.Name, &inv.RoleID, &roleName,
+		&inv.Status, &inv.InvitedBy, &inv.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("find invitation: %w", err)
+	}
+	inv.Role = Role(roleName)
+	return &inv, nil
+}
+
+func (r *PostgresRepository) SoftDeleteInvitation(ctx context.Context, teamID, invitationID uuid.UUID) error {
+	query := `
+		UPDATE team_invitations
+		SET deleted_at = NOW(), updated_at = NOW(), status = 'cancelled'
+		WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL
+	`
+	tag, err := r.db.Pool.Exec(ctx, query, invitationID, teamID)
+	if err != nil {
+		return fmt.Errorf("soft delete invitation: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *PostgresRepository) UpdateInvitationRole(ctx context.Context, teamID, invitationID uuid.UUID, role Role, roleID uuid.UUID) error {
+	query := `
+		UPDATE team_invitations
+		SET role_id = $1, updated_at = NOW()
+		WHERE id = $2 AND team_id = $3 AND deleted_at IS NULL AND status = 'pending'
+	`
+	tag, err := r.db.Pool.Exec(ctx, query, roleID, invitationID, teamID)
+	if err != nil {
+		return fmt.Errorf("update invitation role: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	_ = role
+	return nil
+}
+
+func (r *PostgresRepository) GetPendingInvitation(ctx context.Context, invitationID uuid.UUID) (*InvitationDetail, error) {
+	query := `
+		SELECT ti.id, ti.team_id, ti.email, ti.name, ti.role_id, ro.name, ti.status, ti.invited_by, ti.created_at,
+		       t.name, t.slug
+		FROM team_invitations ti
+		INNER JOIN roles ro ON ro.id = ti.role_id
+		INNER JOIN teams t ON t.id = ti.team_id
+		WHERE ti.id = $1 AND ti.deleted_at IS NULL AND ti.status = 'pending'
+		LIMIT 1
+	`
+	var detail InvitationDetail
+	var roleName string
+	err := r.db.Pool.QueryRow(ctx, query, invitationID).Scan(
+		&detail.ID, &detail.TeamID, &detail.Email, &detail.Name, &detail.RoleID, &roleName,
+		&detail.Status, &detail.InvitedBy, &detail.CreatedAt,
+		&detail.TeamName, &detail.TeamSlug,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get pending invitation: %w", err)
+	}
+	detail.Role = Role(roleName)
+	return &detail, nil
+}
+
+func (r *PostgresRepository) MarkInvitationAccepted(ctx context.Context, invitationID uuid.UUID) error {
+	query := `
+		UPDATE team_invitations
+		SET status = 'accepted', updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL AND status = 'pending'
+	`
+	tag, err := r.db.Pool.Exec(ctx, query, invitationID)
+	if err != nil {
+		return fmt.Errorf("mark invitation accepted: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *PostgresRepository) scanTeam(row pgx.Row) (*Team, error) {

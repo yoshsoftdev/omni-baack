@@ -85,6 +85,31 @@ func (f *fakeContactRepo) ListByIDs(context.Context, uuid.UUID, []uuid.UUID) ([]
 func (f *fakeContactRepo) Update(context.Context, *contact.Contact) error { return nil }
 func (f *fakeContactRepo) SoftDelete(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (f *fakeContactRepo) CountByTeam(context.Context, uuid.UUID) (int64, error) { return 0, nil }
+func (f *fakeContactRepo) ListTagsByContactIDs(context.Context, uuid.UUID, []uuid.UUID) (map[uuid.UUID][]contact.TagRef, error) {
+	return map[uuid.UUID][]contact.TagRef{}, nil
+}
+func (f *fakeContactRepo) SyncContactTags(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) error { return nil }
+func (f *fakeContactRepo) CountMarketingByTeam(context.Context, uuid.UUID) (map[contact.MarketingStatus]int64, error) {
+	return map[contact.MarketingStatus]int64{}, nil
+}
+func (f *fakeContactRepo) LoadContactStats(context.Context, uuid.UUID, []uuid.UUID) (map[uuid.UUID]contact.ContactStats, error) {
+	return map[uuid.UUID]contact.ContactStats{}, nil
+}
+func (f *fakeContactRepo) ListFieldDefinitions(context.Context, uuid.UUID) ([]contact.FieldDefinition, error) {
+	return nil, nil
+}
+func (f *fakeContactRepo) FindFieldDefinitionByID(context.Context, uuid.UUID, uuid.UUID) (*contact.FieldDefinition, error) {
+	return nil, repository.ErrNotFound
+}
+func (f *fakeContactRepo) CreateFieldDefinition(context.Context, *contact.FieldDefinition) error { return nil }
+func (f *fakeContactRepo) UpdateFieldDefinition(context.Context, *contact.FieldDefinition) error { return nil }
+func (f *fakeContactRepo) SoftDeleteFieldDefinition(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+func (f *fakeContactRepo) ListCustomFieldsByContactIDs(context.Context, uuid.UUID, []uuid.UUID) (map[uuid.UUID][]contact.CustomFieldValue, error) {
+	return map[uuid.UUID][]contact.CustomFieldValue{}, nil
+}
+func (f *fakeContactRepo) UpsertCustomFieldValues(context.Context, uuid.UUID, map[uuid.UUID]json.RawMessage) error {
+	return nil
+}
 
 type fakeConversationRepo struct {
 	items map[uuid.UUID]*conversation.Conversation

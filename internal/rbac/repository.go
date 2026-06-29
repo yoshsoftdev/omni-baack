@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -20,6 +21,10 @@ type Repository interface {
 	ListPermissions(ctx context.Context) ([]Permission, error)
 	ListPermissionsByRoleID(ctx context.Context, roleID uuid.UUID) ([]Permission, error)
 	GetPermissionMatrix(ctx context.Context) ([]PermissionMatrixRow, error)
+	CreateRole(ctx context.Context, role *Role) error
+	UpdateRole(ctx context.Context, role *Role) error
+	SoftDeleteRole(ctx context.Context, id uuid.UUID) error
+	ReplaceRolePermissions(ctx context.Context, roleID uuid.UUID, permissionCodes []string) error
 }
 
 type PostgresRepository struct {
@@ -202,4 +207,91 @@ func (r *PostgresRepository) GetPermissionMatrix(ctx context.Context) ([]Permiss
 		})
 	}
 	return rows, nil
+}
+
+func (r *PostgresRepository) CreateRole(ctx context.Context, role *Role) error {
+	_, err := r.db.Pool.Exec(ctx, `
+		INSERT INTO roles (id, name, description, is_system, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, role.ID, role.Name, role.Description, role.IsSystem, role.CreatedAt, role.UpdatedAt)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate key") {
+			return fmt.Errorf("role name already exists")
+		}
+		return fmt.Errorf("create role: %w", err)
+	}
+	return nil
+}
+
+func (r *PostgresRepository) UpdateRole(ctx context.Context, role *Role) error {
+	tag, err := r.db.Pool.Exec(ctx, `
+		UPDATE roles
+		SET name = $1, description = $2, updated_at = $3
+		WHERE id = $4 AND deleted_at IS NULL
+	`, role.Name, role.Description, role.UpdatedAt, role.ID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate key") {
+			return fmt.Errorf("role name already exists")
+		}
+		return fmt.Errorf("update role: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *PostgresRepository) SoftDeleteRole(ctx context.Context, id uuid.UUID) error {
+	tag, err := r.db.Pool.Exec(ctx, `
+		UPDATE roles
+		SET deleted_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL AND is_system = FALSE
+	`, id)
+	if err != nil {
+		return fmt.Errorf("soft delete role: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *PostgresRepository) ReplaceRolePermissions(ctx context.Context, roleID uuid.UUID, permissionCodes []string) error {
+	return r.db.WithTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `DELETE FROM role_permissions WHERE role_id = $1`, roleID); err != nil {
+			return fmt.Errorf("clear role permissions: %w", err)
+		}
+		if len(permissionCodes) == 0 {
+			return nil
+		}
+		rows, err := tx.Query(ctx, `
+			SELECT id FROM permissions WHERE LOWER(code) = ANY($1)
+		`, permissionCodes)
+		if err != nil {
+			return fmt.Errorf("find permissions: %w", err)
+		}
+		defer rows.Close()
+
+		var permissionIDs []uuid.UUID
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			permissionIDs = append(permissionIDs, id)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, permissionID := range permissionIDs {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO role_permissions (role_id, permission_id)
+				VALUES ($1, $2)
+				ON CONFLICT DO NOTHING
+			`, roleID, permissionID); err != nil {
+				return fmt.Errorf("insert role permission: %w", err)
+			}
+		}
+		return nil
+	})
 }

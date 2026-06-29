@@ -60,6 +60,9 @@ func (r *reconcileRepo) SoftDelete(context.Context, uuid.UUID, uuid.UUID) error 
 func (r *reconcileRepo) ListAudiences(context.Context, uuid.UUID) ([]campaign.Audience, error) {
 	return nil, nil
 }
+func (r *reconcileRepo) LoadListEnrichment(context.Context, uuid.UUID, []campaign.Campaign) (map[uuid.UUID]campaign.ListEnrichment, error) {
+	return map[uuid.UUID]campaign.ListEnrichment{}, nil
+}
 func (r *reconcileRepo) CreateJob(context.Context, *campaign.BroadcastJob) error { return nil }
 func (r *reconcileRepo) UpdateJob(context.Context, *campaign.BroadcastJob) error { return nil }
 func (r *reconcileRepo) FindActiveJobByCampaign(context.Context, uuid.UUID) (*campaign.BroadcastJob, error) {

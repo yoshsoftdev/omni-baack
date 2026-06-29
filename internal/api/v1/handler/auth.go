@@ -6,7 +6,9 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/auth"
+	"github.com/omnichannel/omni-chan-v2/internal/team"
 	"github.com/omnichannel/omni-chan-v2/internal/user"
+	"time"
 )
 
 type AuthHandler struct {
@@ -35,6 +37,77 @@ type refreshRequest struct {
 
 type logoutRequest struct {
 	RefreshToken string `json:"refresh_token"`
+}
+
+type acceptInviteRequest struct {
+	Name     string `json:"name"`
+	Password string `json:"password"`
+}
+
+func (h *AuthHandler) GetInvitation(c *fiber.Ctx) error {
+	invitationID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid invitation id")
+	}
+	detail, err := h.svc.GetInvitation(c.Context(), invitationID)
+	if err != nil {
+		return h.mapInvitationError(c, err)
+	}
+	expiresAt := detail.CreatedAt.Add(7 * 24 * time.Hour)
+	return response.OK(c, "ok", fiber.Map{
+		"invitation_id": detail.ID.String(),
+		"email":         detail.Email,
+		"name":          detail.Name,
+		"role":          string(detail.Role),
+		"team_name":     detail.TeamName,
+		"team_slug":     detail.TeamSlug,
+		"expires_at":    expiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+func (h *AuthHandler) AcceptInvitation(c *fiber.Ctx) error {
+	invitationID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid invitation id")
+	}
+	var req acceptInviteRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	if req.Password == "" {
+		return response.BadRequest(c, "password is required")
+	}
+	session, err := h.svc.AcceptInvitation(c.Context(), auth.AcceptInviteInput{
+		InvitationID: invitationID,
+		Name:         req.Name,
+		Password:     req.Password,
+	})
+	if err != nil {
+		return h.mapInvitationError(c, err)
+	}
+	return response.Created(c, "invitation accepted", sessionResponse(session))
+}
+
+func (h *AuthHandler) mapInvitationError(c *fiber.Ctx, err error) error {
+	switch {
+	case errors.Is(err, team.ErrNotFound):
+		return response.NotFound(c, "invitation not found")
+	case errors.Is(err, team.ErrInvitationExpired), errors.Is(err, team.ErrInvitationInvalid):
+		return response.BadRequest(c, err.Error())
+	case errors.Is(err, team.ErrAlreadyMember):
+		return response.BadRequest(c, err.Error())
+	case errors.Is(err, auth.ErrInvalidCredentials):
+		return response.Unauthorized(c, err.Error())
+	case errors.Is(err, auth.ErrWeakPassword):
+		return response.BadRequest(c, err.Error())
+	case errors.Is(err, user.ErrEmailTaken):
+		return response.BadRequest(c, err.Error())
+	default:
+		if err.Error() == "name is required" {
+			return response.BadRequest(c, err.Error())
+		}
+		return h.mapError(c, err)
+	}
 }
 
 func (h *AuthHandler) Register(c *fiber.Ctx) error {

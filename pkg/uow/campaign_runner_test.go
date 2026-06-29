@@ -46,6 +46,9 @@ func (r *recordingCampaignRepo) UpdateStatus(context.Context, uuid.UUID, uuid.UU
 func (r *recordingCampaignRepo) ListAudiences(context.Context, uuid.UUID) ([]campaign.Audience, error) {
 	return nil, nil
 }
+func (r *recordingCampaignRepo) LoadListEnrichment(context.Context, uuid.UUID, []campaign.Campaign) (map[uuid.UUID]campaign.ListEnrichment, error) {
+	return map[uuid.UUID]campaign.ListEnrichment{}, nil
+}
 func (r *recordingCampaignRepo) UpdateJob(context.Context, *campaign.BroadcastJob) error { return nil }
 func (r *recordingCampaignRepo) FindActiveJobByCampaign(context.Context, uuid.UUID) (*campaign.BroadcastJob, error) {
 	return nil, repository.ErrNotFound

@@ -1,6 +1,11 @@
 package handler
 
 import (
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
@@ -119,7 +124,17 @@ func (h *TeamHandler) InviteUser(c *fiber.Ctx) error {
 	if err != nil {
 		return mapError(c, err)
 	}
-	return response.Created(c, "invitation sent", inv)
+	baseURL := strings.TrimRight(strings.TrimSpace(c.Get("Origin")), "/")
+	if baseURL == "" {
+		baseURL = "http://localhost:3000"
+	}
+	expiresAt := inv.CreatedAt.Add(7 * 24 * time.Hour)
+	return response.Created(c, "invitation created", fiber.Map{
+		"invitation_id": inv.ID.String(),
+		"invite_url":    fmt.Sprintf("%s/invite/%s", baseURL, inv.ID.String()),
+		"expires_at":    expiresAt.UTC().Format(time.RFC3339),
+		"role":          string(inv.Role),
+	})
 }
 
 func (h *TeamHandler) UpdateUserRole(c *fiber.Ctx) error {
@@ -187,4 +202,136 @@ func (h *TeamHandler) ListRoles(c *fiber.Ctx) error {
 		return mapError(c, err)
 	}
 	return response.OK(c, "ok", fiber.Map{"roles": roles})
+}
+
+func (h *TeamHandler) GetRole(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	_ = actor
+	if h.rbac == nil {
+		return response.NotFound(c, "role not found")
+	}
+	detail, err := h.rbac.GetRole(c.Context(), c.Params("id"))
+	if err != nil {
+		return mapRbacError(c, err)
+	}
+	return response.OK(c, "ok", detail)
+}
+
+func (h *TeamHandler) GetPermissions(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	_ = actor
+	if h.rbac == nil {
+		return response.OK(c, "ok", fiber.Map{"matrix": []any{}})
+	}
+	matrix, err := h.rbac.GetPermissionMatrix(c.Context())
+	if err != nil {
+		return mapRbacError(c, err)
+	}
+	return response.OK(c, "ok", fiber.Map{"matrix": matrix})
+}
+
+type createRoleRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type updateRoleMetaRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type updateRolePermissionsRequest struct {
+	Permissions []string `json:"permissions"`
+}
+
+func (h *TeamHandler) CreateRole(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	if h.rbac == nil {
+		return response.InternalError(c, "rbac unavailable")
+	}
+	var req createRoleRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	role, err := h.rbac.CreateRole(c.Context(), actor.Role, req.Name, req.Description)
+	if err != nil {
+		return mapRbacError(c, err)
+	}
+	return response.Created(c, "role created", role)
+}
+
+func (h *TeamHandler) UpdateRole(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	if h.rbac == nil {
+		return response.InternalError(c, "rbac unavailable")
+	}
+	var req updateRoleMetaRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	role, err := h.rbac.UpdateRoleMeta(c.Context(), actor.Role, c.Params("id"), req.Name, req.Description)
+	if err != nil {
+		return mapRbacError(c, err)
+	}
+	return response.OK(c, "role updated", role)
+}
+
+func (h *TeamHandler) DeleteRole(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	if h.rbac == nil {
+		return response.InternalError(c, "rbac unavailable")
+	}
+	if err := h.rbac.DeleteRole(c.Context(), actor.Role, c.Params("id")); err != nil {
+		return mapRbacError(c, err)
+	}
+	return response.OK(c, "role deleted", nil)
+}
+
+func (h *TeamHandler) UpdateRolePermissions(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	if h.rbac == nil {
+		return response.InternalError(c, "rbac unavailable")
+	}
+	var req updateRolePermissionsRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	if err := h.rbac.UpdateRolePermissions(c.Context(), actor.Role, c.Params("id"), req.Permissions); err != nil {
+		return mapRbacError(c, err)
+	}
+	return response.OK(c, "role permissions updated", nil)
+}
+
+func mapRbacError(c *fiber.Ctx, err error) error {
+	switch {
+	case errors.Is(err, rbac.ErrForbidden):
+		return response.Forbidden(c, rbac.PermissionDeniedMessage)
+	case errors.Is(err, rbac.ErrNotFound):
+		return response.NotFound(c, err.Error())
+	case errors.Is(err, rbac.ErrOwnerRoleImmutable), errors.Is(err, rbac.ErrSystemRoleDelete), errors.Is(err, rbac.ErrSystemRoleNameChange):
+		return response.BadRequest(c, err.Error())
+	default:
+		if err.Error() == "name and description are required" || err.Error() == "description is required" || err.Error() == "name is required" || strings.Contains(err.Error(), "role name already exists") {
+			return response.BadRequest(c, err.Error())
+		}
+		return mapError(c, err)
+	}
 }

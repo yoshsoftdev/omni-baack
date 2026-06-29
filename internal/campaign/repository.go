@@ -21,6 +21,7 @@ type Repository interface {
 	UpdateStatus(ctx context.Context, teamID, id uuid.UUID, status Status) error
 	SoftDelete(ctx context.Context, teamID, id uuid.UUID) error
 	ListAudiences(ctx context.Context, campaignID uuid.UUID) ([]Audience, error)
+	LoadListEnrichment(ctx context.Context, teamID uuid.UUID, campaigns []Campaign) (map[uuid.UUID]ListEnrichment, error)
 
 	CreateJob(ctx context.Context, job *BroadcastJob) error
 	UpdateJob(ctx context.Context, job *BroadcastJob) error

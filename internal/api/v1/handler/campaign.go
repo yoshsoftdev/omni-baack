@@ -29,6 +29,7 @@ type createCampaignRequest struct {
 	SegmentID       *string         `json:"segment_id"`
 	VariableMapping json.RawMessage `json:"variable_mapping"`
 	SampleValues    json.RawMessage `json:"sample_values"`
+	SegmentIDs      []string        `json:"segment_ids"`
 	ContactIDs      []string        `json:"contact_ids"`
 	TagIDs          []string        `json:"tag_ids"`
 	ScheduledAt     *string         `json:"scheduled_at"`
@@ -63,7 +64,7 @@ func (h *CampaignHandler) List(c *fiber.Ctx) error {
 	if err != nil {
 		return mapError(c, err)
 	}
-	page, err := h.svc.List(c.Context(), actor.TeamID, actor.UserID, actor.Role, campaign.ListFilter{
+	page, err := h.svc.ListResponses(c.Context(), actor.TeamID, actor.UserID, actor.Role, campaign.ListFilter{
 		Search:    strings.TrimSpace(c.Query("search")),
 		Status:    status,
 		ChannelID: channelID,
@@ -83,7 +84,7 @@ func (h *CampaignHandler) Get(c *fiber.Ctx) error {
 	if err != nil {
 		return response.BadRequest(c, "invalid campaign id")
 	}
-	camp, err := h.svc.Get(c.Context(), actor.TeamID, actor.UserID, actor.Role, id)
+	camp, err := h.svc.GetResponse(c.Context(), actor.TeamID, actor.UserID, actor.Role, id)
 	if err != nil {
 		return mapError(c, err)
 	}
@@ -129,7 +130,10 @@ func (h *CampaignHandler) Create(c *fiber.Ctx) error {
 		scheduledAt = &parsed
 		sendMode = campaign.SendLater
 	}
-	audiences := make([]campaign.AudienceInput, 0, len(req.ContactIDs)+len(req.TagIDs))
+	audiences := make([]campaign.AudienceInput, 0, len(req.SegmentIDs)+len(req.ContactIDs)+len(req.TagIDs))
+	for _, id := range parseUUIDList(req.SegmentIDs) {
+		audiences = append(audiences, campaign.AudienceInput{SourceType: campaign.AudienceSegment, SourceID: id})
+	}
 	for _, id := range parseUUIDList(req.ContactIDs) {
 		audiences = append(audiences, campaign.AudienceInput{SourceType: campaign.AudienceContact, SourceID: id})
 	}

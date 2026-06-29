@@ -2,13 +2,21 @@ package rbac
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
 
-var ErrPermissionDenied = ErrNotFound // re-export pattern; handlers use message
+var (
+	ErrPermissionDenied     = ErrNotFound // re-export pattern; handlers use message
+	ErrForbidden            = errors.New("forbidden")
+	ErrOwnerRoleImmutable   = errors.New("cannot modify owner role permissions")
+	ErrSystemRoleDelete     = errors.New("cannot delete system role")
+	ErrSystemRoleNameChange = errors.New("cannot rename system role")
+)
 
 type Service struct {
 	repo  Repository
@@ -102,6 +110,128 @@ func (s *Service) GetPermissionMatrix(ctx context.Context) ([]PermissionMatrixRo
 
 func (s *Service) FindRoleByName(ctx context.Context, name string) (*Role, error) {
 	return s.repo.FindRoleByName(ctx, name)
+}
+
+func (s *Service) authorizeManage(actorRole string) error {
+	if !s.Require(actorRole, PermTeamManage) {
+		return ErrForbidden
+	}
+	return nil
+}
+
+func (s *Service) CreateRole(ctx context.Context, actorRole, name, description string) (*Role, error) {
+	if err := s.authorizeManage(actorRole); err != nil {
+		return nil, err
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	description = strings.TrimSpace(description)
+	if name == "" || description == "" {
+		return nil, errors.New("name and description are required")
+	}
+	now := time.Now().UTC()
+	role := &Role{
+		ID:          uuid.New(),
+		Name:        name,
+		Description: description,
+		IsSystem:    false,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := s.repo.CreateRole(ctx, role); err != nil {
+		return nil, err
+	}
+	return role, nil
+}
+
+func (s *Service) UpdateRoleMeta(ctx context.Context, actorRole, roleID, name, description string) (*Role, error) {
+	if err := s.authorizeManage(actorRole); err != nil {
+		return nil, err
+	}
+	id, err := parseUUID(roleID)
+	if err != nil {
+		return nil, err
+	}
+	role, err := s.repo.FindRoleByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return nil, errors.New("description is required")
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	if role.IsSystem {
+		if name != "" && !strings.EqualFold(name, role.Name) {
+			return nil, ErrSystemRoleNameChange
+		}
+		role.Description = description
+	} else {
+		if name == "" {
+			return nil, errors.New("name is required")
+		}
+		role.Name = name
+		role.Description = description
+	}
+	role.UpdatedAt = time.Now().UTC()
+	if err := s.repo.UpdateRole(ctx, role); err != nil {
+		return nil, err
+	}
+	return role, nil
+}
+
+func (s *Service) DeleteRole(ctx context.Context, actorRole, roleID string) error {
+	if err := s.authorizeManage(actorRole); err != nil {
+		return err
+	}
+	id, err := parseUUID(roleID)
+	if err != nil {
+		return err
+	}
+	role, err := s.repo.FindRoleByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if role.IsSystem {
+		return ErrSystemRoleDelete
+	}
+	if err := s.repo.SoftDeleteRole(ctx, id); err != nil {
+		return err
+	}
+	return s.WarmCache(ctx)
+}
+
+func (s *Service) UpdateRolePermissions(ctx context.Context, actorRole, roleID string, permissionCodes []string) error {
+	if err := s.authorizeManage(actorRole); err != nil {
+		return err
+	}
+	id, err := parseUUID(roleID)
+	if err != nil {
+		return err
+	}
+	role, err := s.repo.FindRoleByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if strings.EqualFold(role.Name, "owner") {
+		return ErrOwnerRoleImmutable
+	}
+	normalized := make([]string, 0, len(permissionCodes))
+	seen := make(map[string]struct{}, len(permissionCodes))
+	for _, code := range permissionCodes {
+		code = strings.ToLower(strings.TrimSpace(code))
+		if code == "" {
+			continue
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		normalized = append(normalized, code)
+	}
+	if err := s.repo.ReplaceRolePermissions(ctx, id, normalized); err != nil {
+		return err
+	}
+	return s.WarmCache(ctx)
 }
 
 func parseUUID(s string) (uuid.UUID, error) {

@@ -104,6 +104,26 @@ func (m *mockTeamRepo) ListInvitations(ctx context.Context, teamID uuid.UUID) ([
 	return nil, nil
 }
 
+func (m *mockTeamRepo) FindInvitationByID(ctx context.Context, teamID, invitationID uuid.UUID) (*Invitation, error) {
+	return nil, ErrNotFound
+}
+
+func (m *mockTeamRepo) SoftDeleteInvitation(ctx context.Context, teamID, invitationID uuid.UUID) error {
+	return nil
+}
+
+func (m *mockTeamRepo) UpdateInvitationRole(ctx context.Context, teamID, invitationID uuid.UUID, role Role, roleID uuid.UUID) error {
+	return nil
+}
+
+func (m *mockTeamRepo) GetPendingInvitation(ctx context.Context, invitationID uuid.UUID) (*InvitationDetail, error) {
+	return nil, ErrNotFound
+}
+
+func (m *mockTeamRepo) MarkInvitationAccepted(ctx context.Context, invitationID uuid.UUID) error {
+	return nil
+}
+
 type mockUserRepo struct {
 	users map[string]*user.User
 }
@@ -166,6 +186,12 @@ func (m *mockRbacRepo) ListPermissionsByRoleID(ctx context.Context, roleID uuid.
 func (m *mockRbacRepo) GetPermissionMatrix(ctx context.Context) ([]rbac.PermissionMatrixRow, error) {
 	return nil, nil
 }
+func (m *mockRbacRepo) CreateRole(ctx context.Context, role *rbac.Role) error { return nil }
+func (m *mockRbacRepo) UpdateRole(ctx context.Context, role *rbac.Role) error { return nil }
+func (m *mockRbacRepo) SoftDeleteRole(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *mockRbacRepo) ReplaceRolePermissions(ctx context.Context, roleID uuid.UUID, permissionCodes []string) error {
+	return nil
+}
 
 func testRBAC() *rbac.Service {
 	svc := rbac.NewService(&mockRbacRepo{
@@ -214,5 +240,37 @@ func TestService_Update_ForbiddenForAgent(t *testing.T) {
 	_, err := svc.Update(context.Background(), teamID, userID, "agent", "New Name")
 	if err != ErrForbidden {
 		t.Fatalf("Update() error = %v", err)
+	}
+}
+
+func TestMergeInvitedUsers_IncludesPendingInvitations(t *testing.T) {
+	members := []MemberWithUser{
+		{
+			ID:     uuid.New(),
+			Email:  "owner@example.com",
+			Name:   "Owner",
+			Role:   RoleOwner,
+			Status: MemberStatusActive,
+		},
+	}
+	invitations := []Invitation{
+		{
+			ID:        uuid.New(),
+			Email:     "invite@example.com",
+			Name:      "Invitee",
+			Role:      RoleAgent,
+			CreatedAt: time.Now().UTC(),
+		},
+	}
+
+	merged := mergeInvitedUsers(members, invitations, ListMembersFilter{})
+	if len(merged) != 2 {
+		t.Fatalf("mergeInvitedUsers() len = %d, want 2", len(merged))
+	}
+	if merged[1].Status != MemberStatusInvited {
+		t.Fatalf("invited status = %s, want invited", merged[1].Status)
+	}
+	if merged[1].Email != "invite@example.com" {
+		t.Fatalf("invited email = %s", merged[1].Email)
 	}
 }

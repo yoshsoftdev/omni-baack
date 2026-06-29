@@ -7,12 +7,12 @@ import (
 )
 
 type Role struct {
-	ID          uuid.UUID
-	Name        string
-	Description string
-	IsSystem    bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	IsSystem    bool      `json:"is_system"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type Permission struct {
