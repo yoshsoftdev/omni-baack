@@ -216,7 +216,7 @@ func TestRegistry_UnknownPhoneNumberIDRoutesTerminal(t *testing.T) {
 		Channels:    chRepo,
 		Contacts:    contact.NewService(&fakeContactRepo{byPhone: map[string]*contact.Contact{}}, nil, nil, nil),
 		Conversations: conversation.NewService(&fakeConversationRepo{items: map[uuid.UUID]*conversation.Conversation{}}, &fakeContactRepo{byPhone: map[string]*contact.Contact{}}, nil, nil),
-		Messages:    message.NewService(&fakeMessageRepo{byWAMID: map[string]*message.Message{}}, &fakeConversationRepo{items: map[uuid.UUID]*conversation.Conversation{}}, nil, nil, nil),
+		Messages:    message.NewService(&fakeMessageRepo{byWAMID: map[string]*message.Message{}}, nil, &fakeConversationRepo{items: map[uuid.UUID]*conversation.Conversation{}}, nil, nil, nil),
 		Idempotency: idempotency.NewMemoryStore(time.Hour),
 		DLQ:         noopDLQ{},
 	})
@@ -257,7 +257,7 @@ func TestMessageHandler_NewConversationAndMessage(t *testing.T) {
 		resolver.NewTenantResolver(chRepo),
 		contact.NewService(contactRepo, nil, nil, nil),
 		conversation.NewService(convRepo, contactRepo, nil, nil),
-		message.NewService(msgRepo, convRepo, nil, nil, nil),
+		message.NewService(msgRepo, nil, convRepo, nil, nil, nil),
 		nil,
 		idempotency.NewMemoryStore(time.Hour),
 		metrics,
@@ -307,7 +307,7 @@ func TestMessageHandler_DuplicateSkipped(t *testing.T) {
 		resolver.NewTenantResolver(chRepo),
 		contact.NewService(contactRepo, nil, nil, nil),
 		conversation.NewService(convRepo, contactRepo, nil, nil),
-		message.NewService(msgRepo, convRepo, nil, nil, nil),
+		message.NewService(msgRepo, nil, convRepo, nil, nil, nil),
 		nil,
 		idempotency.NewMemoryStore(time.Hour),
 		&eventconsumer.Metrics{},
@@ -356,7 +356,7 @@ func TestStatusHandler_Progression(t *testing.T) {
 
 	handler := eventconsumer.NewStatusHandler(
 		resolver.NewTenantResolver(chRepo),
-		message.NewService(msgRepo, nil, nil, nil, nil),
+		message.NewService(msgRepo, nil, nil, nil, nil, nil),
 		nil,
 		idempotency.NewMemoryStore(time.Hour),
 		&eventconsumer.Metrics{},

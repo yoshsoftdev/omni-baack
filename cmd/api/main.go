@@ -31,7 +31,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/report"
 	"github.com/omnichannel/omni-chan-v2/internal/segment"
-	"github.com/omnichannel/omni-chan-v2/internal/storage"
+	"github.com/omnichannel/omni-chan-v2/internal/storageclient"
 	"github.com/omnichannel/omni-chan-v2/internal/tag"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 	wsserver "github.com/omnichannel/omni-chan-v2/internal/websocket"
@@ -82,13 +82,6 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() { _ = rdb.Close() }()
-
-	store, err := storage.New(ctx, cfg.Storage)
-	if err != nil {
-		log.Error("storage init failed", "error", err)
-		os.Exit(1)
-	}
-	_ = store
 
 	wsHub := hub.New(log, rdb.Client)
 	go func() {
@@ -166,11 +159,14 @@ func main() {
 	conversationService.SetInboxSync(inboxSync)
 
 	messageRepo := message.NewRepository(db)
-	messageService := message.NewService(messageRepo, conversationRepo, teamRepo, rbacService, &message.OutboundDeps{
+	attachmentRepo := message.NewAttachmentRepository(db)
+	storageClient := storageclient.New(cfg.StorageService.URL, cfg.NATS.InternalToken)
+	messageService := message.NewService(messageRepo, attachmentRepo, conversationRepo, teamRepo, rbacService, &message.OutboundDeps{
 		Channels: channelRepo,
 		Contacts: contactRepo,
 		Meta:     metaClient,
 		Cipher:   tokenCipher,
+		Storage:  storageClient,
 	})
 	onboardingService := onboarding.NewService(deviceRepo, contactRepo, conversationRepo, messageRepo, teamRepo, metaClient)
 
@@ -218,8 +214,9 @@ func main() {
 			Operations:   handler.NewOperationsHandler(operationsService),
 			Report:       handler.NewReportHandler(reportService),
 			Conversation: handler.NewConversationHandler(conversationService),
-			Message:      handler.NewMessageHandler(messageService, conversationService, inboxSync),
-			Dashboard:    handler.NewDashboardHandler(dashboardService),
+			Message:           handler.NewMessageHandler(messageService, conversationService, inboxSync),
+			StorageServiceURL: cfg.StorageService.URL,
+			Dashboard:         handler.NewDashboardHandler(dashboardService),
 			Webhook:      handler.NewWebhookHandler(cfg.Meta.VerifyToken),
 			Meta:         metasvc.NewHandler(cfg.Meta),
 			ActorResolver: actorResolver,

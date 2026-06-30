@@ -21,8 +21,9 @@ type Deps struct {
 	Operations   *handler.OperationsHandler
 	Report       *handler.ReportHandler
 	Conversation *handler.ConversationHandler
-	Message      *handler.MessageHandler
-	Dashboard    *handler.DashboardHandler
+	Message           *handler.MessageHandler
+	StorageServiceURL string
+	Dashboard         *handler.DashboardHandler
 	Webhook      *handler.WebhookHandler
 	Meta         *metasvc.Handler
 	ActorResolver auth.ActorResolver

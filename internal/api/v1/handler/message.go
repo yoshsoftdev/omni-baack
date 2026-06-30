@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"strings"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/api/v1/dto"
@@ -20,7 +22,8 @@ func NewMessageHandler(svc *message.Service, conversations *conversation.Service
 }
 
 type sendMessageRequest struct {
-	Content string `json:"content"`
+	Content         string `json:"content"`
+	StorageObjectID string `json:"storage_object_id"`
 }
 
 func (h *MessageHandler) List(c *fiber.Ctx) error {
@@ -56,11 +59,19 @@ func (h *MessageHandler) Send(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return response.BadRequest(c, "invalid request body")
 	}
+	sendInput := message.SendInput{Content: req.Content}
+	if strings.TrimSpace(req.StorageObjectID) != "" {
+		objectID, parseErr := parseUUIDFromString(req.StorageObjectID)
+		if parseErr != nil {
+			return response.BadRequest(c, "invalid storage_object_id")
+		}
+		sendInput.StorageObjectID = &objectID
+	}
 	conv, err := h.conversations.Get(c.Context(), actor.TeamID, actor.UserID, actor.Role, conversationID)
 	if err != nil {
 		return mapError(c, err)
 	}
-	msg, err := h.svc.SendReply(c.Context(), actor.TeamID, actor.UserID, actor.Role, conversationID, req.Content)
+	msg, err := h.svc.SendMessage(c.Context(), actor.TeamID, actor.UserID, actor.Role, conversationID, sendInput)
 	if err != nil {
 		return mapError(c, err)
 	}

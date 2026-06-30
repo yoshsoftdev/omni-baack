@@ -47,6 +47,7 @@ type Message struct {
 	WAMID          *string     `json:"wamid,omitempty"`
 	Status         *Status     `json:"status,omitempty"`
 	RawPayload     []byte      `json:"-"`
+	Attachment     *Attachment `json:"attachment,omitempty"`
 	ReceivedAt     time.Time   `json:"received_at"`
 	CreatedAt      time.Time   `json:"created_at"`
 }

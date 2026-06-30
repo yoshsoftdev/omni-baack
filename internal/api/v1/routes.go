@@ -4,6 +4,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/omnichannel/omni-chan-v2/internal/api/middleware"
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
+	"github.com/omnichannel/omni-chan-v2/internal/storageproxy"
 )
 
 func Register(router fiber.Router, deps Deps) {
@@ -158,6 +159,16 @@ func Register(router fiber.Router, deps Deps) {
 		onboarding := protected.Group("/onboarding")
 		onboarding.Get("/", deps.Workspace.GetOnboarding)
 		onboarding.Post("/complete-step", deps.Workspace.CompleteOnboardingStep)
+	}
+
+	if deps.StorageServiceURL != "" {
+		storageProxy := storageproxy.Handler(deps.StorageServiceURL)
+		storageGroup := protected.Group("/storage")
+		storageGroup.Post("/upload", storageProxy)
+		storageGroup.Get("/blob/*", storageProxy)
+		storageGroup.Get("/objects/:id/content", storageProxy)
+		storageGroup.Get("/objects/:id", storageProxy)
+		storageGroup.Delete("/objects/:id", storageProxy)
 	}
 
 	if deps.Dashboard != nil {

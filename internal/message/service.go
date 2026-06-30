@@ -16,6 +16,7 @@ import (
 // Service (MessageService) manages inbox messages.
 type Service struct {
 	messages      Repository
+	attachments   AttachmentRepository
 	conversations conversation.Repository
 	teams         team.Repository
 	rbac          *rbac.Service
@@ -24,6 +25,7 @@ type Service struct {
 
 func NewService(
 	messages Repository,
+	attachments AttachmentRepository,
 	conversations conversation.Repository,
 	teams team.Repository,
 	rbacSvc *rbac.Service,
@@ -31,6 +33,7 @@ func NewService(
 ) *Service {
 	return &Service{
 		messages:      messages,
+		attachments:   attachments,
 		conversations: conversations,
 		teams:         teams,
 		rbac:          rbacSvc,
@@ -135,6 +138,21 @@ func (s *Service) ListByConversation(ctx context.Context, teamID, userID uuid.UU
 	result, err := s.messages.ListByConversation(ctx, teamID, conversationID, filter, page)
 	if err != nil {
 		return repository.Page[Message]{}, serviceerrors.MapRepository(err)
+	}
+	if s.attachments != nil && len(result.Items) > 0 {
+		ids := make([]uuid.UUID, 0, len(result.Items))
+		for i := range result.Items {
+			ids = append(ids, result.Items[i].ID)
+		}
+		attachmentMap, attachErr := s.attachments.FindByMessageIDs(ctx, teamID, ids)
+		if attachErr != nil {
+			return repository.Page[Message]{}, serviceerrors.MapRepository(attachErr)
+		}
+		for i := range result.Items {
+			if attachment, ok := attachmentMap[result.Items[i].ID]; ok {
+				result.Items[i].Attachment = attachment
+			}
+		}
 	}
 	return result, nil
 }

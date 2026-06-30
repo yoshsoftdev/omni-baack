@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -13,9 +14,9 @@ type Config struct {
 	App      AppConfig
 	HTTP     HTTPConfig
 	Database DatabaseConfig
-	Redis    RedisConfig
-	Storage  StorageConfig
-	JWT      JWTConfig
+	Redis           RedisConfig
+	StorageService  StorageServiceConfig
+	JWT             JWTConfig
 	Meta     MetaConfig
 	OTP      OTPConfig
 	NATS     NATSConfig
@@ -67,14 +68,8 @@ type RedisConfig struct {
 	DB       int
 }
 
-type StorageConfig struct {
-	Driver          string
-	LocalPath       string
-	MinIOEndpoint   string
-	MinIOAccessKey  string
-	MinIOSecretKey  string
-	MinIOBucket     string
-	MinIOUseSSL     bool
+type StorageServiceConfig struct {
+	URL string
 }
 
 type JWTConfig struct {
@@ -109,14 +104,8 @@ func Load() (*Config, error) {
 			Password: getEnv("REDIS_PASSWORD", ""),
 			DB:       getEnvInt("REDIS_DB", 0),
 		},
-		Storage: StorageConfig{
-			Driver:          getEnv("STORAGE_DRIVER", "local"),
-			LocalPath:       getEnv("STORAGE_LOCAL_PATH", "./storage"),
-			MinIOEndpoint:   getEnv("MINIO_ENDPOINT", "localhost:9000"),
-			MinIOAccessKey:  getEnv("MINIO_ACCESS_KEY", ""),
-			MinIOSecretKey:  getEnv("MINIO_SECRET_KEY", ""),
-			MinIOBucket:     getEnv("MINIO_BUCKET", "omni-chan"),
-			MinIOUseSSL:     getEnvBool("MINIO_USE_SSL", false),
+		StorageService: StorageServiceConfig{
+			URL: getEnv("STORAGE_SERVICE_URL", "http://127.0.0.1:8082"),
 		},
 		JWT: JWTConfig{
 			AccessSecret:  getEnv("JWT_ACCESS_SECRET", ""),
@@ -155,13 +144,8 @@ func (c *Config) Validate() error {
 	if c.Database.URL == "" {
 		return fmt.Errorf("DATABASE_URL is required")
 	}
-	if c.Storage.Driver != "local" && c.Storage.Driver != "minio" {
-		return fmt.Errorf("STORAGE_DRIVER must be local or minio")
-	}
-	if c.Storage.Driver == "minio" {
-		if c.Storage.MinIOAccessKey == "" || c.Storage.MinIOSecretKey == "" {
-			return fmt.Errorf("MINIO_ACCESS_KEY and MINIO_SECRET_KEY are required when STORAGE_DRIVER=minio")
-		}
+	if strings.TrimSpace(c.StorageService.URL) == "" {
+		return fmt.Errorf("STORAGE_SERVICE_URL is required")
 	}
 	if c.JWT.AccessSecret == "" || c.JWT.RefreshSecret == "" {
 		if c.App.Env == "development" {
