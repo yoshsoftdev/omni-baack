@@ -50,6 +50,7 @@ type ManualConnectInput struct {
 	AccessToken   string
 	WABAID        string
 	PhoneNumberID string
+	BusinessID    *string
 }
 
 type CreateInput struct {
@@ -57,6 +58,7 @@ type CreateInput struct {
 	Provider       string
 	ConnectionType *ConnectionType
 	PhoneNumber    *string
+	BusinessID     *string
 	Manual         *ManualConnectInput
 }
 
@@ -118,6 +120,7 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 		Status:         StatusDisconnected,
 		ConnectionType: input.ConnectionType,
 		PhoneNumber:    input.PhoneNumber,
+		BusinessID:     input.BusinessID,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -164,6 +167,10 @@ func (s *Service) applyManualConnect(ctx context.Context, ch *Channel, manual *M
 	ch.ConnectionType = &connType
 	ch.WABAID = &wabaID
 	ch.PhoneNumberID = &phoneNumberID
+	if manual.BusinessID != nil && strings.TrimSpace(*manual.BusinessID) != "" {
+		businessID := strings.TrimSpace(*manual.BusinessID)
+		ch.BusinessID = &businessID
+	}
 	ch.IsCoex = false
 	ch.LastConnectedAt = &now
 	ch.UpdatedAt = now

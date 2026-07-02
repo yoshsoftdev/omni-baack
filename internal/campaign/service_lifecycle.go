@@ -37,6 +37,16 @@ func (s *Service) Send(ctx context.Context, teamID, userID uuid.UUID, actorRole 
 		return nil, serviceerrors.NewValidation("send_mode", "campaign is scheduled for later; wait for scheduler or update schedule")
 	}
 
+	if s.payment != nil {
+		configured, err := s.payment.ChannelPaymentConfigured(ctx, teamID, camp.ChannelID)
+		if err != nil {
+			return nil, err
+		}
+		if !configured {
+			return nil, serviceerrors.NewPaymentRequired("")
+		}
+	}
+
 	if err := s.campaigns.TransitionCampaignToQueuedForSend(ctx, teamID, campaignID); err != nil {
 		return nil, serviceerrors.MapRepository(err)
 	}

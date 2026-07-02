@@ -21,6 +21,14 @@ type templateSyncChecker interface {
 	TeamRecentlySynced(ctx context.Context, teamID uuid.UUID) (bool, error)
 }
 
+type paymentChecker interface {
+	TeamHasPaymentConfigured(ctx context.Context, teamID uuid.UUID) (bool, error)
+}
+
+type channelDataSyncChecker interface {
+	TeamDataSynced(ctx context.Context, teamID uuid.UUID) (bool, error)
+}
+
 type ReadinessCheck struct {
 	Key       string `json:"key"`
 	Completed bool   `json:"completed"`
@@ -40,6 +48,8 @@ type readinessDeps struct {
 	campaigns   campaign.Repository
 	snapshots   SnapshotRepository
 	syncChecker templateSyncChecker
+	payment     paymentChecker
+	dataSync    channelDataSyncChecker
 }
 
 func (s *Service) readinessDeps() readinessDeps {
@@ -51,6 +61,8 @@ func (s *Service) readinessDeps() readinessDeps {
 		campaigns:   s.campaigns,
 		snapshots:   s.snapshots,
 		syncChecker: s.syncChecker,
+		payment:     s.payment,
+		dataSync:    s.dataSync,
 	}
 }
 
@@ -149,11 +161,6 @@ func refreshReadinessSnapshot(ctx context.Context, deps readinessDeps, teamID uu
 }
 
 func evaluateReadinessChecks(ctx context.Context, deps readinessDeps, teamID uuid.UUID) ([]ReadinessCheck, error) {
-	connected := channel.StatusConnected
-	channelPage, err := deps.channels.List(ctx, teamID, channel.ListFilter{Status: &connected}, repository.PageParams{Page: 1, PageSize: 1})
-	if err != nil {
-		return nil, serviceerrors.MapRepository(err)
-	}
 	templatePage, err := deps.templates.List(ctx, teamID, template.ListFilter{}, repository.PageParams{Page: 1, PageSize: 1})
 	if err != nil {
 		return nil, serviceerrors.MapRepository(err)
@@ -175,7 +182,7 @@ func evaluateReadinessChecks(ctx context.Context, deps readinessDeps, teamID uui
 		return nil, serviceerrors.MapRepository(err)
 	}
 
-	templatesRecentlySynced := false
+	templatesSynced := templatePage.Pagination.Total > 0
 	if deps.templates != nil {
 		recent, err := deps.templates.HasRecentSync(ctx, teamID, 24*time.Hour)
 		if err != nil {
@@ -187,14 +194,30 @@ func evaluateReadinessChecks(ctx context.Context, deps readinessDeps, teamID uui
 				return nil, err
 			}
 		}
-		templatesRecentlySynced = recent
+		templatesSynced = templatesSynced && recent
+	}
+
+	paymentConfigured := false
+	if deps.payment != nil {
+		paymentConfigured, err = deps.payment.TeamHasPaymentConfigured(ctx, teamID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	existingDataSynced := false
+	if deps.dataSync != nil {
+		existingDataSynced, err = deps.dataSync.TeamDataSynced(ctx, teamID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return []ReadinessCheck{
 		{Key: "meta_connected", Completed: metaReady > 0},
-		{Key: "templates_recently_synced", Completed: templatesRecentlySynced},
-		{Key: "channel_connected", Completed: channelPage.Pagination.Total > 0},
-		{Key: "template_synced", Completed: templatePage.Pagination.Total > 0},
+		{Key: "payment_method", Completed: paymentConfigured},
+		{Key: "templates_synced", Completed: templatesSynced},
+		{Key: "existing_data_synced", Completed: existingDataSynced},
 		{Key: "contacts_available", Completed: contactCount > 0},
 		{Key: "team_members_added", Completed: len(members) > 1},
 		{Key: "campaign_created", Completed: campaignPage.Pagination.Total > 0},

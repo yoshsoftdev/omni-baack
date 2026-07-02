@@ -11,6 +11,8 @@ const (
 	CodeConflict             = "conflict"
 	CodeQuotaExceeded        = "quota_exceeded"
 	CodeFeatureNotAvailable  = "feature_not_available"
+	CodePaymentRequired      = "payment_required"
+	CodePermissionRequired   = "permission_required"
 	CodeInternalError        = "internal_error"
 )
 
@@ -60,6 +62,14 @@ func QuotaExceeded(c *fiber.Ctx, message string) error {
 
 func FeatureNotAvailable(c *fiber.Ctx, message string) error {
 	return fail(c, fiber.StatusNotImplemented, CodeFeatureNotAvailable, message)
+}
+
+func PaymentRequired(c *fiber.Ctx, message string) error {
+	return fail(c, fiber.StatusUnprocessableEntity, CodePaymentRequired, message)
+}
+
+func PermissionRequired(c *fiber.Ctx, message string) error {
+	return fail(c, fiber.StatusUnprocessableEntity, CodePermissionRequired, message)
 }
 
 func InternalError(c *fiber.Ctx, message string) error {

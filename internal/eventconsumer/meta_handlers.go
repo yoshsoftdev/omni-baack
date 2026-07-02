@@ -532,14 +532,20 @@ func mapTemplateStatus(event string) template.Status {
 type ChannelHandler struct {
 	resolver    *resolver.TenantResolver
 	channels    channel.Repository
+	channelSync CoexSyncHandler
 	idempotency idempotency.Store
 	metrics     *Metrics
 	log         *slog.Logger
 }
 
+type CoexSyncHandler interface {
+	HandleCoexWebhook(ctx context.Context, events *metaclient.CoexWebhookEvents) error
+}
+
 func NewChannelHandler(
 	resolver *resolver.TenantResolver,
 	channels channel.Repository,
+	channelSync CoexSyncHandler,
 	store idempotency.Store,
 	metrics *Metrics,
 	log *slog.Logger,
@@ -547,7 +553,7 @@ func NewChannelHandler(
 	if log == nil {
 		log = slog.Default()
 	}
-	return &ChannelHandler{resolver: resolver, channels: channels, idempotency: store, metrics: metrics, log: log}
+	return &ChannelHandler{resolver: resolver, channels: channels, channelSync: channelSync, idempotency: store, metrics: metrics, log: log}
 }
 
 func (h *ChannelHandler) Handle(ctx context.Context, event sharedevents.CanonicalEvent) error {
@@ -591,5 +597,26 @@ func (h *ChannelHandler) Handle(ctx context.Context, event sharedevents.Canonica
 		"channel_id", tenant.ChannelID.String(),
 		"field", payload.Field,
 	)
+	if h.channelSync != nil && isCoexSyncField(payload.Field) && len(payload.Raw) > 0 {
+		wrapped := fmt.Sprintf(
+			`{"object":"whatsapp_business_account","entry":[{"changes":[{"field":%q,"value":%s}]}]}`,
+			payload.Field,
+			string(payload.Raw),
+		)
+		events, err := metaclient.ParseCoexWebhookPayload([]byte(wrapped))
+		if err != nil {
+			return fmt.Errorf("parse coex channel update: %w", err)
+		}
+		return h.channelSync.HandleCoexWebhook(ctx, events)
+	}
 	return nil
+}
+
+func isCoexSyncField(field string) bool {
+	switch field {
+	case "smb_app_state_sync", "history", "smb_message_echoes":
+		return true
+	default:
+		return false
+	}
 }

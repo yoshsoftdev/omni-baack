@@ -22,6 +22,7 @@ const (
 	SourceManual      Source = "manual"
 	SourceAPI         Source = "api"
 	SourceMetaInbound Source = "meta_inbound"
+	SourceMetaSync    Source = "meta_sync"
 )
 
 // TagRef is a lightweight tag assignment on a contact.

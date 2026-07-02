@@ -82,6 +82,10 @@ func mapError(c *fiber.Ctx, err error) error {
 		return response.Conflict(c, err.Error())
 	case errors.Is(err, serviceerrors.ErrQuotaExceeded):
 		return response.QuotaExceeded(c, err.Error())
+	case serviceerrors.IsPaymentRequired(err):
+		return response.PaymentRequired(c, err.Error())
+	case serviceerrors.IsPermissionRequired(err):
+		return response.PermissionRequired(c, err.Error())
 	default:
 		if serviceerrors.IsValidation(err) {
 			return response.BadRequest(c, err.Error())

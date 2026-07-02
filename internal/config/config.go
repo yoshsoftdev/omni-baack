@@ -41,6 +41,7 @@ type MetaConfig struct {
 	VerifyToken        string
 	APIVersion         string
 	TokenEncryptionKey string
+	PaymentSetupURL    string
 }
 
 type AppConfig struct {
@@ -120,6 +121,7 @@ func Load() (*Config, error) {
 			VerifyToken:        getEnv("META_VERIFY_TOKEN", ""),
 			APIVersion:         getEnv("META_API_VERSION", "v21.0"),
 			TokenEncryptionKey: getEnv("META_TOKEN_ENCRYPTION_KEY", ""),
+			PaymentSetupURL:    getEnv("META_PAYMENT_SETUP_URL", ""),
 		},
 		OTP: OTPConfig{
 			DefaultDeviceSlug: getEnv("OTP_DEFAULT_DEVICE_SLUG", "dgos-waba"),

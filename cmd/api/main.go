@@ -19,6 +19,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign/delivery"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
+	"github.com/omnichannel/omni-chan-v2/internal/channelsync"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
@@ -127,14 +128,18 @@ func main() {
 	}
 	syncRunRepo := template.NewInMemorySyncRunRepository()
 	metaSyncService := template.NewSyncService(metaClient, channelRepo, templateRepo, syncRunRepo, tokenCipher, log.Logger)
+	channelSyncRepo := channelsync.NewRepository(db)
 	metaHealthService := metasvc.NewHealthService(metaAPI, channelRepo, tokenCipher, metaSyncService)
 	embeddedSignupSessionRepo := metasvc.NewEmbeddedSignupSessionRepository(db)
+	paymentService := metasvc.NewPaymentService(metaAPI, channelRepo, tokenCipher, cfg.Meta)
 
 	workspaceService := workspace.NewService(
 		teamRepo, quotaSvc, rbacService,
 		channelRepo, templateRepo, contactRepo, campaignRepo,
 		workspace.NewSnapshotRepository(db),
 		metaSyncService,
+		paymentService,
+		channelSyncRepo,
 	)
 	embeddedSignupService := metasvc.NewEmbeddedSignupService(
 		metaAPI, channelRepo, embeddedSignupSessionRepo, tokenCipher, cfg.Meta, workspaceService, log.Logger,
@@ -186,6 +191,21 @@ func main() {
 	})
 	onboardingService := onboarding.NewService(deviceRepo, contactRepo, conversationRepo, messageRepo, teamRepo, metaClient)
 
+	channelSyncService := channelsync.NewService(
+		channelSyncRepo,
+		channelRepo,
+		contactRepo,
+		conversationRepo,
+		messageRepo,
+		teamRepo,
+		metaSyncService,
+		metaClient,
+		tokenCipher,
+		rbacService,
+		workspaceService,
+	)
+	embeddedSignupService.SetPermissionRefresher(channelSyncService)
+
 	templateService := template.NewService(templateRepo, channelRepo, teamRepo, rbacService, metaSyncService)
 
 	campaignTx := uow.NewCampaignRunner(db)
@@ -193,6 +213,7 @@ func main() {
 	campaignService := campaign.NewService(
 		campaignRepo, campaignTx, teamRepo, channelRepo, templateRepo, segmentRepo, rbacService,
 		campaign.WithCancelFlags(cancelFlags),
+		campaign.WithPaymentChecker(paymentService),
 	)
 
 	operationsRepo := operations.NewRepository(db)
@@ -202,14 +223,14 @@ func main() {
 	reportService := report.NewService(reportRepo, teamRepo, rbacService)
 
 	dashboardRepo := dashboard.NewRepository(db)
-	dashboardService := dashboard.NewService(dashboardRepo, teamRepo, workspaceService, rbacService)
+	dashboardService := dashboard.NewService(dashboardRepo, teamRepo, workspaceService, rbacService, &dashboardSyncAdapter{channelSyncService})
 
 	deliveryMetrics := &delivery.Metrics{}
 	deliveryReconciler := delivery.NewReconciler(campaignRepo, deliveryMetrics, log.Logger, 30*24*time.Hour)
 	go deliveryReconciler.StartDaily(ctx)
 
 	if cfg.NATS.Enabled {
-		startEventConsumer(ctx, cfg, channelRepo, contactService, conversationService, messageService, templateRepo, onboardingService, inboxSync, campaignRepo, reportRepo, tokenCipher, metaClient, storageClient, rdb, log)
+		startEventConsumer(ctx, cfg, channelRepo, contactService, conversationService, messageService, templateRepo, onboardingService, channelSyncService, inboxSync, campaignRepo, reportRepo, tokenCipher, metaClient, storageClient, rdb, log)
 	}
 
 	app := api.NewRouter(api.Deps{
@@ -221,7 +242,7 @@ func main() {
 			Auth:         handler.NewAuthHandler(authService),
 			Workspace:    handler.NewWorkspaceHandler(workspaceService),
 			Team:         handler.NewTeamHandler(teamService, rbacService),
-			Channel:      handler.NewChannelHandler(channelService, metaHealthService, embeddedSignupService),
+			Channel:      handler.NewChannelHandler(channelService, metaHealthService, embeddedSignupService, paymentService, channelSyncService),
 			Template:     handler.NewTemplateHandler(templateService),
 			Contact:      handler.NewContactHandler(contactService),
 			Segment:      handler.NewSegmentHandler(segmentService),
@@ -267,6 +288,7 @@ func startEventConsumer(
 	messageService *message.Service,
 	templateRepo template.Repository,
 	onboardingService *onboarding.Service,
+	channelSyncService *channelsync.Service,
 	inboxSync *inbox.SyncService,
 	campaignRepo campaign.Repository,
 	reportRepo report.Repository,
@@ -326,6 +348,7 @@ func startEventConsumer(
 		Storage:       storageClient,
 		Templates:     templateRepo,
 		Onboarding:    onboardingService,
+		ChannelSync:   channelSyncService,
 		Inbox:         inboxSync,
 		Delivery:      deliveryTracker,
 		Idempotency:   idempStore,
@@ -360,4 +383,24 @@ func startEventConsumer(
 		"meta_consumer", cfg.NATS.ConsumerName+"-meta",
 		"legacy_consumer", cfg.NATS.ConsumerName+"-legacy",
 	)
+}
+
+type dashboardSyncAdapter struct {
+	svc *channelsync.Service
+}
+
+func (a *dashboardSyncAdapter) TeamSyncSummary(ctx context.Context, teamID uuid.UUID) (*dashboard.TeamSyncSummary, error) {
+	if a.svc == nil {
+		return &dashboard.TeamSyncSummary{}, nil
+	}
+	summary, err := a.svc.TeamSyncSummary(ctx, teamID)
+	if err != nil {
+		return nil, err
+	}
+	return &dashboard.TeamSyncSummary{
+		LastContactSyncAt:      summary.LastContactSyncAt,
+		LastTemplateSyncAt:     summary.LastTemplateSyncAt,
+		LastConversationSyncAt: summary.LastConversationSyncAt,
+		PermissionStatus:       string(summary.PermissionStatus),
+	}, nil
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
+	"github.com/omnichannel/omni-chan-v2/internal/channelsync"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
 	"github.com/omnichannel/omni-chan-v2/internal/eventconsumer/idempotency"
@@ -38,6 +39,7 @@ type Deps struct {
 	Storage       StorageUploader
 	Templates     template.Repository
 	Onboarding    *onboarding.Service
+	ChannelSync   *channelsync.Service
 	Inbox         Syncer
 	Delivery      CampaignDelivery
 	Idempotency   idempotency.Store
@@ -58,11 +60,11 @@ func NewRegistry(deps Deps) *Registry {
 	}
 
 	return &Registry{
-		legacy:    NewLegacyConsumer(deps.Messages, deps.Onboarding, log),
+		legacy:    NewLegacyConsumer(deps.Messages, deps.Onboarding, deps.ChannelSync, log),
 		messages:  NewMessageHandler(tenantResolver, deps.Channels, deps.Contacts, deps.Conversations, deps.Messages, deps.Inbox, deps.MetaMedia, deps.TokenCipher, deps.Storage, store, metrics, log),
 		statuses:  NewStatusHandler(tenantResolver, deps.Messages, deps.Delivery, store, metrics, log),
 		templates: NewTemplateHandler(tenantResolver, deps.Channels, deps.Templates, store, metrics, log),
-		channels:  NewChannelHandler(tenantResolver, deps.Channels, store, metrics, log),
+		channels:  NewChannelHandler(tenantResolver, deps.Channels, deps.ChannelSync, store, metrics, log),
 		dlq:       deps.DLQ,
 		metrics:   metrics,
 		log:       log,

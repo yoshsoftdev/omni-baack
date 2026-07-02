@@ -30,6 +30,8 @@ type Service struct {
 	campaigns    campaign.Repository
 	snapshots    SnapshotRepository
 	syncChecker  templateSyncChecker
+	payment      paymentChecker
+	dataSync     channelDataSyncChecker
 }
 
 func NewService(
@@ -42,6 +44,8 @@ func NewService(
 	campaigns campaign.Repository,
 	snapshots SnapshotRepository,
 	syncChecker templateSyncChecker,
+	payment paymentChecker,
+	dataSync channelDataSyncChecker,
 ) *Service {
 	return &Service{
 		teams:       teams,
@@ -53,6 +57,8 @@ func NewService(
 		campaigns:   campaigns,
 		snapshots:   snapshots,
 		syncChecker: syncChecker,
+		payment:     payment,
+		dataSync:    dataSync,
 	}
 }
 

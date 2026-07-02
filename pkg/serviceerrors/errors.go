@@ -3,17 +3,20 @@ package serviceerrors
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 )
 
 // Canonical service-layer errors. Handlers map these to HTTP status codes.
 var (
-	ErrNotFound      = errors.New("not found")
-	ErrForbidden     = errors.New("forbidden")
-	ErrConflict      = errors.New("conflict")
-	ErrValidation    = errors.New("validation error")
-	ErrQuotaExceeded = errors.New("quota exceeded")
+	ErrNotFound         = errors.New("not found")
+	ErrForbidden        = errors.New("forbidden")
+	ErrConflict         = errors.New("conflict")
+	ErrValidation       = errors.New("validation error")
+	ErrQuotaExceeded    = errors.New("quota exceeded")
+	ErrPaymentRequired     = errors.New("payment required")
+	ErrPermissionRequired  = errors.New("permission required")
 )
 
 // ValidationError wraps a field-level validation failure.
@@ -33,7 +36,59 @@ func (e *ValidationError) Is(target error) bool {
 	return target == ErrValidation
 }
 
-// NewValidation returns a validation error.
+// NewPaymentRequired indicates broadcast send is blocked until Meta payment is configured.
+func NewPaymentRequired(message string) error {
+	if strings.TrimSpace(message) == "" {
+		message = "Marketing campaigns require a Meta payment method."
+	}
+	return &PaymentRequiredError{Message: message}
+}
+
+type PaymentRequiredError struct {
+	Message string
+}
+
+func (e *PaymentRequiredError) Error() string {
+	return e.Message
+}
+
+func (e *PaymentRequiredError) Is(target error) bool {
+	return target == ErrPaymentRequired
+}
+
+// IsPaymentRequired reports whether err is a payment-required service error.
+func IsPaymentRequired(err error) bool {
+	var pe *PaymentRequiredError
+	return errors.Is(err, ErrPaymentRequired) || errors.As(err, &pe)
+}
+
+// NewPermissionRequired indicates Meta permissions are missing for synchronization.
+func NewPermissionRequired(scope, message string) error {
+	if strings.TrimSpace(message) == "" {
+		message = "Additional Meta permission is required."
+	}
+	return &PermissionRequiredError{Scope: scope, Message: message}
+}
+
+type PermissionRequiredError struct {
+	Scope   string
+	Message string
+}
+
+func (e *PermissionRequiredError) Error() string {
+	return e.Message
+}
+
+func (e *PermissionRequiredError) Is(target error) bool {
+	return target == ErrPermissionRequired
+}
+
+// IsPermissionRequired reports whether err is a permission-required service error.
+func IsPermissionRequired(err error) bool {
+	var pe *PermissionRequiredError
+	return errors.Is(err, ErrPermissionRequired) || errors.As(err, &pe)
+}
+
 func NewValidation(field, message string) error {
 	return &ValidationError{Field: field, Message: message}
 }

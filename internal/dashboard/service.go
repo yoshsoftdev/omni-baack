@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -23,6 +24,10 @@ type Overview struct {
 	AvgFirstResponseSeconds *float64 `json:"avg_first_response_seconds,omitempty"`
 	AvgResolutionSeconds    *float64 `json:"avg_resolution_seconds,omitempty"`
 	ReadinessScore          int      `json:"readiness_score"`
+	LastContactSyncAt       *time.Time `json:"last_contact_sync_at,omitempty"`
+	LastTemplateSyncAt      *time.Time `json:"last_template_sync_at,omitempty"`
+	LastConversationSyncAt  *time.Time `json:"last_conversation_sync_at,omitempty"`
+	PermissionStatus        string     `json:"permission_status,omitempty"`
 }
 
 type Repository interface {
@@ -109,15 +114,27 @@ func countQuery(ctx context.Context, db *database.DB, query string, teamID uuid.
 	return count, nil
 }
 
+type SyncSummaryProvider interface {
+	TeamSyncSummary(ctx context.Context, teamID uuid.UUID) (*TeamSyncSummary, error)
+}
+
+type TeamSyncSummary struct {
+	LastContactSyncAt      *time.Time
+	LastTemplateSyncAt     *time.Time
+	LastConversationSyncAt *time.Time
+	PermissionStatus       string
+}
+
 type Service struct {
 	repo      Repository
 	teams     team.Repository
 	workspace *workspace.Service
 	rbac      *rbac.Service
+	sync      SyncSummaryProvider
 }
 
-func NewService(repo Repository, teams team.Repository, workspaceSvc *workspace.Service, rbacSvc *rbac.Service) *Service {
-	return &Service{repo: repo, teams: teams, workspace: workspaceSvc, rbac: rbacSvc}
+func NewService(repo Repository, teams team.Repository, workspaceSvc *workspace.Service, rbacSvc *rbac.Service, sync SyncSummaryProvider) *Service {
+	return &Service{repo: repo, teams: teams, workspace: workspaceSvc, rbac: rbacSvc, sync: sync}
 }
 
 func (s *Service) GetOverview(ctx context.Context, teamID, userID uuid.UUID, actorRole string) (*Overview, error) {
@@ -169,7 +186,7 @@ func (s *Service) GetOverview(ctx context.Context, teamID, userID uuid.UUID, act
 		readinessScore = s.workspace.ReadinessScoreFromSnapshot(ctx, teamID)
 	}
 
-	return &Overview{
+	overview := &Overview{
 		Contacts:                contacts,
 		Channels:                channels,
 		Campaigns:               campaigns,
@@ -179,5 +196,14 @@ func (s *Service) GetOverview(ctx context.Context, teamID, userID uuid.UUID, act
 		AvgFirstResponseSeconds: avgFirst,
 		AvgResolutionSeconds:    avgResolution,
 		ReadinessScore:          readinessScore,
-	}, nil
+	}
+	if s.sync != nil {
+		if summary, err := s.sync.TeamSyncSummary(ctx, teamID); err == nil && summary != nil {
+			overview.LastContactSyncAt = summary.LastContactSyncAt
+			overview.LastTemplateSyncAt = summary.LastTemplateSyncAt
+			overview.LastConversationSyncAt = summary.LastConversationSyncAt
+			overview.PermissionStatus = summary.PermissionStatus
+		}
+	}
+	return overview, nil
 }

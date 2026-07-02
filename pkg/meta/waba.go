@@ -10,10 +10,11 @@ import (
 )
 
 type WABA struct {
-	ID                 string `json:"id"`
-	Name               string `json:"name"`
-	TimezoneID         string `json:"timezone_id"`
+	ID                       string `json:"id"`
+	Name                     string `json:"name"`
+	TimezoneID               string `json:"timezone_id"`
 	MessageTemplateNamespace string `json:"message_template_namespace"`
+	PrimaryFundingID         string `json:"primary_funding_id"`
 }
 
 type Business struct {
@@ -23,7 +24,7 @@ type Business struct {
 
 func (c *Client) GetWABA(ctx context.Context, wabaID, accessToken string) (*WABA, error) {
 	endpoint := fmt.Sprintf(
-		"https://graph.facebook.com/%s/%s?fields=id,name,timezone_id,message_template_namespace",
+		"https://graph.facebook.com/%s/%s?fields=id,name,timezone_id,message_template_namespace,primary_funding_id",
 		c.apiVersion,
 		wabaID,
 	)

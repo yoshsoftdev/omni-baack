@@ -7,21 +7,26 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/api/v1/dto"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
+	"github.com/omnichannel/omni-chan-v2/internal/channelsync"
 	metasvc "github.com/omnichannel/omni-chan-v2/internal/meta"
 )
 
 type ChannelHandler struct {
-	svc             *channel.Service
-	health          *metasvc.HealthService
-	embeddedSignup  *metasvc.EmbeddedSignupService
+	svc            *channel.Service
+	health         *metasvc.HealthService
+	embeddedSignup *metasvc.EmbeddedSignupService
+	payment        *metasvc.PaymentService
+	sync           *channelsync.Service
 }
 
 func NewChannelHandler(
 	svc *channel.Service,
 	health *metasvc.HealthService,
 	embeddedSignup *metasvc.EmbeddedSignupService,
+	payment *metasvc.PaymentService,
+	syncSvc *channelsync.Service,
 ) *ChannelHandler {
-	return &ChannelHandler{svc: svc, health: health, embeddedSignup: embeddedSignup}
+	return &ChannelHandler{svc: svc, health: health, embeddedSignup: embeddedSignup, payment: payment, sync: syncSvc}
 }
 
 type createChannelRequest struct {
@@ -32,6 +37,7 @@ type createChannelRequest struct {
 	AccessToken     string `json:"access_token"`
 	WABAID          string `json:"waba_id"`
 	PhoneNumberID   string `json:"phone_number_id"`
+	BusinessID      string `json:"business_id"`
 }
 
 type updateChannelRequest struct {
@@ -122,6 +128,7 @@ func (h *ChannelHandler) Create(c *fiber.Ctx) error {
 			AccessToken:   req.AccessToken,
 			WABAID:        req.WABAID,
 			PhoneNumberID: req.PhoneNumberID,
+			BusinessID:    optionalString(req.BusinessID),
 		}
 		if connType == nil {
 			ct := channel.ConnectionManual
@@ -133,6 +140,7 @@ func (h *ChannelHandler) Create(c *fiber.Ctx) error {
 		Provider:       req.Provider,
 		ConnectionType: connType,
 		PhoneNumber:    optionalString(req.PhoneNumber),
+		BusinessID:     optionalString(req.BusinessID),
 		Manual:         manual,
 	})
 	if err != nil {
@@ -279,4 +287,137 @@ func (h *ChannelHandler) GetEmbeddedSignupStatus(c *fiber.Ctx) error {
 		return mapError(c, err)
 	}
 	return response.OK(c, "ok", result)
+}
+
+func (h *ChannelHandler) GetPaymentStatus(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid channel id")
+	}
+	if h.payment == nil {
+		return response.FeatureNotAvailable(c, "payment status checks are not configured")
+	}
+	result, err := h.payment.GetPaymentStatus(c.Context(), actor.TeamID, id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", result)
+}
+
+func (h *ChannelHandler) CreatePaymentLink(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid channel id")
+	}
+	if h.payment == nil {
+		return response.FeatureNotAvailable(c, "payment setup is not configured")
+	}
+	result, err := h.payment.GetPaymentLink(c.Context(), actor.TeamID, id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", result)
+}
+
+func (h *ChannelHandler) GetSyncStatus(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid channel id")
+	}
+	if h.sync == nil {
+		return response.FeatureNotAvailable(c, "channel synchronization is not configured")
+	}
+	result, err := h.sync.GetStatus(c.Context(), actor.TeamID, actor.UserID, actor.Role, id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", result)
+}
+
+func (h *ChannelHandler) SyncContacts(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid channel id")
+	}
+	if h.sync == nil {
+		return response.FeatureNotAvailable(c, "channel synchronization is not configured")
+	}
+	result, err := h.sync.SyncContacts(c.Context(), actor.TeamID, actor.UserID, actor.Role, id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "contacts synchronized", result)
+}
+
+func (h *ChannelHandler) SyncConversations(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid channel id")
+	}
+	if h.sync == nil {
+		return response.FeatureNotAvailable(c, "channel synchronization is not configured")
+	}
+	result, err := h.sync.SyncConversations(c.Context(), actor.TeamID, actor.UserID, actor.Role, id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "conversation synchronization completed", result)
+}
+
+func (h *ChannelHandler) GetPermissions(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid channel id")
+	}
+	if h.sync == nil {
+		return response.FeatureNotAvailable(c, "channel synchronization is not configured")
+	}
+	result, err := h.sync.GetPermissions(c.Context(), actor.TeamID, actor.UserID, actor.Role, id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", result)
+}
+
+func (h *ChannelHandler) ReauthorizePermissions(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid channel id")
+	}
+	if h.embeddedSignup == nil {
+		return response.FeatureNotAvailable(c, "embedded signup is not configured")
+	}
+	result, err := h.embeddedSignup.StartEmbeddedSignup(c.Context(), actor.TeamID, id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "meta reauthorization started", result)
 }

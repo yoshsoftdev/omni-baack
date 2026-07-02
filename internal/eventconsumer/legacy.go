@@ -8,19 +8,21 @@ import (
 
 	"github.com/omnichannel/omni-chan-v2/internal/message"
 	"github.com/omnichannel/omni-chan-v2/internal/onboarding"
+	"github.com/omnichannel/omni-chan-v2/internal/channelsync"
 	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
 	sharedevents "github.com/omnichannel/omni-chan-v2/shared/events"
 )
 
 // LegacyConsumer handles pre-Phase-11.3 events.> envelopes.
 type LegacyConsumer struct {
-	messages   *message.Service
-	onboarding *onboarding.Service
-	log        *slog.Logger
+	messages    *message.Service
+	onboarding  *onboarding.Service
+	channelSync *channelsync.Service
+	log         *slog.Logger
 }
 
-func NewLegacyConsumer(messages *message.Service, onboarding *onboarding.Service, log *slog.Logger) *LegacyConsumer {
-	return &LegacyConsumer{messages: messages, onboarding: onboarding, log: log}
+func NewLegacyConsumer(messages *message.Service, onboarding *onboarding.Service, channelSync *channelsync.Service, log *slog.Logger) *LegacyConsumer {
+	return &LegacyConsumer{messages: messages, onboarding: onboarding, channelSync: channelSync, log: log}
 }
 
 func (c *LegacyConsumer) Handle(ctx context.Context, envelope sharedevents.Envelope) error {
@@ -69,6 +71,14 @@ func (c *LegacyConsumer) handleAccountUpdate(ctx context.Context, payload shared
 	events, err := metaclient.ParseCoexWebhookPayload([]byte(wrapped))
 	if err != nil {
 		return fmt.Errorf("parse account update: %w", err)
+	}
+	if c.channelSync != nil {
+		if err := c.channelSync.HandleCoexWebhook(ctx, events); err != nil {
+			return err
+		}
+	}
+	if c.onboarding == nil {
+		return nil
 	}
 	return c.onboarding.HandleWebhook(ctx, events)
 }

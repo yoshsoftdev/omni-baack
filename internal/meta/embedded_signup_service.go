@@ -24,14 +24,20 @@ type WorkspaceReadinessRefresher interface {
 	RefreshReadinessInternal(ctx context.Context, teamID uuid.UUID) error
 }
 
+// PermissionRefresher updates channel sync permissions after OAuth reconnect.
+type PermissionRefresher interface {
+	RefreshPermissionsAfterConnect(ctx context.Context, teamID, channelID uuid.UUID, accessToken string) error
+}
+
 type EmbeddedSignupService struct {
-	meta      MetaClient
-	channels  channel.Repository
-	sessions  EmbeddedSignupSessionRepository
-	cipher    *cryptoutil.TokenCipher
-	cfg       config.MetaConfig
-	readiness WorkspaceReadinessRefresher
-	log       *slog.Logger
+	meta                MetaClient
+	channels            channel.Repository
+	sessions            EmbeddedSignupSessionRepository
+	cipher              *cryptoutil.TokenCipher
+	cfg                 config.MetaConfig
+	readiness           WorkspaceReadinessRefresher
+	permissionRefresher PermissionRefresher
+	log                 *slog.Logger
 }
 
 func NewEmbeddedSignupService(
@@ -55,6 +61,10 @@ func NewEmbeddedSignupService(
 		readiness: readiness,
 		log:       log,
 	}
+}
+
+func (s *EmbeddedSignupService) SetPermissionRefresher(refresher PermissionRefresher) {
+	s.permissionRefresher = refresher
 }
 
 type StartEmbeddedSignupResult struct {
@@ -262,6 +272,17 @@ func (s *EmbeddedSignupService) CompleteEmbeddedSignup(
 		UpdatedAt:      now,
 	}); err != nil {
 		return nil, serviceerrors.MapRepository(err)
+	}
+
+	if s.permissionRefresher != nil {
+		if err := s.permissionRefresher.RefreshPermissionsAfterConnect(ctx, teamID, ch.ID, tokenResp.AccessToken); err != nil {
+			s.log.Warn("embedded_signup_permission_refresh_failed",
+				"event", "embedded_signup_permission_refresh_failed",
+				"team_id", teamID.String(),
+				"channel_id", channelID.String(),
+				"error", err.Error(),
+			)
+		}
 	}
 
 	ob := &channel.Onboarding{ChannelID: ch.ID, Status: channel.OnboardingCompleted, CompletedAt: &now, UpdatedAt: now}

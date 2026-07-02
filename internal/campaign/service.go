@@ -26,6 +26,11 @@ type Service struct {
 	segments    segment.Repository
 	rbac        *rbac.Service
 	cancelFlags CancelFlagStore
+	payment     CampaignPaymentChecker
+}
+
+type CampaignPaymentChecker interface {
+	ChannelPaymentConfigured(ctx context.Context, teamID, channelID uuid.UUID) (bool, error)
 }
 
 // ServiceOption configures optional campaign service dependencies.
@@ -35,6 +40,13 @@ type ServiceOption func(*Service)
 func WithCancelFlags(store CancelFlagStore) ServiceOption {
 	return func(s *Service) {
 		s.cancelFlags = store
+	}
+}
+
+// WithPaymentChecker enforces Meta payment configuration before campaign send.
+func WithPaymentChecker(checker CampaignPaymentChecker) ServiceOption {
+	return func(s *Service) {
+		s.payment = checker
 	}
 }
 
