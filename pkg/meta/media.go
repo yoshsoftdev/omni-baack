@@ -17,6 +17,13 @@ type uploadMediaResponse struct {
 	ID string `json:"id"`
 }
 
+type MediaMetadata struct {
+	ID       string `json:"id"`
+	URL      string `json:"url"`
+	MimeType string `json:"mime_type"`
+	FileSize int64  `json:"file_size"`
+}
+
 func (c *Client) UploadMedia(ctx context.Context, phoneNumberID, accessToken, mimeType, filename string, body io.Reader, size int64) (string, error) {
 	mimeType = strings.TrimSpace(mimeType)
 	if mimeType == "" {
@@ -124,4 +131,57 @@ func (c *Client) SendMediaMessage(ctx context.Context, phoneNumberID, accessToke
 		return "", fmt.Errorf("meta send: empty message id")
 	}
 	return result.Messages[0].ID, nil
+}
+
+func (c *Client) GetMediaMetadata(ctx context.Context, mediaID, phoneNumberID, accessToken string) (*MediaMetadata, error) {
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return nil, fmt.Errorf("media id is required")
+	}
+	query := ""
+	if strings.TrimSpace(phoneNumberID) != "" {
+		query = "?phone_number_id=" + phoneNumberID
+	}
+	url := fmt.Sprintf("%s/%s/%s%s", c.graphURL(""), c.apiVersion, mediaID, query)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("meta get media metadata: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("meta get media metadata error: %s", strings.TrimSpace(string(respBody)))
+	}
+	var result MediaMetadata
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("decode media metadata: %w", err)
+	}
+	if strings.TrimSpace(result.URL) == "" {
+		return nil, fmt.Errorf("meta media metadata missing url")
+	}
+	return &result, nil
+}
+
+func (c *Client) DownloadMedia(ctx context.Context, mediaURL, accessToken string) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSpace(mediaURL), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("meta download media: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("meta download media error: %s", strings.TrimSpace(string(body)))
+	}
+	return resp.Body, nil
 }

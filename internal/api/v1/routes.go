@@ -149,6 +149,10 @@ func Register(router fiber.Router, deps Deps) {
 		conversations.Post("/:id/assign", deps.Conversation.Assign)
 		conversations.Patch("/:id/status", deps.Conversation.UpdateStatus)
 		conversations.Post("/:id/read", deps.Conversation.MarkRead)
+		conversations.Get("/:id/activities", deps.Conversation.ListActivities)
+		conversations.Get("/:id/notes", deps.Conversation.ListNotes)
+		conversations.Post("/:id/notes", deps.Conversation.CreateNote)
+		conversations.Delete("/:id/notes/:noteId", deps.Conversation.DeleteNote)
 		if deps.Message != nil {
 			conversations.Get("/:id/messages", deps.Message.List)
 			conversations.Post("/:id/messages", deps.Message.Send)

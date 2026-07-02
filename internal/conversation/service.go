@@ -21,6 +21,7 @@ type Service struct {
 	teams         team.Repository
 	rbac          *rbac.Service
 	inbox         InboxSync
+	collaboration *CollaborationService
 }
 
 // InboxSync publishes inbox side-effects (realtime, assignment).
@@ -46,6 +47,10 @@ func NewService(
 
 func (s *Service) SetInboxSync(inbox InboxSync) {
 	s.inbox = inbox
+}
+
+func (s *Service) SetCollaboration(collaboration *CollaborationService) {
+	s.collaboration = collaboration
 }
 
 type CreateInput struct {
@@ -108,6 +113,9 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 	if err := serviceerrors.MapRepository(s.conversations.Create(ctx, c)); err != nil {
 		return nil, err
 	}
+	if s.collaboration != nil {
+		_ = s.collaboration.RecordOpened(ctx, teamID, c.ID, userID)
+	}
 	return c, nil
 }
 
@@ -149,6 +157,10 @@ func (s *Service) Assign(ctx context.Context, teamID, userID uuid.UUID, actorRol
 	if err := s.ensureMember(ctx, teamID, userID); err != nil {
 		return nil, err
 	}
+	prev, err := s.conversations.FindByID(ctx, teamID, conversationID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
 	if assigneeID != nil {
 		if _, err := s.teams.FindMemberByUser(ctx, teamID, *assigneeID); err != nil {
 			if err == team.ErrMemberNotFound {
@@ -164,6 +176,15 @@ func (s *Service) Assign(ctx context.Context, teamID, userID uuid.UUID, actorRol
 	if err != nil {
 		return nil, serviceerrors.MapRepository(err)
 	}
+	if s.collaboration != nil {
+		_ = s.collaboration.RecordAssignment(ctx, AssignmentActivityInput{
+			TeamID:         teamID,
+			ConversationID: conversationID,
+			ActorID:        userID,
+			Previous:       prev.AssignedTo,
+			Assignee:       assigneeID,
+		})
+	}
 	if s.inbox != nil {
 		_ = s.inbox.OnAssignment(ctx, teamID, conv)
 	}
@@ -171,7 +192,11 @@ func (s *Service) Assign(ctx context.Context, teamID, userID uuid.UUID, actorRol
 }
 
 func (s *Service) UpdateStatus(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID, status Status) (*Conversation, error) {
-	if err := s.authorize(actorRole, rbac.PermConversationReply); err != nil {
+	if status == StatusClosed || status == StatusResolved {
+		if err := s.authorize(actorRole, rbac.PermConversationClose); err != nil {
+			return nil, err
+		}
+	} else if err := s.authorize(actorRole, rbac.PermConversationReply); err != nil {
 		return nil, err
 	}
 	if err := s.ensureMember(ctx, teamID, userID); err != nil {
@@ -179,6 +204,10 @@ func (s *Service) UpdateStatus(ctx context.Context, teamID, userID uuid.UUID, ac
 	}
 	if err := validateStatus(status); err != nil {
 		return nil, err
+	}
+	prev, err := s.conversations.FindByID(ctx, teamID, conversationID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
 	}
 	if status == StatusResolved || status == StatusClosed {
 		if err := serviceerrors.MapRepository(s.conversations.UpdateStatus(ctx, teamID, conversationID, status)); err != nil {
@@ -190,6 +219,15 @@ func (s *Service) UpdateStatus(ctx context.Context, teamID, userID uuid.UUID, ac
 	conv, err := s.conversations.FindByID(ctx, teamID, conversationID)
 	if err != nil {
 		return nil, serviceerrors.MapRepository(err)
+	}
+	if s.collaboration != nil {
+		_ = s.collaboration.RecordStatusChange(ctx, StatusActivityInput{
+			TeamID:         teamID,
+			ConversationID: conversationID,
+			ActorID:        &userID,
+			Previous:       prev.Status,
+			Next:           conv.Status,
+		})
 	}
 	if s.inbox != nil {
 		_ = s.inbox.OnStatusChange(ctx, teamID, conv)

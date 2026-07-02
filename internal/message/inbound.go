@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -83,6 +84,27 @@ func (s *Service) IngestInbound(ctx context.Context, input InboundInput) (*Messa
 	return m, true, nil
 }
 
+func (s *Service) AttachToMessage(ctx context.Context, teamID, messageID uuid.UUID, attachment *Attachment) error {
+	if s.attachments == nil || attachment == nil {
+		return nil
+	}
+	if attachment.StorageObjectID == uuid.Nil {
+		return fmt.Errorf("storage object id is required")
+	}
+	if err := s.attachments.Create(ctx, &MessageAttachment{
+		ID:              uuid.New(),
+		MessageID:       messageID,
+		TeamID:          teamID,
+		StorageObjectID: attachment.StorageObjectID,
+		MimeType:        attachment.MimeType,
+		SizeBytes:       attachment.SizeBytes,
+		Filename:        attachment.Filename,
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
 // ApplyDeliveryStatus updates message delivery status with monotonic progression.
 func (s *Service) ApplyDeliveryStatus(ctx context.Context, wamid string, status Status) error {
 	wamid = strings.TrimSpace(wamid)
@@ -142,6 +164,8 @@ func ContentTypeFromMeta(messageType string) ContentType {
 		return ContentDocument
 	case "template":
 		return ContentTemplate
+	case "sticker":
+		return ContentImage
 	default:
 		return ContentOther
 	}

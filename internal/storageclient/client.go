@@ -1,11 +1,14 @@
 package storageclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"time"
 
@@ -101,6 +104,66 @@ func (c *Client) Download(ctx context.Context, teamID, objectID uuid.UUID) (io.R
 		return nil, nil, fmt.Errorf("storage download error: %s", strings.TrimSpace(string(body)))
 	}
 	return resp.Body, meta, nil
+}
+
+func (c *Client) Upload(ctx context.Context, teamID uuid.UUID, namespace, filename, mimeType string, body io.Reader) (*StoredObject, error) {
+	if strings.TrimSpace(namespace) == "" {
+		namespace = "attachments"
+	}
+	if strings.TrimSpace(filename) == "" {
+		filename = "attachment"
+	}
+	var payload bytes.Buffer
+	writer := multipart.NewWriter(&payload)
+	_ = writer.WriteField("namespace", namespace)
+
+	mimeType = strings.TrimSpace(mimeType)
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	fileHeader := textproto.MIMEHeader{}
+	fileHeader.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, filename))
+	fileHeader.Set("Content-Type", mimeType)
+	part, err := writer.CreatePart(fileHeader)
+	if err != nil {
+		return nil, fmt.Errorf("storage upload create part: %w", err)
+	}
+	if _, err := io.Copy(part, body); err != nil {
+		return nil, fmt.Errorf("storage upload copy body: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("storage upload close writer: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/v1/storage/upload", c.baseURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &payload)
+	if err != nil {
+		return nil, err
+	}
+	c.applyInternalHeaders(req, teamID)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("storage upload request: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("storage upload error: %s", strings.TrimSpace(string(respBody)))
+	}
+
+	var envelope apiResponse
+	if err := json.Unmarshal(respBody, &envelope); err != nil {
+		return nil, fmt.Errorf("decode storage upload: %w", err)
+	}
+	if envelope.Data.Object.ID == uuid.Nil {
+		return nil, fmt.Errorf("storage upload missing object")
+	}
+	return &envelope.Data.Object, nil
 }
 
 func (c *Client) applyInternalHeaders(req *http.Request, teamID uuid.UUID) {

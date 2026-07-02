@@ -33,6 +33,9 @@ type Deps struct {
 	Contacts      *contact.Service
 	Conversations *conversation.Service
 	Messages      *message.Service
+	MetaMedia     MetaMediaClient
+	TokenCipher   TokenCipher
+	Storage       StorageUploader
 	Templates     template.Repository
 	Onboarding    *onboarding.Service
 	Inbox         Syncer
@@ -56,7 +59,7 @@ func NewRegistry(deps Deps) *Registry {
 
 	return &Registry{
 		legacy:    NewLegacyConsumer(deps.Messages, deps.Onboarding, log),
-		messages:  NewMessageHandler(tenantResolver, deps.Contacts, deps.Conversations, deps.Messages, deps.Inbox, store, metrics, log),
+		messages:  NewMessageHandler(tenantResolver, deps.Channels, deps.Contacts, deps.Conversations, deps.Messages, deps.Inbox, deps.MetaMedia, deps.TokenCipher, deps.Storage, store, metrics, log),
 		statuses:  NewStatusHandler(tenantResolver, deps.Messages, deps.Delivery, store, metrics, log),
 		templates: NewTemplateHandler(tenantResolver, deps.Channels, deps.Templates, store, metrics, log),
 		channels:  NewChannelHandler(tenantResolver, deps.Channels, store, metrics, log),

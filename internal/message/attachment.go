@@ -24,13 +24,14 @@ type Attachment struct {
 func ContentTypeFromMIME(mimeType string) (ContentType, error) {
 	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
 	switch mimeType {
-	case "image/jpeg", "image/png":
+	case "image/jpeg", "image/png", "image/webp":
 		return ContentImage, nil
 	case "video/mp4", "video/3gpp":
 		return ContentVideo, nil
 	case "audio/aac", "audio/mp4", "audio/mpeg", "audio/amr", "audio/ogg", "audio/ogg; codecs=opus":
 		return ContentAudio, nil
 	case "application/pdf",
+		"application/vnd.ms-excel",
 		"application/vnd.ms-powerpoint",
 		"application/msword",
 		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",

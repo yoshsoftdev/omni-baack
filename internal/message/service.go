@@ -9,6 +9,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
+	"github.com/omnichannel/omni-chan-v2/internal/user"
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
@@ -19,6 +20,7 @@ type Service struct {
 	attachments   AttachmentRepository
 	conversations conversation.Repository
 	teams         team.Repository
+	users         user.Repository
 	rbac          *rbac.Service
 	outbound      *OutboundDeps
 }
@@ -28,6 +30,7 @@ func NewService(
 	attachments AttachmentRepository,
 	conversations conversation.Repository,
 	teams team.Repository,
+	users user.Repository,
 	rbacSvc *rbac.Service,
 	outbound *OutboundDeps,
 ) *Service {
@@ -36,6 +39,7 @@ func NewService(
 		attachments:   attachments,
 		conversations: conversations,
 		teams:         teams,
+		users:         users,
 		rbac:          rbacSvc,
 		outbound:      outbound,
 	}
@@ -154,7 +158,48 @@ func (s *Service) ListByConversation(ctx context.Context, teamID, userID uuid.UU
 			}
 		}
 	}
+	if err := s.enrichSenderNames(ctx, result.Items); err != nil {
+		return repository.Page[Message]{}, err
+	}
 	return result, nil
+}
+
+func (s *Service) enrichSenderNames(ctx context.Context, items []Message) error {
+	if s.users == nil {
+		return nil
+	}
+	cache := make(map[string]string)
+	for i := range items {
+		if items[i].Direction != DirectionOutbound {
+			continue
+		}
+		senderID := strings.TrimSpace(items[i].Sender)
+		if senderID == "" {
+			continue
+		}
+		if name, ok := cache[senderID]; ok {
+			if name != "" {
+				items[i].SenderName = &name
+			}
+			continue
+		}
+		id, err := uuid.Parse(senderID)
+		if err != nil {
+			cache[senderID] = ""
+			continue
+		}
+		u, err := s.users.FindByID(ctx, id)
+		if err != nil || u == nil {
+			cache[senderID] = ""
+			continue
+		}
+		name := strings.TrimSpace(u.Name)
+		cache[senderID] = name
+		if name != "" {
+			items[i].SenderName = &name
+		}
+	}
+	return nil
 }
 
 func (s *Service) UpdateDeliveryStatus(ctx context.Context, wamid string, status Status) error {

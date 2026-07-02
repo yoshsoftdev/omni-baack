@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,7 +19,9 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/eventconsumer/resolver"
 	"github.com/omnichannel/omni-chan-v2/internal/inbox"
 	"github.com/omnichannel/omni-chan-v2/internal/message"
+	"github.com/omnichannel/omni-chan-v2/internal/storageclient"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
+	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 	sharedevents "github.com/omnichannel/omni-chan-v2/shared/events"
 )
@@ -29,21 +34,42 @@ type Syncer interface {
 
 type MessageHandler struct {
 	resolver      *resolver.TenantResolver
+	channels      channel.Repository
 	contacts      *contact.Service
 	conversations *conversation.Service
 	messages      *message.Service
 	inbox         Syncer
+	metaMedia     MetaMediaClient
+	tokenCipher   TokenCipher
+	storage       StorageUploader
 	idempotency   idempotency.Store
 	metrics       *Metrics
 	log           *slog.Logger
 }
 
+type MetaMediaClient interface {
+	GetMediaMetadata(ctx context.Context, mediaID, phoneNumberID, accessToken string) (*metaclient.MediaMetadata, error)
+	DownloadMedia(ctx context.Context, mediaURL, accessToken string) (io.ReadCloser, error)
+}
+
+type TokenCipher interface {
+	Decrypt(ciphertext []byte) (string, error)
+}
+
+type StorageUploader interface {
+	Upload(ctx context.Context, teamID uuid.UUID, namespace, filename, mimeType string, body io.Reader) (*storageclient.StoredObject, error)
+}
+
 func NewMessageHandler(
 	resolver *resolver.TenantResolver,
+	channels channel.Repository,
 	contacts *contact.Service,
 	conversations *conversation.Service,
 	messages *message.Service,
 	inbox Syncer,
+	metaMedia MetaMediaClient,
+	tokenCipher TokenCipher,
+	storage StorageUploader,
 	store idempotency.Store,
 	metrics *Metrics,
 	log *slog.Logger,
@@ -53,10 +79,14 @@ func NewMessageHandler(
 	}
 	return &MessageHandler{
 		resolver:      resolver,
+		channels:      channels,
 		contacts:      contacts,
 		conversations: conversations,
 		messages:      messages,
 		inbox:         inbox,
+		metaMedia:     metaMedia,
+		tokenCipher:   tokenCipher,
+		storage:       storage,
 		idempotency:   store,
 		metrics:       metrics,
 		log:           log,
@@ -111,6 +141,18 @@ func (h *MessageHandler) process(ctx context.Context, event sharedevents.Canonic
 	if !event.OccurredAt.IsZero() {
 		receivedAt = event.OccurredAt
 	}
+	attachment, attachErr := h.syncInboundAttachment(ctx, tenant, payload)
+	if attachErr != nil {
+		if h.log == nil {
+			h.log = slog.Default()
+		}
+		h.log.Warn("inbound media sync failed",
+			"event_id", event.EventID,
+			"wamid", payload.WAMID,
+			"message_type", payload.MessageType,
+			"error", attachErr,
+		)
+	}
 
 	msg, msgCreated, err := h.messages.IngestInbound(ctx, message.InboundInput{
 		TeamID:         tenant.TeamID,
@@ -125,6 +167,12 @@ func (h *MessageHandler) process(ctx context.Context, event sharedevents.Canonic
 	})
 	if err != nil {
 		return err
+	}
+	if msgCreated && attachment != nil {
+		if err := h.messages.AttachToMessage(ctx, tenant.TeamID, msg.ID, attachment); err != nil {
+			return err
+		}
+		msg.Attachment = attachment
 	}
 	if msgCreated {
 		h.metrics.IncMessagesCreated()
@@ -159,6 +207,157 @@ func (h *MessageHandler) process(ctx context.Context, event sharedevents.Canonic
 		"event_type", event.Type,
 	)
 	return nil
+}
+
+func (h *MessageHandler) syncInboundAttachment(ctx context.Context, tenant *resolver.TenantContext, payload sharedevents.MetaMessagePayload) (*message.Attachment, error) {
+	mediaID, fallbackFilename := extractInboundMediaRef(payload.MessageType, payload.Raw)
+	if strings.TrimSpace(mediaID) == "" {
+		return nil, nil
+	}
+	if h.channels == nil || h.metaMedia == nil || h.tokenCipher == nil || h.storage == nil {
+		return nil, fmt.Errorf("inbound media dependencies are not configured")
+	}
+	creds, err := h.channels.FindCredentials(ctx, tenant.ChannelID)
+	if err != nil {
+		return nil, err
+	}
+	token, err := h.tokenCipher.Decrypt(creds.AccessTokenEnc)
+	if err != nil {
+		return nil, err
+	}
+	metaInfo, err := h.metaMedia.GetMediaMetadata(ctx, mediaID, payload.PhoneNumberID, token)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := h.metaMedia.DownloadMedia(ctx, metaInfo.URL, token)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	mimeType := normalizeInboundMIME(metaInfo.MimeType, payload.MessageType)
+	filename := buildInboundFilename(fallbackFilename, metaInfo.ID, mimeType)
+	uploaded, err := h.storage.Upload(ctx, tenant.TeamID, "attachments", filename, mimeType, reader)
+	if err != nil {
+		return nil, err
+	}
+	return &message.Attachment{
+		StorageObjectID: uploaded.ID,
+		MimeType:        uploaded.MimeType,
+		SizeBytes:       uploaded.SizeBytes,
+		Filename:        filename,
+	}, nil
+}
+
+func extractInboundMediaRef(messageType string, raw json.RawMessage) (mediaID string, filename string) {
+	var media struct {
+		Image    *struct{ ID string `json:"id"` } `json:"image"`
+		Video    *struct{ ID string `json:"id"` } `json:"video"`
+		Audio    *struct{ ID string `json:"id"` } `json:"audio"`
+		Document *struct {
+			ID       string `json:"id"`
+			Filename string `json:"filename"`
+		} `json:"document"`
+		Sticker *struct{ ID string `json:"id"` } `json:"sticker"`
+	}
+	if err := json.Unmarshal(raw, &media); err != nil {
+		return "", ""
+	}
+	switch strings.ToLower(strings.TrimSpace(messageType)) {
+	case "image":
+		if media.Image != nil {
+			return strings.TrimSpace(media.Image.ID), ""
+		}
+	case "video":
+		if media.Video != nil {
+			return strings.TrimSpace(media.Video.ID), ""
+		}
+	case "audio":
+		if media.Audio != nil {
+			return strings.TrimSpace(media.Audio.ID), ""
+		}
+	case "document":
+		if media.Document != nil {
+			return strings.TrimSpace(media.Document.ID), strings.TrimSpace(media.Document.Filename)
+		}
+	case "sticker":
+		if media.Sticker != nil {
+			return strings.TrimSpace(media.Sticker.ID), ""
+		}
+	}
+	return "", ""
+}
+
+func normalizeInboundMIME(metaMIME, messageType string) string {
+	metaMIME = strings.ToLower(strings.TrimSpace(metaMIME))
+	if metaMIME != "" && metaMIME != "application/octet-stream" {
+		return metaMIME
+	}
+	switch strings.ToLower(strings.TrimSpace(messageType)) {
+	case "image":
+		return "image/jpeg"
+	case "sticker":
+		return "image/webp"
+	case "video":
+		return "video/mp4"
+	case "audio":
+		return "audio/ogg"
+	case "document":
+		return "application/pdf"
+	default:
+		return metaMIME
+	}
+}
+
+func buildInboundFilename(fallbackFilename, mediaID, mimeType string) string {
+	if name := strings.TrimSpace(fallbackFilename); name != "" {
+		return filepath.Base(name)
+	}
+	base := strings.TrimSpace(mediaID)
+	if base == "" {
+		base = "attachment"
+	}
+	ext := ""
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "image/jpeg":
+		ext = ".jpg"
+	case "image/png":
+		ext = ".png"
+	case "image/webp":
+		ext = ".webp"
+	case "video/mp4":
+		ext = ".mp4"
+	case "video/3gpp":
+		ext = ".3gp"
+	case "audio/aac":
+		ext = ".aac"
+	case "audio/amr":
+		ext = ".amr"
+	case "audio/mpeg":
+		ext = ".mp3"
+	case "audio/mp4":
+		ext = ".m4a"
+	case "audio/ogg":
+		ext = ".ogg"
+	case "application/pdf":
+		ext = ".pdf"
+	case "application/msword":
+		ext = ".doc"
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		ext = ".docx"
+	case "application/vnd.ms-powerpoint":
+		ext = ".ppt"
+	case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+		ext = ".pptx"
+	case "application/vnd.ms-excel":
+		ext = ".xls"
+	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+		ext = ".xlsx"
+	}
+	if ext != "" {
+		return base + ext
+	}
+	return base
 }
 
 // CampaignDelivery updates campaign recipient delivery state from status webhooks.

@@ -11,11 +11,12 @@ import (
 )
 
 type ConversationHandler struct {
-	svc *conversation.Service
+	svc           *conversation.Service
+	collaboration *conversation.CollaborationService
 }
 
-func NewConversationHandler(svc *conversation.Service) *ConversationHandler {
-	return &ConversationHandler{svc: svc}
+func NewConversationHandler(svc *conversation.Service, collaboration *conversation.CollaborationService) *ConversationHandler {
+	return &ConversationHandler{svc: svc, collaboration: collaboration}
 }
 
 type createConversationRequest struct {
@@ -25,11 +26,16 @@ type createConversationRequest struct {
 }
 
 type assignConversationRequest struct {
-	UserID *string `json:"user_id"`
+	UserID     *string `json:"user_id"`
+	AssigneeID *string `json:"assignee_id"`
 }
 
 type updateConversationStatusRequest struct {
 	Status string `json:"status"`
+}
+
+type createNoteRequest struct {
+	Content string `json:"content"`
 }
 
 func (h *ConversationHandler) List(c *fiber.Ctx) error {
@@ -125,10 +131,14 @@ func (h *ConversationHandler) Assign(c *fiber.Ctx) error {
 		return response.BadRequest(c, "invalid request body")
 	}
 	var assigneeID *uuid.UUID
-	if req.UserID != nil && strings.TrimSpace(*req.UserID) != "" {
-		parsed, err := parseUUIDFromString(*req.UserID)
+	rawAssignee := req.AssigneeID
+	if rawAssignee == nil {
+		rawAssignee = req.UserID
+	}
+	if rawAssignee != nil && strings.TrimSpace(*rawAssignee) != "" {
+		parsed, err := parseUUIDFromString(*rawAssignee)
 		if err != nil {
-			return response.BadRequest(c, "invalid user_id")
+			return response.BadRequest(c, "invalid assignee_id")
 		}
 		assigneeID = &parsed
 	}
@@ -173,4 +183,89 @@ func (h *ConversationHandler) MarkRead(c *fiber.Ctx) error {
 		return mapError(c, err)
 	}
 	return response.OK(c, "conversation marked read", conv)
+}
+
+func (h *ConversationHandler) ListActivities(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	if h.collaboration == nil {
+		return response.OK(c, "ok", []conversation.Activity{})
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid conversation id")
+	}
+	items, err := h.collaboration.ListActivities(c.Context(), actor.TeamID, actor.UserID, actor.Role, id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", items)
+}
+
+func (h *ConversationHandler) ListNotes(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	if h.collaboration == nil {
+		return response.OK(c, "ok", []conversation.Note{})
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid conversation id")
+	}
+	items, err := h.collaboration.ListNotes(c.Context(), actor.TeamID, actor.UserID, actor.Role, id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", items)
+}
+
+func (h *ConversationHandler) CreateNote(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	if h.collaboration == nil {
+		return response.BadRequest(c, "notes are unavailable")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid conversation id")
+	}
+	var req createNoteRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	note, err := h.collaboration.CreateNote(c.Context(), actor.TeamID, actor.UserID, actor.Role, id, conversation.CreateNoteInput{
+		Content: req.Content,
+	})
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.Created(c, "note created", note)
+}
+
+func (h *ConversationHandler) DeleteNote(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	if h.collaboration == nil {
+		return response.BadRequest(c, "notes are unavailable")
+	}
+	conversationID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid conversation id")
+	}
+	noteID, err := parseUUIDParam(c, "noteId")
+	if err != nil {
+		return response.BadRequest(c, "invalid note id")
+	}
+	if err := h.collaboration.DeleteNote(c.Context(), actor.TeamID, actor.UserID, actor.Role, conversationID, noteID); err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "note deleted", nil)
 }

@@ -9,8 +9,13 @@ import (
 )
 
 const (
-	EventConversationCreated = "conversation.created"
-	EventConversationUpdated = "conversation.updated"
+	EventConversationCreated   = "conversation.created"
+	EventConversationUpdated   = "conversation.updated"
+	EventConversationAssigned  = "conversation.assigned"
+	EventConversationReassigned = "conversation.reassigned"
+	EventConversationClosed    = "conversation.closed"
+	EventConversationReopened  = "conversation.reopened"
+	EventConversationNoteCreated = "conversation.note.created"
 	EventMessageCreated      = "message.created"
 	EventMessageStatusUpdate = "message.status.updated"
 	EventAssignmentUpdated   = "assignment.updated"

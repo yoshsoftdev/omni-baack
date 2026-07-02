@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/api"
 	"github.com/omnichannel/omni-chan-v2/internal/api/v1/handler"
 	v1 "github.com/omnichannel/omni-chan-v2/internal/api/v1"
@@ -156,12 +158,26 @@ func main() {
 	inboxRealtime := inbox.NewHubPublisher(wsHub)
 	inboxSync := inbox.NewSyncService(conversationRepo, inboxSettingsRepo, inboxAssignment, inboxRealtime)
 	presenceService := inbox.NewPresenceService(inbox.NewPresenceRepository(db))
+
+	collaborationService := conversation.NewCollaborationService(
+		conversation.NewActivityRepository(db),
+		conversation.NewNoteRepository(db),
+		conversationRepo,
+		teamRepo,
+		userRepo,
+		rbacService,
+		conversation.NewHubEventPublisher(func(ctx context.Context, teamID uuid.UUID, eventType string, data json.RawMessage) error {
+			return inboxRealtime.PublishTeamEvent(ctx, teamID, inbox.RealtimeEvent{Type: eventType, Data: data})
+		}),
+	)
+	conversationService.SetCollaboration(collaborationService)
+	inboxSync.SetCollaboration(collaborationService)
 	conversationService.SetInboxSync(inboxSync)
 
 	messageRepo := message.NewRepository(db)
 	attachmentRepo := message.NewAttachmentRepository(db)
 	storageClient := storageclient.New(cfg.StorageService.URL, cfg.NATS.InternalToken)
-	messageService := message.NewService(messageRepo, attachmentRepo, conversationRepo, teamRepo, rbacService, &message.OutboundDeps{
+	messageService := message.NewService(messageRepo, attachmentRepo, conversationRepo, teamRepo, userRepo, rbacService, &message.OutboundDeps{
 		Channels: channelRepo,
 		Contacts: contactRepo,
 		Meta:     metaClient,
@@ -193,7 +209,7 @@ func main() {
 	go deliveryReconciler.StartDaily(ctx)
 
 	if cfg.NATS.Enabled {
-		startEventConsumer(ctx, cfg, channelRepo, contactService, conversationService, messageService, templateRepo, onboardingService, inboxSync, campaignRepo, reportRepo, rdb, log)
+		startEventConsumer(ctx, cfg, channelRepo, contactService, conversationService, messageService, templateRepo, onboardingService, inboxSync, campaignRepo, reportRepo, tokenCipher, metaClient, storageClient, rdb, log)
 	}
 
 	app := api.NewRouter(api.Deps{
@@ -213,7 +229,7 @@ func main() {
 			Campaign:     handler.NewCampaignHandler(campaignService),
 			Operations:   handler.NewOperationsHandler(operationsService),
 			Report:       handler.NewReportHandler(reportService),
-			Conversation: handler.NewConversationHandler(conversationService),
+			Conversation: handler.NewConversationHandler(conversationService, collaborationService),
 			Message:           handler.NewMessageHandler(messageService, conversationService, inboxSync),
 			StorageServiceURL: cfg.StorageService.URL,
 			Dashboard:         handler.NewDashboardHandler(dashboardService),
@@ -254,6 +270,9 @@ func startEventConsumer(
 	inboxSync *inbox.SyncService,
 	campaignRepo campaign.Repository,
 	reportRepo report.Repository,
+	tokenCipher *cryptoutil.TokenCipher,
+	metaClient *metaclient.Client,
+	storageClient *storageclient.Client,
 	rdb *redisclient.Client,
 	log *logger.Logger,
 ) {
@@ -302,6 +321,9 @@ func startEventConsumer(
 		Contacts:      contactService,
 		Conversations: conversationService,
 		Messages:      messageService,
+		MetaMedia:     metaClient,
+		TokenCipher:   tokenCipher,
+		Storage:       storageClient,
 		Templates:     templateRepo,
 		Onboarding:    onboardingService,
 		Inbox:         inboxSync,

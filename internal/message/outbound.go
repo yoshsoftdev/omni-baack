@@ -185,6 +185,11 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 	if err != nil {
 		return nil, err
 	}
+	enriched := []Message{*msg}
+	if err := s.enrichSenderNames(ctx, enriched); err != nil {
+		return nil, err
+	}
+	*msg = enriched[0]
 	return msg, nil
 }
 

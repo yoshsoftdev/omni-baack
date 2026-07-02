@@ -41,6 +41,7 @@ type Message struct {
 	ChannelID      *uuid.UUID  `json:"channel_id,omitempty"`
 	Direction      Direction   `json:"direction"`
 	Sender         string      `json:"sender"`
+	SenderName     *string     `json:"sender_name,omitempty"`
 	Recipient      *string     `json:"recipient,omitempty"`
 	Content        string      `json:"content"`
 	ContentType    ContentType `json:"content_type"`

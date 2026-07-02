@@ -28,12 +28,18 @@ type OutboundParams struct {
 	Message      *message.Message
 }
 
+// CollaborationRecorder persists inbox timeline entries.
+type CollaborationRecorder interface {
+	RecordStatusChange(ctx context.Context, input conversation.StatusActivityInput) error
+}
+
 // SyncService coordinates inbox state and realtime projections.
 type SyncService struct {
 	conversations conversation.Repository
 	settings      SettingsRepository
 	assignment    *AssignmentEngine
 	realtime      RealtimePublisher
+	collaboration CollaborationRecorder
 }
 
 func NewSyncService(
@@ -48,6 +54,10 @@ func NewSyncService(
 		assignment:    assignment,
 		realtime:      realtime,
 	}
+}
+
+func (s *SyncService) SetCollaboration(collaboration CollaborationRecorder) {
+	s.collaboration = collaboration
 }
 
 func (s *SyncService) HandleInbound(ctx context.Context, p InboundParams) (*conversation.Conversation, error) {
@@ -86,6 +96,16 @@ func (s *SyncService) HandleInbound(ctx context.Context, p InboundParams) (*conv
 		return nil, err
 	}
 
+	if reopen && s.collaboration != nil {
+		_ = s.collaboration.RecordStatusChange(ctx, conversation.StatusActivityInput{
+			TeamID:         p.TeamID,
+			ConversationID: conv.ID,
+			Previous:       p.Conversation.Status,
+			Next:           conv.Status,
+			Automatic:      true,
+		})
+	}
+
 	if p.ConversationCreated && conv.AssignedTo == nil && s.assignment != nil {
 		if assignee, err := s.assignment.PickAssignee(ctx, p.TeamID); err == nil && assignee != nil {
 			if err := s.conversations.UpdateAssignment(ctx, p.TeamID, conv.ID, assignee); err == nil {
@@ -114,15 +134,22 @@ func (s *SyncService) HandleOutbound(ctx context.Context, p OutboundParams) (*co
 		unread = 0
 	}
 
+	status := p.Conversation.Status
+	reopen := ShouldReopen(status)
+	if reopen {
+		status = conversation.StatusOpen
+	}
+
 	setFirstResponse := p.Conversation.FirstResponseAt == nil
 	update := conversation.InboxSyncUpdate{
-		Status:             p.Conversation.Status,
+		Status:             status,
 		UnreadCount:        unread,
 		LastAgentMessageAt: &now,
 		SetFirstResponseAt: setFirstResponse,
 		LastMessagePreview: p.Message.Content,
 		LastMessageAt:      now,
 		TouchLastMessage:   true,
+		ClearResolutionAt:  reopen,
 	}
 	if err := s.conversations.ApplyInboxSync(ctx, p.TeamID, p.Conversation.ID, update); err != nil {
 		return nil, err
@@ -130,6 +157,15 @@ func (s *SyncService) HandleOutbound(ctx context.Context, p OutboundParams) (*co
 	conv, err := s.conversations.FindByID(ctx, p.TeamID, p.Conversation.ID)
 	if err != nil {
 		return nil, err
+	}
+	if reopen && s.collaboration != nil {
+		_ = s.collaboration.RecordStatusChange(ctx, conversation.StatusActivityInput{
+			TeamID:         p.TeamID,
+			ConversationID: conv.ID,
+			Previous:       p.Conversation.Status,
+			Next:           conv.Status,
+			Automatic:      true,
+		})
 	}
 	_ = s.publishMessage(ctx, p.TeamID, EventMessageCreated, p.Message)
 	_ = s.publishConversation(ctx, p.TeamID, EventConversationUpdated, conv)

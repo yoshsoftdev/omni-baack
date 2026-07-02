@@ -19,6 +19,8 @@ const (
 	PermConversationView    = "conversation.view"
 	PermConversationReply   = "conversation.reply"
 	PermConversationAssign  = "conversation.assign"
+	PermConversationClose   = "conversation.close"
+	PermConversationNote    = "conversation.note"
 	PermCampaignView        = "campaign.view"
 	PermCampaignCreate      = "campaign.create"
 	PermCampaignSend        = "campaign.send"

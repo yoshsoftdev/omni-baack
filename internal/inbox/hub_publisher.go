@@ -28,6 +28,8 @@ func (p *HubPublisher) PublishTeamEvent(ctx context.Context, teamID uuid.UUID, e
 	if event.TeamID == "" {
 		event.TeamID = teamID.String()
 	}
+	// Deliver to local clients immediately; Redis fan-out reaches other instances.
+	p.BroadcastLocal(teamID, event)
 	return p.hub.PublishTenant(ctx, teamID.String(), event)
 }
 
