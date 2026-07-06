@@ -77,6 +77,11 @@ func Register(router fiber.Router, deps Deps) {
 		channels.Get("/:id", deps.Channel.Get)
 		channels.Patch("/:id", deps.Channel.Update)
 		channels.Delete("/:id", deps.Channel.Delete)
+
+		embeddedSignup := protected.Group("/embedded-signup")
+		embeddedSignup.Post("/start", deps.Channel.StartTeamEmbeddedSignup)
+		embeddedSignup.Get("/:session_id", deps.Channel.GetTeamEmbeddedSignupStatus)
+		embeddedSignup.Post("/:session_id/complete", deps.Channel.CompleteTeamEmbeddedSignup)
 	}
 
 	if deps.Template != nil {

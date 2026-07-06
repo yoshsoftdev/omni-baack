@@ -22,12 +22,12 @@ func NewEmbeddedSignupSessionRepository(db *database.DB) *PostgresEmbeddedSignup
 func (r *PostgresEmbeddedSignupSessionRepository) Create(ctx context.Context, session *EmbeddedSignupSession) error {
 	query := `
 		INSERT INTO embedded_signup_sessions (
-			id, team_id, channel_id, business_id, status, oauth_state, oauth_code_hash,
+			id, team_id, user_id, channel_id, business_id, status, oauth_state, oauth_code_hash,
 			error_message, created_at, expires_at, completed_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 	`
 	_, err := r.db.Pool.Exec(ctx, query,
-		session.ID, session.TeamID, session.ChannelID, session.BusinessID, string(session.Status),
+		session.ID, session.TeamID, session.UserID, session.ChannelID, session.BusinessID, string(session.Status),
 		session.OAuthState, session.OAuthCodeHash, session.ErrorMessage,
 		session.CreatedAt, session.ExpiresAt, session.CompletedAt,
 	)
@@ -36,7 +36,7 @@ func (r *PostgresEmbeddedSignupSessionRepository) Create(ctx context.Context, se
 
 func (r *PostgresEmbeddedSignupSessionRepository) FindByID(ctx context.Context, teamID, id uuid.UUID) (*EmbeddedSignupSession, error) {
 	query := `
-		SELECT id, team_id, channel_id, business_id, status, oauth_state, oauth_code_hash,
+		SELECT id, team_id, user_id, channel_id, business_id, status, oauth_state, oauth_code_hash,
 			error_message, created_at, expires_at, completed_at
 		FROM embedded_signup_sessions
 		WHERE id = $1 AND team_id = $2
@@ -44,35 +44,35 @@ func (r *PostgresEmbeddedSignupSessionRepository) FindByID(ctx context.Context, 
 	return scanEmbeddedSignupSession(r.db.Pool.QueryRow(ctx, query, id, teamID))
 }
 
-func (r *PostgresEmbeddedSignupSessionRepository) FindByOAuthState(ctx context.Context, oauthState string) (*EmbeddedSignupSession, error) {
+func (r *PostgresEmbeddedSignupSessionRepository) FindByOAuthState(ctx context.Context, teamID uuid.UUID, oauthState string) (*EmbeddedSignupSession, error) {
 	query := `
-		SELECT id, team_id, channel_id, business_id, status, oauth_state, oauth_code_hash,
+		SELECT id, team_id, user_id, channel_id, business_id, status, oauth_state, oauth_code_hash,
 			error_message, created_at, expires_at, completed_at
 		FROM embedded_signup_sessions
-		WHERE oauth_state = $1
+		WHERE team_id = $1 AND oauth_state = $2
 	`
-	return scanEmbeddedSignupSession(r.db.Pool.QueryRow(ctx, query, oauthState))
+	return scanEmbeddedSignupSession(r.db.Pool.QueryRow(ctx, query, teamID, oauthState))
 }
 
-func (r *PostgresEmbeddedSignupSessionRepository) FindByOAuthCodeHash(ctx context.Context, codeHash string) (*EmbeddedSignupSession, error) {
+func (r *PostgresEmbeddedSignupSessionRepository) FindByOAuthCodeHash(ctx context.Context, teamID uuid.UUID, codeHash string) (*EmbeddedSignupSession, error) {
 	query := `
-		SELECT id, team_id, channel_id, business_id, status, oauth_state, oauth_code_hash,
+		SELECT id, team_id, user_id, channel_id, business_id, status, oauth_state, oauth_code_hash,
 			error_message, created_at, expires_at, completed_at
 		FROM embedded_signup_sessions
-		WHERE oauth_code_hash = $1
+		WHERE team_id = $1 AND oauth_code_hash = $2
 	`
-	return scanEmbeddedSignupSession(r.db.Pool.QueryRow(ctx, query, codeHash))
+	return scanEmbeddedSignupSession(r.db.Pool.QueryRow(ctx, query, teamID, codeHash))
 }
 
 func (r *PostgresEmbeddedSignupSessionRepository) Update(ctx context.Context, session *EmbeddedSignupSession) error {
 	query := `
 		UPDATE embedded_signup_sessions SET
-			business_id = $1, status = $2, oauth_code_hash = $3, error_message = $4,
-			expires_at = $5, completed_at = $6
-		WHERE id = $7 AND team_id = $8
+			user_id = $1, channel_id = $2, business_id = $3, status = $4, oauth_code_hash = $5, error_message = $6,
+			expires_at = $7, completed_at = $8
+		WHERE id = $9 AND team_id = $10
 	`
 	tag, err := r.db.Pool.Exec(ctx, query,
-		session.BusinessID, string(session.Status), session.OAuthCodeHash, session.ErrorMessage,
+		session.UserID, session.ChannelID, session.BusinessID, string(session.Status), session.OAuthCodeHash, session.ErrorMessage,
 		session.ExpiresAt, session.CompletedAt, session.ID, session.TeamID,
 	)
 	if err != nil {
@@ -88,7 +88,7 @@ func scanEmbeddedSignupSession(row pgx.Row) (*EmbeddedSignupSession, error) {
 	var s EmbeddedSignupSession
 	var status string
 	err := row.Scan(
-		&s.ID, &s.TeamID, &s.ChannelID, &s.BusinessID, &status, &s.OAuthState, &s.OAuthCodeHash,
+		&s.ID, &s.TeamID, &s.UserID, &s.ChannelID, &s.BusinessID, &status, &s.OAuthState, &s.OAuthCodeHash,
 		&s.ErrorMessage, &s.CreatedAt, &s.ExpiresAt, &s.CompletedAt,
 	)
 	if err != nil {

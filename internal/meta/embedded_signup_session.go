@@ -22,7 +22,8 @@ const defaultSessionTTL = time.Hour
 type EmbeddedSignupSession struct {
 	ID            uuid.UUID
 	TeamID        uuid.UUID
-	ChannelID     uuid.UUID
+	UserID        *uuid.UUID
+	ChannelID     *uuid.UUID
 	BusinessID    *string
 	Status        EmbeddedSignupSessionStatus
 	OAuthState    string
@@ -37,7 +38,7 @@ type EmbeddedSignupSession struct {
 type EmbeddedSignupSessionRepository interface {
 	Create(ctx context.Context, session *EmbeddedSignupSession) error
 	FindByID(ctx context.Context, teamID, id uuid.UUID) (*EmbeddedSignupSession, error)
-	FindByOAuthState(ctx context.Context, oauthState string) (*EmbeddedSignupSession, error)
-	FindByOAuthCodeHash(ctx context.Context, codeHash string) (*EmbeddedSignupSession, error)
+	FindByOAuthState(ctx context.Context, teamID uuid.UUID, oauthState string) (*EmbeddedSignupSession, error)
+	FindByOAuthCodeHash(ctx context.Context, teamID uuid.UUID, codeHash string) (*EmbeddedSignupSession, error)
 	Update(ctx context.Context, session *EmbeddedSignupSession) error
 }

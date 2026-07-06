@@ -16,6 +16,7 @@ type MetaClient interface {
 	GetBusiness(ctx context.Context, businessID, accessToken string) (*Business, error)
 	Ping(ctx context.Context, accessToken string) error
 	ExchangeEmbeddedCode(ctx context.Context, appID, appSecret, code string) (*TokenResponse, error)
+	SubscribeAppToWABA(ctx context.Context, wabaID, accessToken string) error
 }
 
 type MessageTemplate = metapkg.MessageTemplate
@@ -63,4 +64,8 @@ func (c *GraphClient) Ping(ctx context.Context, accessToken string) error {
 
 func (c *GraphClient) ExchangeEmbeddedCode(ctx context.Context, appID, appSecret, code string) (*TokenResponse, error) {
 	return c.inner.ExchangeEmbeddedCode(ctx, appID, appSecret, code)
+}
+
+func (c *GraphClient) SubscribeAppToWABA(ctx context.Context, wabaID, accessToken string) error {
+	return c.inner.SubscribeAppToWABA(ctx, wabaID, accessToken)
 }

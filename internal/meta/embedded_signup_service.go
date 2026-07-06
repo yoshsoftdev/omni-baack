@@ -74,6 +74,32 @@ type StartEmbeddedSignupResult struct {
 	ExpiresAt  time.Time `json:"expires_at"`
 }
 
+// StartTeamEmbeddedSignup begins signup without writing channel, credentials, or onboarding rows.
+// The returned session_id is a signed, stateless token (no database write).
+func (s *EmbeddedSignupService) StartTeamEmbeddedSignup(ctx context.Context, teamID, userID uuid.UUID) (*StartEmbeddedSignupResult, error) {
+	if s.cfg.AppID == "" || s.cfg.ConfigID == "" || s.cfg.AppSecret == "" {
+		return nil, serviceerrors.NewValidation("meta", "embedded signup is not configured")
+	}
+
+	oauthState, err := generateOAuthState()
+	if err != nil {
+		return nil, err
+	}
+
+	token, expiresAt, err := issueSignupStartToken(s.cfg.AppSecret, teamID, userID, oauthState, defaultSessionTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	return &StartEmbeddedSignupResult{
+		SessionID:  token,
+		OAuthState: oauthState,
+		Status:     string(EmbeddedSignupPending),
+		ExpiresAt:  expiresAt,
+	}, nil
+}
+
+// StartEmbeddedSignup starts re-authorization for an existing channel (session persisted in DB).
 func (s *EmbeddedSignupService) StartEmbeddedSignup(ctx context.Context, teamID, channelID uuid.UUID) (*StartEmbeddedSignupResult, error) {
 	if _, err := s.channels.FindByID(ctx, teamID, channelID); err != nil {
 		return nil, serviceerrors.MapRepository(err)
@@ -94,7 +120,7 @@ func (s *EmbeddedSignupService) StartEmbeddedSignup(ctx context.Context, teamID,
 	session := &EmbeddedSignupSession{
 		ID:         uuid.New(),
 		TeamID:     teamID,
-		ChannelID:  channelID,
+		ChannelID:  &channelID,
 		Status:     EmbeddedSignupPending,
 		OAuthState: oauthState,
 		CreatedAt:  now,
@@ -123,20 +149,49 @@ type EmbeddedSignupStatusResult struct {
 	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 }
 
+func (s *EmbeddedSignupService) GetTeamEmbeddedSignupStatus(ctx context.Context, teamID uuid.UUID, sessionID string) (*EmbeddedSignupStatusResult, error) {
+	id, err := uuid.Parse(sessionID)
+	if err != nil {
+		return nil, serviceerrors.NewValidation("session_id", "invalid session id")
+	}
+	return s.getEmbeddedSignupStatus(ctx, teamID, id)
+}
+
 func (s *EmbeddedSignupService) GetEmbeddedSignupStatus(ctx context.Context, teamID, channelID uuid.UUID, sessionID string) (*EmbeddedSignupStatusResult, error) {
 	session, err := s.loadOwnedSession(ctx, teamID, channelID, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	s.expireIfNeeded(ctx, session)
+	return s.sessionToStatus(ctx, teamID, channelID, session)
+}
 
+func (s *EmbeddedSignupService) getEmbeddedSignupStatus(ctx context.Context, teamID, sessionID uuid.UUID) (*EmbeddedSignupStatusResult, error) {
+	if s.sessions == nil {
+		return nil, serviceerrors.NewValidation("meta", "embedded signup sessions are not configured")
+	}
+	session, err := s.sessions.FindByID(ctx, teamID, sessionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, serviceerrors.ErrNotFound
+		}
+		return nil, serviceerrors.MapRepository(err)
+	}
+	s.expireIfNeeded(ctx, session)
+	channelID := uuid.Nil
+	if session.ChannelID != nil {
+		channelID = *session.ChannelID
+	}
+	return s.sessionToStatus(ctx, teamID, channelID, session)
+}
+
+func (s *EmbeddedSignupService) sessionToStatus(ctx context.Context, teamID, channelID uuid.UUID, session *EmbeddedSignupSession) (*EmbeddedSignupStatusResult, error) {
 	businessID := ""
 	if session.BusinessID != nil {
 		businessID = *session.BusinessID
 	}
 	wabaID := ""
 	phoneID := ""
-	if session.Status == EmbeddedSignupCompleted {
+	if session.Status == EmbeddedSignupCompleted && channelID != uuid.Nil {
 		if ch, err := s.channels.FindByID(ctx, teamID, channelID); err == nil {
 			if ch.WABAID != nil {
 				wabaID = *ch.WABAID
@@ -182,6 +237,30 @@ type CompleteEmbeddedSignupResult struct {
 	PhoneNumber   string    `json:"phone_number,omitempty"`
 }
 
+// CompleteTeamEmbeddedSignup validates Meta assets, subscribes the app, then persists channel data.
+func (s *EmbeddedSignupService) CompleteTeamEmbeddedSignup(
+	ctx context.Context,
+	teamID, userID uuid.UUID,
+	startToken string,
+	input CompleteEmbeddedSignupInput,
+) (*CompleteEmbeddedSignupResult, error) {
+	if s.cfg.AppSecret == "" {
+		return nil, serviceerrors.NewValidation("meta", "embedded signup is not configured")
+	}
+	claims, err := parseSignupStartToken(s.cfg.AppSecret, startToken)
+	if err != nil {
+		return nil, serviceerrors.NewValidation("session_id", "invalid or expired signup session")
+	}
+	if claims.TeamID != teamID || claims.UserID != userID {
+		return nil, serviceerrors.ErrNotFound
+	}
+	if state := strings.TrimSpace(input.OAuthState); state == "" || state != claims.OAuthState {
+		return nil, serviceerrors.NewValidation("oauth_state", "invalid oauth state")
+	}
+
+	return s.finalizeEmbeddedSignup(ctx, teamID, userID, nil, "", claims.OAuthState, input)
+}
+
 func (s *EmbeddedSignupService) CompleteEmbeddedSignup(
 	ctx context.Context,
 	teamID, channelID uuid.UUID,
@@ -199,6 +278,25 @@ func (s *EmbeddedSignupService) CompleteEmbeddedSignup(
 		return nil, serviceerrors.NewValidation("oauth_state", "invalid oauth state")
 	}
 
+	ch, err := s.channels.FindByID(ctx, teamID, channelID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+
+	var userID uuid.UUID
+	if session.UserID != nil {
+		userID = *session.UserID
+	}
+	return s.finalizeEmbeddedSignup(ctx, teamID, userID, ch, sessionID, session.OAuthState, input)
+}
+
+func (s *EmbeddedSignupService) finalizeEmbeddedSignup(
+	ctx context.Context,
+	teamID, userID uuid.UUID,
+	existing *channel.Channel,
+	pendingSessionID, expectedOAuthState string,
+	input CompleteEmbeddedSignupInput,
+) (*CompleteEmbeddedSignupResult, error) {
 	if s.cfg.AppID == "" || s.cfg.AppSecret == "" {
 		return nil, serviceerrors.NewValidation("meta", "embedded signup is not configured")
 	}
@@ -210,31 +308,55 @@ func (s *EmbeddedSignupService) CompleteEmbeddedSignup(
 	if code == "" || wabaID == "" || phoneNumberID == "" {
 		return nil, serviceerrors.NewValidation("input", "code, waba_id, and phone_number_id are required")
 	}
+	if wabaID == strings.TrimSpace(s.cfg.AppID) {
+		return nil, serviceerrors.NewValidation("waba_id", "invalid WhatsApp Business Account ID")
+	}
 
 	codeHash := hashOAuthCode(code)
-	if existing, err := s.sessions.FindByOAuthCodeHash(ctx, codeHash); err == nil && existing != nil && existing.ID != session.ID {
-		return nil, serviceerrors.NewValidation("code", "authorization code has already been used")
+	if s.sessions != nil {
+		if used, err := s.sessions.FindByOAuthCodeHash(ctx, teamID, codeHash); err == nil && used != nil {
+			if pendingSessionID == "" || used.ID.String() != pendingSessionID {
+				return nil, serviceerrors.NewValidation("code", "authorization code has already been used")
+			}
+		}
 	}
 
 	tokenResp, err := s.meta.ExchangeEmbeddedCode(ctx, s.cfg.AppID, s.cfg.AppSecret, code)
 	if err != nil {
-		s.markFailed(ctx, session, oauthErrorMessage(err))
 		return nil, mapOAuthError(err)
 	}
-	if _, err := s.meta.GetPhoneNumber(ctx, phoneNumberID, tokenResp.AccessToken); err != nil {
-		s.markFailed(ctx, session, "phone number is not accessible")
-		return nil, serviceerrors.NewValidation("phone_number_id", "invalid phone number")
+
+	display, err := s.validateEmbeddedAssets(ctx, wabaID, phoneNumberID, businessID, tokenResp.AccessToken)
+	if err != nil {
+		return nil, err
 	}
 
-	ch, err := s.channels.FindByID(ctx, teamID, session.ChannelID)
-	if err != nil {
-		return nil, serviceerrors.MapRepository(err)
+	if err := s.meta.SubscribeAppToWABA(ctx, wabaID, tokenResp.AccessToken); err != nil {
+		return nil, serviceerrors.NewValidation("waba_id", "failed to subscribe app to WhatsApp Business Account")
 	}
 
 	now := time.Now().UTC()
-	display := phoneNumberID
-	if phone, err := s.meta.GetPhoneNumber(ctx, phoneNumberID, tokenResp.AccessToken); err == nil && phone.DisplayPhoneNumber != "" {
-		display = phone.DisplayPhoneNumber
+	var ch *channel.Channel
+	created := false
+	if existing != nil {
+		ch = existing
+	} else {
+		connType := channel.ConnectionEmbeddedCoex
+		ch = &channel.Channel{
+			ID:             uuid.New(),
+			TeamID:         teamID,
+			Name:           "WhatsApp Business",
+			Provider:       "meta_whatsapp",
+			Status:         channel.StatusConnected,
+			ConnectionType: &connType,
+			IsCoex:         true,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}
+		if err := s.channels.Create(ctx, ch); err != nil {
+			return nil, serviceerrors.MapRepository(err)
+		}
+		created = true
 	}
 
 	connType := channel.ConnectionEmbeddedCoex
@@ -250,14 +372,23 @@ func (s *EmbeddedSignupService) CompleteEmbeddedSignup(
 		ch.BusinessID = &businessID
 	}
 	if err := s.channels.Update(ctx, ch); err != nil {
+		if created {
+			_ = s.channels.SoftDelete(ctx, teamID, ch.ID)
+		}
 		return nil, serviceerrors.MapRepository(err)
 	}
 
 	if s.cipher == nil {
+		if created {
+			_ = s.channels.SoftDelete(ctx, teamID, ch.ID)
+		}
 		return nil, errors.New("token encryption is not configured")
 	}
 	enc, err := s.cipher.Encrypt(tokenResp.AccessToken)
 	if err != nil {
+		if created {
+			_ = s.channels.SoftDelete(ctx, teamID, ch.ID)
+		}
 		return nil, err
 	}
 	var expiresAt *time.Time
@@ -271,7 +402,69 @@ func (s *EmbeddedSignupService) CompleteEmbeddedSignup(
 		TokenExpiresAt: expiresAt,
 		UpdatedAt:      now,
 	}); err != nil {
+		if created {
+			_ = s.channels.DeleteCredentials(ctx, ch.ID)
+			_ = s.channels.SoftDelete(ctx, teamID, ch.ID)
+		}
 		return nil, serviceerrors.MapRepository(err)
+	}
+
+	ob := &channel.Onboarding{ChannelID: ch.ID, Status: channel.OnboardingCompleted, CompletedAt: &now, UpdatedAt: now}
+	if err := s.channels.UpsertOnboarding(ctx, ob); err != nil {
+		if created {
+			_ = s.channels.DeleteCredentials(ctx, ch.ID)
+			_ = s.channels.SoftDelete(ctx, teamID, ch.ID)
+		}
+		return nil, serviceerrors.MapRepository(err)
+	}
+
+	if s.sessions != nil {
+		if pendingSessionID != "" {
+			session, err := s.loadOwnedSession(ctx, teamID, ch.ID, pendingSessionID)
+			if err == nil {
+				session.Status = EmbeddedSignupCompleted
+				session.OAuthCodeHash = &codeHash
+				session.CompletedAt = &now
+				if businessID != "" {
+					session.BusinessID = &businessID
+				}
+				if err := s.sessions.Update(ctx, session); err != nil {
+					if created {
+						_ = s.channels.DeleteCredentials(ctx, ch.ID)
+						_ = s.channels.SoftDelete(ctx, teamID, ch.ID)
+					}
+					return nil, serviceerrors.MapRepository(err)
+				}
+			}
+		} else {
+			channelID := ch.ID
+			var uid *uuid.UUID
+			if userID != uuid.Nil {
+				uid = &userID
+			}
+			completedSession := &EmbeddedSignupSession{
+				ID:            uuid.New(),
+				TeamID:        teamID,
+				UserID:        uid,
+				ChannelID:     &channelID,
+				Status:        EmbeddedSignupCompleted,
+				OAuthState:    expectedOAuthState,
+				OAuthCodeHash: &codeHash,
+				CreatedAt:     now,
+				ExpiresAt:     now.Add(defaultSessionTTL),
+				CompletedAt:   &now,
+			}
+			if businessID != "" {
+				completedSession.BusinessID = &businessID
+			}
+			if err := s.sessions.Create(ctx, completedSession); err != nil {
+				if created {
+					_ = s.channels.DeleteCredentials(ctx, ch.ID)
+					_ = s.channels.SoftDelete(ctx, teamID, ch.ID)
+				}
+				return nil, serviceerrors.MapRepository(err)
+			}
+		}
 	}
 
 	if s.permissionRefresher != nil {
@@ -279,25 +472,10 @@ func (s *EmbeddedSignupService) CompleteEmbeddedSignup(
 			s.log.Warn("embedded_signup_permission_refresh_failed",
 				"event", "embedded_signup_permission_refresh_failed",
 				"team_id", teamID.String(),
-				"channel_id", channelID.String(),
+				"channel_id", ch.ID.String(),
 				"error", err.Error(),
 			)
 		}
-	}
-
-	ob := &channel.Onboarding{ChannelID: ch.ID, Status: channel.OnboardingCompleted, CompletedAt: &now, UpdatedAt: now}
-	if err := s.channels.UpsertOnboarding(ctx, ob); err != nil {
-		return nil, serviceerrors.MapRepository(err)
-	}
-
-	session.Status = EmbeddedSignupCompleted
-	session.OAuthCodeHash = &codeHash
-	session.CompletedAt = &now
-	if businessID != "" {
-		session.BusinessID = &businessID
-	}
-	if err := s.sessions.Update(ctx, session); err != nil {
-		return nil, serviceerrors.MapRepository(err)
 	}
 
 	if s.readiness != nil {
@@ -305,7 +483,7 @@ func (s *EmbeddedSignupService) CompleteEmbeddedSignup(
 			s.log.Warn("embedded_signup_readiness_refresh_failed",
 				"event", "embedded_signup_readiness_refresh_failed",
 				"team_id", teamID.String(),
-				"channel_id", channelID.String(),
+				"channel_id", ch.ID.String(),
 				"error", err.Error(),
 			)
 		}
@@ -314,8 +492,7 @@ func (s *EmbeddedSignupService) CompleteEmbeddedSignup(
 	s.log.Info("embedded_signup_completed",
 		"event", "embedded_signup_completed",
 		"team_id", teamID.String(),
-		"channel_id", channelID.String(),
-		"session_id", session.ID.String(),
+		"channel_id", ch.ID.String(),
 	)
 
 	return &CompleteEmbeddedSignupResult{
@@ -326,6 +503,40 @@ func (s *EmbeddedSignupService) CompleteEmbeddedSignup(
 		PhoneNumberID: phoneNumberID,
 		PhoneNumber:   display,
 	}, nil
+}
+
+func (s *EmbeddedSignupService) validateEmbeddedAssets(
+	ctx context.Context,
+	wabaID, phoneNumberID, businessID, accessToken string,
+) (string, error) {
+	phone, err := s.meta.GetPhoneNumber(ctx, phoneNumberID, accessToken)
+	if err != nil {
+		return "", serviceerrors.NewValidation("phone_number_id", "invalid phone number")
+	}
+	numbers, err := s.meta.GetPhoneNumbers(ctx, wabaID, accessToken)
+	if err != nil {
+		return "", serviceerrors.NewValidation("waba_id", "invalid WhatsApp Business Account ID")
+	}
+	found := false
+	for _, n := range numbers {
+		if n.ID == phoneNumberID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", serviceerrors.NewValidation("phone_number_id", "phone number does not belong to the WABA")
+	}
+	if businessID != "" {
+		if _, err := s.meta.GetBusiness(ctx, businessID, accessToken); err != nil {
+			return "", serviceerrors.NewValidation("business_id", "invalid business id")
+		}
+	}
+	display := phoneNumberID
+	if phone.DisplayPhoneNumber != "" {
+		display = phone.DisplayPhoneNumber
+	}
+	return display, nil
 }
 
 func (s *EmbeddedSignupService) loadOwnedSession(ctx context.Context, teamID, channelID uuid.UUID, sessionID string) (*EmbeddedSignupSession, error) {
@@ -340,7 +551,7 @@ func (s *EmbeddedSignupService) loadOwnedSession(ctx context.Context, teamID, ch
 		}
 		return nil, serviceerrors.MapRepository(err)
 	}
-	if session.ChannelID != channelID {
+	if session.ChannelID == nil || *session.ChannelID != channelID {
 		return nil, serviceerrors.ErrNotFound
 	}
 	return session, nil
@@ -369,12 +580,6 @@ func (s *EmbeddedSignupService) expireIfNeeded(ctx context.Context, session *Emb
 	}
 }
 
-func (s *EmbeddedSignupService) markFailed(ctx context.Context, session *EmbeddedSignupSession, message string) {
-	session.Status = EmbeddedSignupFailed
-	session.ErrorMessage = &message
-	_ = s.sessions.Update(ctx, session)
-}
-
 func generateOAuthState() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
@@ -396,16 +601,5 @@ func mapOAuthError(err error) error {
 		return serviceerrors.NewValidation("code", "invalid authorization code")
 	default:
 		return serviceerrors.NewValidation("code", "invalid authorization code")
-	}
-}
-
-func oauthErrorMessage(err error) string {
-	switch metapkg.ClassifyOAuthError(err) {
-	case metapkg.OAuthErrorExpired:
-		return "authorization code expired"
-	case metapkg.OAuthErrorInvalid:
-		return "invalid authorization code"
-	default:
-		return "failed to exchange authorization code"
 	}
 }

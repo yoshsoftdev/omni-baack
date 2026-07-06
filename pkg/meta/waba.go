@@ -48,6 +48,29 @@ func (c *Client) Ping(ctx context.Context, accessToken string) error {
 	return err
 }
 
+// SubscribeAppToWABA registers this app to receive webhooks for the WABA (required for CoEx).
+func (c *Client) SubscribeAppToWABA(ctx context.Context, wabaID, accessToken string) error {
+	endpoint := fmt.Sprintf("https://graph.facebook.com/%s/%s/subscribed_apps", c.apiVersion, wabaID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader("{}"))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("subscribe app to waba: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("subscribe app to waba error: %s", strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
 func decodeGET[T any](c *Client, ctx context.Context, url, accessToken string) (*T, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

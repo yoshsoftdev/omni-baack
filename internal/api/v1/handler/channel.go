@@ -206,6 +206,69 @@ func (h *ChannelHandler) Health(c *fiber.Ctx) error {
 	return response.OK(c, "ok", result)
 }
 
+func (h *ChannelHandler) StartTeamEmbeddedSignup(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	if h.embeddedSignup == nil {
+		return response.FeatureNotAvailable(c, "embedded signup is not configured")
+	}
+	result, err := h.embeddedSignup.StartTeamEmbeddedSignup(c.Context(), actor.TeamID, actor.UserID)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "embedded signup started", result)
+}
+
+func (h *ChannelHandler) CompleteTeamEmbeddedSignup(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	sessionID := c.Params("session_id")
+	if sessionID == "" {
+		return response.BadRequest(c, "session_id is required")
+	}
+	var req completeEmbeddedSignupRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	if h.embeddedSignup == nil {
+		return response.FeatureNotAvailable(c, "embedded signup is not configured")
+	}
+	result, err := h.embeddedSignup.CompleteTeamEmbeddedSignup(c.Context(), actor.TeamID, actor.UserID, sessionID, metasvc.CompleteEmbeddedSignupInput{
+		Code:          req.Code,
+		OAuthState:    req.OAuthState,
+		BusinessID:    req.BusinessID,
+		WABAID:        req.WABAID,
+		PhoneNumberID: req.PhoneNumberID,
+	})
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "embedded signup completed", result)
+}
+
+func (h *ChannelHandler) GetTeamEmbeddedSignupStatus(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	sessionID := c.Params("session_id")
+	if sessionID == "" {
+		return response.BadRequest(c, "session_id is required")
+	}
+	if h.embeddedSignup == nil {
+		return response.FeatureNotAvailable(c, "embedded signup is not configured")
+	}
+	result, err := h.embeddedSignup.GetTeamEmbeddedSignupStatus(c.Context(), actor.TeamID, sessionID)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", result)
+}
+
 func (h *ChannelHandler) StartEmbeddedSignup(c *fiber.Ctx) error {
 	actor, err := requireActor(c)
 	if err != nil {
