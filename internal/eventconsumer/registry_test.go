@@ -183,6 +183,9 @@ func (f *fakeMessageRepo) FindByWAMID(_ context.Context, wamid string) (*message
 	}
 	return m, nil
 }
+func (f *fakeMessageRepo) FindByWAMIDKey(context.Context, uuid.UUID, uuid.UUID, string) (*message.Message, error) {
+	return nil, repository.ErrNotFound
+}
 func (f *fakeMessageRepo) ListByConversation(context.Context, uuid.UUID, uuid.UUID, message.ListFilter, repository.PageParams) (repository.Page[message.Message], error) {
 	return repository.Page[message.Message]{}, nil
 }
@@ -193,6 +196,29 @@ func (f *fakeMessageRepo) UpdateStatus(_ context.Context, _ uuid.UUID, id uuid.U
 			m.Status = &s
 		}
 	}
+	return nil
+}
+
+func (f *fakeMessageRepo) MarkDeletedByID(_ context.Context, _ uuid.UUID, id uuid.UUID, source message.DeletedBySource) error {
+	for _, m := range f.byWAMID {
+		if m.ID == id {
+			m.IsDeleted = true
+			s := source
+			m.DeletedBySource = &s
+			return nil
+		}
+	}
+	return repository.ErrNotFound
+}
+
+func (f *fakeMessageRepo) MarkDeletedByWAMID(_ context.Context, _ uuid.UUID, wamid string, source message.DeletedBySource) error {
+	m, ok := f.byWAMID[wamid]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	m.IsDeleted = true
+	s := source
+	m.DeletedBySource = &s
 	return nil
 }
 

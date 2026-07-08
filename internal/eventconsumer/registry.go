@@ -87,7 +87,7 @@ func (r *Registry) HandleCanonical(ctx context.Context, event sharedevents.Canon
 	case sharedevents.TypeMessageReceived:
 		err = r.messages.Handle(ctx, event)
 	case sharedevents.TypeMessageStatusSent, sharedevents.TypeMessageStatusDelivered,
-		sharedevents.TypeMessageStatusRead, sharedevents.TypeMessageStatusFailed:
+		sharedevents.TypeMessageStatusRead, sharedevents.TypeMessageStatusFailed, sharedevents.TypeMessageDeleted:
 		err = r.statuses.Handle(ctx, event)
 	case sharedevents.TypeTemplateUpdated:
 		err = r.templates.Handle(ctx, event)

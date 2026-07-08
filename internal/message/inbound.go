@@ -20,6 +20,7 @@ type InboundInput struct {
 	ChannelID      uuid.UUID
 	ConversationID uuid.UUID
 	WAMID          string
+	ReplyToWAMID   string
 	Sender         string
 	Recipient      *string
 	Content        string
@@ -60,6 +61,8 @@ func (s *Service) IngestInbound(ctx context.Context, input InboundInput) (*Messa
 	}
 	channelID := input.ChannelID
 	wamidCopy := wamid
+	replyToWAMID := strings.TrimSpace(input.ReplyToWAMID)
+	replyToMessageID := s.resolveReplyTarget(ctx, input.TeamID, input.ConversationID, replyToWAMID)
 	m := &Message{
 		ID:             uuid.New(),
 		ConversationID: input.ConversationID,
@@ -71,6 +74,8 @@ func (s *Service) IngestInbound(ctx context.Context, input InboundInput) (*Messa
 		Content:        content,
 		ContentType:    contentType,
 		WAMID:          &wamidCopy,
+		ReplyToWAMID:   nullableString(replyToWAMID),
+		ReplyToMessageID: replyToMessageID,
 		RawPayload:     input.RawPayload,
 		ReceivedAt:     receivedAt,
 		CreatedAt:      now,
@@ -82,6 +87,14 @@ func (s *Service) IngestInbound(ctx context.Context, input InboundInput) (*Messa
 		return nil, false, err
 	}
 	return m, true, nil
+}
+
+func nullableString(v string) *string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	s := strings.TrimSpace(v)
+	return &s
 }
 
 func (s *Service) AttachToMessage(ctx context.Context, teamID, messageID uuid.UUID, attachment *Attachment) error {

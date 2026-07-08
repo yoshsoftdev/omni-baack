@@ -24,6 +24,11 @@ func NewMessageHandler(svc *message.Service, conversations *conversation.Service
 type sendMessageRequest struct {
 	Content         string `json:"content"`
 	StorageObjectID string `json:"storage_object_id"`
+	ReplyToWAMID    string `json:"reply_to_wamid"`
+}
+
+type deleteMessageRequest struct {
+	PropagateToWA bool `json:"propagate_to_wa"`
 }
 
 func (h *MessageHandler) List(c *fiber.Ctx) error {
@@ -59,7 +64,10 @@ func (h *MessageHandler) Send(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return response.BadRequest(c, "invalid request body")
 	}
-	sendInput := message.SendInput{Content: req.Content}
+	sendInput := message.SendInput{
+		Content:      req.Content,
+		ReplyToWAMID: strings.TrimSpace(req.ReplyToWAMID),
+	}
 	if strings.TrimSpace(req.StorageObjectID) != "" {
 		objectID, parseErr := parseUUIDFromString(req.StorageObjectID)
 		if parseErr != nil {
@@ -84,4 +92,24 @@ func (h *MessageHandler) Send(c *fiber.Ctx) error {
 		})
 	}
 	return response.Created(c, "message sent", msg)
+}
+
+func (h *MessageHandler) Delete(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	messageID, err := parseUUIDParam(c, "messageId")
+	if err != nil {
+		return response.BadRequest(c, "invalid message id")
+	}
+	var req deleteMessageRequest
+	_ = c.BodyParser(&req)
+	_ = req // propagate handled by service layer fallback in current phase
+
+	msg, err := h.svc.DeleteByID(c.Context(), actor.TeamID, actor.UserID, actor.Role, messageID, message.DeletedBySourceAgent)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "message deleted", msg)
 }

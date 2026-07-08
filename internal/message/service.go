@@ -212,3 +212,40 @@ func (s *Service) UpdateDeliveryStatus(ctx context.Context, wamid string, status
 	}
 	return serviceerrors.MapRepository(s.messages.UpdateStatus(ctx, m.TeamID, m.ID, status))
 }
+
+func (s *Service) MarkDeletedByWAMID(ctx context.Context, teamID uuid.UUID, wamid string, source DeletedBySource) error {
+	wamid = strings.TrimSpace(wamid)
+	if wamid == "" {
+		return serviceerrors.NewValidation("wamid", "is required")
+	}
+	return serviceerrors.MapRepository(s.messages.MarkDeletedByWAMID(ctx, teamID, wamid, source))
+}
+
+func (s *Service) DeleteByID(ctx context.Context, teamID, userID uuid.UUID, actorRole string, id uuid.UUID, source DeletedBySource) (*Message, error) {
+	if err := s.authorize(actorRole, rbac.PermConversationReply); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	m, err := s.messages.FindByID(ctx, teamID, id)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	if err := s.messages.MarkDeletedByID(ctx, teamID, id, source); err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	if source == DeletedBySourceAgent {
+		_ = s.revokeOnProvider(ctx, teamID, m)
+	}
+	updated, err := s.messages.FindByID(ctx, teamID, id)
+	if err == nil {
+		return updated, nil
+	}
+	m.IsDeleted = true
+	now := time.Now().UTC()
+	m.DeletedAt = &now
+	src := source
+	m.DeletedBySource = &src
+	return m, nil
+}

@@ -34,6 +34,14 @@ const (
 	StatusFailed    Status = "failed"
 )
 
+type DeletedBySource string
+
+const (
+	DeletedBySourceWAUser DeletedBySource = "user_wa"
+	DeletedBySourceAgent  DeletedBySource = "agent_app"
+	DeletedBySourceSystem DeletedBySource = "system"
+)
+
 type Message struct {
 	ID             uuid.UUID   `json:"id"`
 	ConversationID uuid.UUID   `json:"conversation_id"`
@@ -46,7 +54,12 @@ type Message struct {
 	Content        string      `json:"content"`
 	ContentType    ContentType `json:"content_type"`
 	WAMID          *string     `json:"wamid,omitempty"`
+	ReplyToWAMID   *string     `json:"reply_to_wamid,omitempty"`
+	ReplyToMessageID *uuid.UUID `json:"reply_to_message_id,omitempty"`
 	Status         *Status     `json:"status,omitempty"`
+	IsDeleted      bool        `json:"is_deleted"`
+	DeletedAt      *time.Time  `json:"deleted_at,omitempty"`
+	DeletedBySource *DeletedBySource `json:"deleted_by_source,omitempty"`
 	RawPayload     []byte      `json:"-"`
 	Attachment     *Attachment `json:"attachment,omitempty"`
 	ReceivedAt     time.Time   `json:"received_at"`

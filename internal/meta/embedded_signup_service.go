@@ -331,10 +331,6 @@ func (s *EmbeddedSignupService) finalizeEmbeddedSignup(
 		return nil, err
 	}
 
-	if err := s.meta.SubscribeAppToWABA(ctx, wabaID, tokenResp.AccessToken); err != nil {
-		return nil, serviceerrors.NewValidation("waba_id", "failed to subscribe app to WhatsApp Business Account")
-	}
-
 	now := time.Now().UTC()
 	var ch *channel.Channel
 	created := false
@@ -467,6 +463,8 @@ func (s *EmbeddedSignupService) finalizeEmbeddedSignup(
 		}
 	}
 
+	s.ensureAppSubscribed(ctx, teamID, ch.ID, wabaID, tokenResp.AccessToken)
+
 	if s.permissionRefresher != nil {
 		if err := s.permissionRefresher.RefreshPermissionsAfterConnect(ctx, teamID, ch.ID, tokenResp.AccessToken); err != nil {
 			s.log.Warn("embedded_signup_permission_refresh_failed",
@@ -503,6 +501,21 @@ func (s *EmbeddedSignupService) finalizeEmbeddedSignup(
 		PhoneNumberID: phoneNumberID,
 		PhoneNumber:   display,
 	}, nil
+}
+
+func (s *EmbeddedSignupService) ensureAppSubscribed(ctx context.Context, teamID, channelID uuid.UUID, wabaID, accessToken string) {
+	if strings.TrimSpace(wabaID) == "" || strings.TrimSpace(accessToken) == "" {
+		return
+	}
+	if err := s.meta.SubscribeAppToWABA(ctx, wabaID, accessToken); err != nil && !metapkg.IsSubscribeAlreadyDone(err) {
+		s.log.Warn("embedded_signup_subscribe_failed",
+			"event", "embedded_signup_subscribe_failed",
+			"team_id", teamID.String(),
+			"channel_id", channelID.String(),
+			"waba_id", wabaID,
+			"error", err.Error(),
+		)
+	}
 }
 
 func (s *EmbeddedSignupService) validateEmbeddedAssets(

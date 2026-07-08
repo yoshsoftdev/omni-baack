@@ -15,6 +15,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
+	"github.com/omnichannel/omni-chan-v2/internal/debug"
 	"github.com/omnichannel/omni-chan-v2/internal/eventconsumer/idempotency"
 	"github.com/omnichannel/omni-chan-v2/internal/eventconsumer/resolver"
 	"github.com/omnichannel/omni-chan-v2/internal/inbox"
@@ -159,6 +160,7 @@ func (h *MessageHandler) process(ctx context.Context, event sharedevents.Canonic
 		ChannelID:      tenant.ChannelID,
 		ConversationID: conv.ID,
 		WAMID:          payload.WAMID,
+		ReplyToWAMID:   payload.ReplyToWAMID,
 		Sender:         phone,
 		Content:        content,
 		ContentType:    contentType,
@@ -400,15 +402,27 @@ func (h *StatusHandler) Handle(ctx context.Context, event sharedevents.Canonical
 	}
 
 	status := mapStatus(event.Type)
-	if status == "" {
+	if status == "" && event.Type != sharedevents.TypeMessageDeleted {
 		return TerminalDLQ("status", ErrMalformedEvent)
 	}
 
-	key := idempotency.StatusKey(event.Provider, payload.WAMID, string(status))
+	statusKey := string(status)
+	if event.Type == sharedevents.TypeMessageDeleted {
+		statusKey = "deleted"
+	}
+	key := idempotency.StatusKey(event.Provider, payload.WAMID, statusKey)
 	skipped, err := idempotency.ProcessOnce(ctx, h.idempotency, key, func() error {
-		if err := h.messages.ApplyDeliveryStatus(ctx, payload.WAMID, status); err != nil {
-			if !errors.Is(err, repository.ErrNotFound) {
-				return err
+		if event.Type == sharedevents.TypeMessageDeleted {
+			if err := h.messages.MarkDeletedByWAMID(ctx, tenant.TeamID, payload.WAMID, message.DeletedBySourceWAUser); err != nil {
+				if !errors.Is(err, repository.ErrNotFound) {
+					return err
+				}
+			}
+		} else {
+			if err := h.messages.ApplyDeliveryStatus(ctx, payload.WAMID, status); err != nil {
+				if !errors.Is(err, repository.ErrNotFound) {
+					return err
+				}
 			}
 		}
 		if h.delivery != nil {
@@ -562,13 +576,30 @@ func (h *ChannelHandler) Handle(ctx context.Context, event sharedevents.Canonica
 		return TerminalDLQ("channel", ErrMalformedEvent)
 	}
 
+	// #region agent log
+	debug.AgentLog("H1", "meta_handlers.go:ChannelHandler.Handle", "channel.updated received", map[string]any{
+		"event_id": event.EventID, "field": payload.Field, "phone_number_id": payload.PhoneNumberID, "waba_id": payload.WABAID,
+	})
+	// #endregion
+
 	tenant, err := h.resolver.ResolveByPhoneNumberID(ctx, payload.PhoneNumberID)
 	if err != nil {
 		tenant, err = h.resolver.ResolveByWABAID(ctx, payload.WABAID)
 		if err != nil {
+			// #region agent log
+			debug.AgentLog("H1", "meta_handlers.go:ChannelHandler.Handle", "tenant resolve failed", map[string]any{
+				"event_id": event.EventID, "field": payload.Field, "phone_number_id": payload.PhoneNumberID, "error": err.Error(),
+			})
+			// #endregion
 			return err
 		}
 	}
+
+	// #region agent log
+	debug.AgentLog("H1", "meta_handlers.go:ChannelHandler.Handle", "tenant resolved", map[string]any{
+		"event_id": event.EventID, "channel_id": tenant.ChannelID.String(), "team_id": tenant.TeamID.String(),
+	})
+	// #endregion
 
 	key := idempotency.ChannelKey(event.Provider, payload.Field, payload.PhoneNumberID, event.OccurredAt.Unix())
 	skipped, err := idempotency.ProcessOnce(ctx, h.idempotency, key, func() error {
@@ -589,6 +620,11 @@ func (h *ChannelHandler) Handle(ctx context.Context, event sharedevents.Canonica
 		return err
 	}
 	if skipped {
+		// #region agent log
+		debug.AgentLog("H2", "meta_handlers.go:ChannelHandler.Handle", "idempotency skipped before coex sync", map[string]any{
+			"event_id": event.EventID, "field": payload.Field, "phone_number_id": payload.PhoneNumberID, "idempotency_key": key,
+		})
+		// #endregion
 		return nil
 	}
 	h.log.Info("channel health updated",
@@ -605,8 +641,19 @@ func (h *ChannelHandler) Handle(ctx context.Context, event sharedevents.Canonica
 		)
 		events, err := metaclient.ParseCoexWebhookPayload([]byte(wrapped))
 		if err != nil {
+			// #region agent log
+			debug.AgentLog("H3", "meta_handlers.go:ChannelHandler.Handle", "parse coex payload failed", map[string]any{
+				"event_id": event.EventID, "field": payload.Field, "error": err.Error(),
+			})
+			// #endregion
 			return fmt.Errorf("parse coex channel update: %w", err)
 		}
+		// #region agent log
+		debug.AgentLog("H3", "meta_handlers.go:ChannelHandler.Handle", "dispatching coex webhook", map[string]any{
+			"event_id": event.EventID, "field": payload.Field,
+			"history_events": len(events.HistoryEvents), "contact_events": len(events.ContactSyncEvents),
+		})
+		// #endregion
 		return h.channelSync.HandleCoexWebhook(ctx, events)
 	}
 	return nil

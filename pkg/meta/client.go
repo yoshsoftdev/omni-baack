@@ -84,6 +84,9 @@ type sendMessageRequest struct {
 	MessagingProduct string `json:"messaging_product"`
 	To               string `json:"to"`
 	Type             string `json:"type"`
+	Context          *struct {
+		MessageID string `json:"message_id"`
+	} `json:"context,omitempty"`
 	Text             struct {
 		Body string `json:"body"`
 	} `json:"text"`
@@ -96,12 +99,24 @@ type sendMessageResponse struct {
 }
 
 func (c *Client) SendTextMessage(ctx context.Context, phoneNumberID, accessToken, to, body string) (string, error) {
+	return c.SendTextMessageWithContext(ctx, phoneNumberID, accessToken, to, body, "")
+}
+
+func (c *Client) SendTextMessageWithContext(ctx context.Context, phoneNumberID, accessToken, to, body, replyToWAMID string) (string, error) {
 	payload := sendMessageRequest{
 		MessagingProduct: "whatsapp",
 		To:               to,
 		Type:             "text",
 	}
 	payload.Text.Body = body
+	replyToWAMID = strings.TrimSpace(replyToWAMID)
+	if replyToWAMID != "" {
+		payload.Context = &struct {
+			MessageID string `json:"message_id"`
+		}{
+			MessageID: replyToWAMID,
+		}
+	}
 
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -135,4 +150,28 @@ func (c *Client) SendTextMessage(ctx context.Context, phoneNumberID, accessToken
 		return "", fmt.Errorf("meta send: empty message id")
 	}
 	return result.Messages[0].ID, nil
+}
+
+func (c *Client) DeleteMessage(ctx context.Context, phoneNumberID, accessToken, wamid string) error {
+	phoneNumberID = strings.TrimSpace(phoneNumberID)
+	wamid = strings.TrimSpace(wamid)
+	if phoneNumberID == "" || wamid == "" {
+		return fmt.Errorf("phone number id and wamid are required")
+	}
+	url := fmt.Sprintf("https://graph.facebook.com/%s/%s/messages?message_id=%s", c.apiVersion, phoneNumberID, wamid)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("meta delete message: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("meta delete message error: %s", strings.TrimSpace(string(body)))
+	}
+	return nil
 }

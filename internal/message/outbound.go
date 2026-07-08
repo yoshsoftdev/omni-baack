@@ -17,8 +17,11 @@ import (
 // MetaMessenger sends WhatsApp messages via Meta Cloud API.
 type MetaMessenger interface {
 	SendTextMessage(ctx context.Context, phoneNumberID, accessToken, to, body string) (string, error)
+	SendTextMessageWithContext(ctx context.Context, phoneNumberID, accessToken, to, body, replyToWAMID string) (string, error)
 	UploadMedia(ctx context.Context, phoneNumberID, accessToken, mimeType, filename string, body io.Reader, size int64) (string, error)
 	SendMediaMessage(ctx context.Context, phoneNumberID, accessToken, to, messageType, mediaID, caption, filename string) (string, error)
+	SendMediaMessageWithContext(ctx context.Context, phoneNumberID, accessToken, to, messageType, mediaID, caption, filename, replyToWAMID string) (string, error)
+	DeleteMessage(ctx context.Context, phoneNumberID, accessToken, wamid string) error
 }
 
 // StorageDownloader fetches uploaded objects from storage-service.
@@ -55,6 +58,7 @@ type OutboundDeps struct {
 type SendInput struct {
 	Content         string
 	StorageObjectID *uuid.UUID
+	ReplyToWAMID    string
 }
 
 // SendReply persists an agent reply and delivers it through WhatsApp when configured.
@@ -144,6 +148,7 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 
 		var sendErr error
 		var wamidValue string
+		replyToWAMID := strings.TrimSpace(input.ReplyToWAMID)
 		if attachment != nil {
 			reader, _, downloadErr := s.outbound.Storage.Download(ctx, teamID, attachment.StorageObjectID)
 			if downloadErr != nil {
@@ -154,7 +159,7 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 			if uploadErr != nil {
 				return nil, serviceerrors.NewValidation("whatsapp", uploadErr.Error())
 			}
-			wamidValue, sendErr = s.outbound.Meta.SendMediaMessage(
+			wamidValue, sendErr = s.outbound.Meta.SendMediaMessageWithContext(
 				ctx,
 				*ch.PhoneNumberID,
 				token,
@@ -163,9 +168,17 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 				mediaID,
 				content,
 				attachment.Filename,
+				replyToWAMID,
 			)
 		} else {
-			wamidValue, sendErr = s.outbound.Meta.SendTextMessage(ctx, *ch.PhoneNumberID, token, phone, content)
+			wamidValue, sendErr = s.outbound.Meta.SendTextMessageWithContext(
+				ctx,
+				*ch.PhoneNumberID,
+				token,
+				phone,
+				content,
+				replyToWAMID,
+			)
 		}
 		if sendErr != nil {
 			return nil, serviceerrors.NewValidation("whatsapp", sendErr.Error())
@@ -180,6 +193,8 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 		ContentType: contentType,
 		Recipient:   recipient,
 		WAMID:       wamid,
+		ReplyToWAMID: nullableWAMID(input.ReplyToWAMID),
+		ReplyToMessageID: s.resolveReplyTarget(ctx, teamID, conversationID, input.ReplyToWAMID),
 		Attachment:  attachment,
 	})
 	if err != nil {
@@ -198,6 +213,8 @@ type createOutboundInput struct {
 	ContentType ContentType
 	Recipient   *string
 	WAMID       *string
+	ReplyToWAMID *string
+	ReplyToMessageID *uuid.UUID
 	Attachment  *Attachment
 }
 
@@ -219,6 +236,8 @@ func (s *Service) createOutbound(ctx context.Context, teamID, userID uuid.UUID, 
 		Content:        input.Content,
 		ContentType:    input.ContentType,
 		WAMID:          input.WAMID,
+		ReplyToWAMID:   input.ReplyToWAMID,
+		ReplyToMessageID: input.ReplyToMessageID,
 		ReceivedAt:     now,
 		CreatedAt:      now,
 	}
@@ -258,4 +277,34 @@ func filenameFromObject(meta *storageclient.StoredObject) string {
 		return "attachment"
 	}
 	return name
+}
+
+func nullableWAMID(v string) *string {
+	value := strings.TrimSpace(v)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func (s *Service) revokeOnProvider(ctx context.Context, teamID uuid.UUID, m *Message) error {
+	if m == nil || m.ChannelID == nil || m.WAMID == nil || strings.TrimSpace(*m.WAMID) == "" {
+		return nil
+	}
+	if s.outbound == nil || s.outbound.Meta == nil || s.outbound.Channels == nil || s.outbound.Cipher == nil {
+		return nil
+	}
+	ch, err := s.outbound.Channels.FindByID(ctx, teamID, *m.ChannelID)
+	if err != nil || ch == nil || ch.PhoneNumberID == nil || strings.TrimSpace(*ch.PhoneNumberID) == "" {
+		return nil
+	}
+	creds, err := s.outbound.Channels.FindCredentials(ctx, *m.ChannelID)
+	if err != nil {
+		return nil
+	}
+	token, err := s.outbound.Cipher.Decrypt(creds.AccessTokenEnc)
+	if err != nil {
+		return nil
+	}
+	return s.outbound.Meta.DeleteMessage(ctx, *ch.PhoneNumberID, token, *m.WAMID)
 }

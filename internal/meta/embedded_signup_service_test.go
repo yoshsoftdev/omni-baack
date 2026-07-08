@@ -292,7 +292,7 @@ func TestEmbeddedSignupOAuthFailureNoPersist(t *testing.T) {
 	}
 }
 
-func TestEmbeddedSignupSubscriptionFailureNoPersist(t *testing.T) {
+func TestEmbeddedSignupSubscriptionFailureStillPersistsCredentials(t *testing.T) {
 	teamID := uuid.New()
 	userID := uuid.New()
 	chRepo := &signupChannelRepo{}
@@ -302,14 +302,20 @@ func TestEmbeddedSignupSubscriptionFailureNoPersist(t *testing.T) {
 	}
 	svc := newTestSignupService(meta, chRepo, newMemorySessionRepo())
 	start, _ := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID)
-	_, err := svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, start.SessionID, metasvc.CompleteEmbeddedSignupInput{
+	result, err := svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, start.SessionID, metasvc.CompleteEmbeddedSignupInput{
 		Code: "code", OAuthState: start.OAuthState, WABAID: "waba", PhoneNumberID: "phone-1",
 	})
-	if err == nil {
-		t.Fatal("expected error")
+	if err != nil {
+		t.Fatalf("expected success with persisted credentials: %v", err)
 	}
-	if chRepo.ch != nil || chRepo.creds != nil || chRepo.ob != nil {
-		t.Fatal("subscription failure must not persist channel data")
+	if result.Status != string(channel.StatusConnected) || chRepo.ch == nil {
+		t.Fatal("channel must be provisioned when subscribe fails after token persistence")
+	}
+	if chRepo.creds == nil {
+		t.Fatal("credentials must be stored even when subscribe fails")
+	}
+	if chRepo.ob == nil || chRepo.ob.Status != channel.OnboardingCompleted {
+		t.Fatal("onboarding must be completed even when subscribe fails")
 	}
 }
 

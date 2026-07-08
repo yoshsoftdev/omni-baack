@@ -168,6 +168,7 @@ func Register(router fiber.Router, deps Deps) {
 		if deps.Message != nil {
 			conversations.Get("/:id/messages", deps.Message.List)
 			conversations.Post("/:id/messages", deps.Message.Send)
+			conversations.Delete("/:id/messages/:messageId", deps.Message.Delete)
 		}
 	}
 

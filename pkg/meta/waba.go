@@ -48,6 +48,10 @@ func (c *Client) Ping(ctx context.Context, accessToken string) error {
 	return err
 }
 
+type subscribedAppsResponse struct {
+	Success bool `json:"success"`
+}
+
 // SubscribeAppToWABA registers this app to receive webhooks for the WABA (required for CoEx).
 func (c *Client) SubscribeAppToWABA(ctx context.Context, wabaID, accessToken string) error {
 	endpoint := fmt.Sprintf("https://graph.facebook.com/%s/%s/subscribed_apps", c.apiVersion, wabaID)
@@ -66,7 +70,15 @@ func (c *Client) SubscribeAppToWABA(ctx context.Context, wabaID, accessToken str
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
+		if IsAlreadySubscribed(resp.StatusCode, string(body)) {
+			return nil
+		}
 		return fmt.Errorf("subscribe app to waba error: %s", strings.TrimSpace(string(body)))
+	}
+
+	var result subscribedAppsResponse
+	if err := json.Unmarshal(body, &result); err == nil && !result.Success {
+		return fmt.Errorf("subscribe app to waba error: success=false")
 	}
 	return nil
 }

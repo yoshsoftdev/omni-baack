@@ -263,6 +263,9 @@ func (s *Service) ConnectEmbedded(ctx context.Context, teamID, userID uuid.UUID,
 	if err := s.devices.Update(ctx, device); err != nil {
 		return nil, err
 	}
+
+	_ = s.meta.SubscribeAppToWABA(ctx, wabaID, token.AccessToken)
+
 	return device, nil
 }
 

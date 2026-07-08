@@ -48,6 +48,32 @@ func IsRateLimited(err error) bool {
 	return false
 }
 
+// IsAlreadySubscribed reports Meta responses indicating the app is already subscribed.
+func IsAlreadySubscribed(statusCode int, body string) bool {
+	if statusCode < 400 {
+		return false
+	}
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "already subscribed") ||
+		strings.Contains(lower, "already installed") ||
+		strings.Contains(lower, "duplicate subscription")
+}
+
+// IsSubscribeAlreadyDone reports whether a subscribe error can be treated as success.
+func IsSubscribeAlreadyDone(err error) bool {
+	if err == nil {
+		return true
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return IsAlreadySubscribed(apiErr.StatusCode, apiErr.Body)
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "already subscribed") ||
+		strings.Contains(lower, "already installed") ||
+		strings.Contains(lower, "duplicate subscription")
+}
+
 // IsRetryable reports transient failures eligible for retry/backoff.
 func IsRetryable(err error) bool {
 	if err == nil {

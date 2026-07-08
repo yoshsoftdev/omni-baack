@@ -10,6 +10,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
+	"github.com/omnichannel/omni-chan-v2/internal/debug"
 	"github.com/omnichannel/omni-chan-v2/internal/message"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
@@ -25,6 +26,7 @@ type MetaClient interface {
 	RequestSMBSync(ctx context.Context, phoneNumberID, accessToken, syncType string) (*metapkg.SMBSyncResponse, error)
 	GetCoexistenceStatus(ctx context.Context, phoneNumberID, accessToken string) (*metapkg.CoexistenceStatus, error)
 	ListMessageTemplatesPage(ctx context.Context, wabaID, accessToken, after string) ([]metapkg.MessageTemplate, string, error)
+	SubscribeAppToWABA(ctx context.Context, wabaID, accessToken string) error
 }
 
 type TemplateSyncer interface {
@@ -257,6 +259,12 @@ func (s *Service) SyncConversations(ctx context.Context, teamID, userID uuid.UUI
 	reason := "No conversations available from Meta."
 	out := &ConversationSyncResult{Imported: imported, Reason: &reason}
 
+	// #region agent log
+	debug.AgentLog("H5", "channelsync/service.go:SyncConversations", "manual sync completed without waiting webhooks", map[string]any{
+		"channel_id": channelID.String(), "imported": imported, "history_request_id": state.HistorySyncRequestID,
+	})
+	// #endregion
+
 	state.ConversationsStatus = SyncCompleted
 	state.ConversationsImported = imported
 	state.ConversationsReason = &reason
@@ -317,6 +325,9 @@ func (s *Service) RefreshPermissionsAfterConnect(ctx context.Context, teamID, ch
 	if err != nil {
 		return serviceerrors.MapRepository(err)
 	}
+	if ch.IsCoex && ch.WABAID != nil && strings.TrimSpace(accessToken) != "" && s.meta != nil {
+		_ = s.meta.SubscribeAppToWABA(ctx, *ch.WABAID, accessToken)
+	}
 	state, err := s.state.EnsureState(ctx, channelID)
 	if err != nil {
 		return serviceerrors.MapRepository(err)
@@ -326,6 +337,11 @@ func (s *Service) RefreshPermissionsAfterConnect(ctx context.Context, teamID, ch
 }
 
 func (s *Service) HandleCoexWebhook(ctx context.Context, events *metapkg.CoexWebhookEvents) error {
+	// #region agent log
+	debug.AgentLog("H3", "channelsync/service.go:HandleCoexWebhook", "coex webhook handling", map[string]any{
+		"history_events": len(events.HistoryEvents), "contact_events": len(events.ContactSyncEvents),
+	})
+	// #endregion
 	for i := range events.ContactSyncEvents {
 		if err := s.handleContactSyncEvent(ctx, &events.ContactSyncEvents[i]); err != nil {
 			return err
@@ -385,8 +401,27 @@ func (s *Service) handleContactSyncEvent(ctx context.Context, event *metapkg.Con
 func (s *Service) handleHistoryEvent(ctx context.Context, event *metapkg.HistoryEvent) error {
 	ch, err := s.channels.FindByPhoneNumberID(ctx, event.PhoneNumberID)
 	if err != nil {
+		// #region agent log
+		debug.AgentLog("H1", "channelsync/service.go:handleHistoryEvent", "channel not found for phone_number_id", map[string]any{
+			"phone_number_id": event.PhoneNumberID, "phase": event.Phase, "progress": event.Progress, "error": err.Error(),
+		})
+		// #endregion
 		return nil
 	}
+
+	threadCount := len(event.Threads)
+	messageCount := 0
+	for _, t := range event.Threads {
+		messageCount += len(t.Messages)
+	}
+	// #region agent log
+	debug.AgentLog("H3", "channelsync/service.go:handleHistoryEvent", "processing history chunk", map[string]any{
+		"channel_id": ch.ID.String(), "phone_number_id": event.PhoneNumberID, "phase": event.Phase,
+		"progress": event.Progress, "threads": threadCount, "messages": messageCount, "declined": event.Declined,
+		"business_phone": ch.PhoneNumber,
+	})
+	// #endregion
+
 	if event.Declined {
 		reason := event.DeclineReason
 		if reason == "" {
@@ -410,6 +445,9 @@ func (s *Service) handleHistoryEvent(ctx context.Context, event *metapkg.History
 	if ch.PhoneNumber != nil {
 		businessPhone = phone.Normalize(*ch.PhoneNumber)
 	}
+	createdMessages := 0
+	skippedMessages := 0
+	createErrors := 0
 	for _, thread := range event.Threads {
 		contactPhone := phone.Normalize(thread.ContactPhone)
 		contactEntity, mergeErr := mergeContact(ctx, s.contacts, ch.TeamID, contactPhone, contactPhone, "")
@@ -425,9 +463,11 @@ func (s *Service) handleHistoryEvent(ctx context.Context, event *metapkg.History
 		}
 		for _, histMsg := range thread.Messages {
 			if histMsg.ID == "" || s.messages == nil {
+				skippedMessages++
 				continue
 			}
 			if existing, findErr := s.messages.FindByWAMID(ctx, histMsg.ID); findErr == nil && existing != nil {
+				skippedMessages++
 				continue
 			}
 			direction := message.DirectionInbound
@@ -456,10 +496,20 @@ func (s *Service) handleHistoryEvent(ctx context.Context, event *metapkg.History
 				CreatedAt:      now,
 			}
 			if err := s.messages.Create(ctx, msg); err != nil {
+				createErrors++
 				return err
 			}
+			createdMessages++
 		}
 	}
+
+	// #region agent log
+	debug.AgentLog("H3", "channelsync/service.go:handleHistoryEvent", "history import result", map[string]any{
+		"channel_id": ch.ID.String(), "phase": event.Phase, "progress": event.Progress,
+		"threads_imported": imported, "messages_created": createdMessages, "messages_skipped": skippedMessages,
+		"create_errors": createErrors, "business_phone_norm": businessPhone,
+	})
+	// #endregion
 
 	state, err := s.state.EnsureState(ctx, ch.ID)
 	if err != nil {
@@ -474,6 +524,11 @@ func (s *Service) handleHistoryEvent(ctx context.Context, event *metapkg.History
 		if imported == 0 {
 			reason := "No conversations available from Meta."
 			state.ConversationsReason = &reason
+			// #region agent log
+			debug.AgentLog("H4", "channelsync/service.go:handleHistoryEvent", "phase complete with zero threads in chunk", map[string]any{
+				"channel_id": ch.ID.String(), "phase": event.Phase, "total_imported": state.ConversationsImported,
+			})
+			// #endregion
 		}
 	}
 	return s.state.UpdateState(ctx, state)

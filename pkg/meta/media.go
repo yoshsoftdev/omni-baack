@@ -85,10 +85,23 @@ func (c *Client) UploadMedia(ctx context.Context, phoneNumberID, accessToken, mi
 }
 
 func (c *Client) SendMediaMessage(ctx context.Context, phoneNumberID, accessToken, to, messageType, mediaID, caption, filename string) (string, error) {
+	return c.SendMediaMessageWithContext(ctx, phoneNumberID, accessToken, to, messageType, mediaID, caption, filename, "")
+}
+
+func (c *Client) SendMediaMessageWithContext(
+	ctx context.Context,
+	phoneNumberID, accessToken, to, messageType, mediaID, caption, filename, replyToWAMID string,
+) (string, error) {
 	payload := map[string]any{
 		"messaging_product": "whatsapp",
 		"to":                to,
 		"type":              messageType,
+	}
+	replyToWAMID = strings.TrimSpace(replyToWAMID)
+	if replyToWAMID != "" {
+		payload["context"] = map[string]string{
+			"message_id": replyToWAMID,
+		}
 	}
 	media := map[string]string{"id": mediaID}
 	if strings.TrimSpace(caption) != "" {
