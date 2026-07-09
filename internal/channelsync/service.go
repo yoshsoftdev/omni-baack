@@ -11,6 +11,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
 	"github.com/omnichannel/omni-chan-v2/internal/debug"
+	"github.com/omnichannel/omni-chan-v2/internal/inbox"
 	"github.com/omnichannel/omni-chan-v2/internal/message"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
@@ -37,12 +38,17 @@ type WorkspaceRefresher interface {
 	RefreshReadinessInternal(ctx context.Context, teamID uuid.UUID) error
 }
 
+type InboxSync interface {
+	HandleOutbound(ctx context.Context, p inbox.OutboundParams) (*conversation.Conversation, error)
+}
+
 type Service struct {
 	state         Repository
 	channels      channel.Repository
 	contacts      contact.Repository
 	conversations conversation.Repository
 	messages      message.Repository
+	inboxSync     InboxSync
 	teams         team.Repository
 	templates     TemplateSyncer
 	meta          MetaClient
@@ -57,6 +63,7 @@ func NewService(
 	contacts contact.Repository,
 	conversations conversation.Repository,
 	messages message.Repository,
+	inboxSync InboxSync,
 	teams team.Repository,
 	templates TemplateSyncer,
 	meta MetaClient,
@@ -70,6 +77,7 @@ func NewService(
 		contacts:      contacts,
 		conversations: conversations,
 		messages:      messages,
+		inboxSync:     inboxSync,
 		teams:         teams,
 		templates:     templates,
 		meta:          meta,
@@ -339,7 +347,7 @@ func (s *Service) RefreshPermissionsAfterConnect(ctx context.Context, teamID, ch
 func (s *Service) HandleCoexWebhook(ctx context.Context, events *metapkg.CoexWebhookEvents) error {
 	// #region agent log
 	debug.AgentLog("H3", "channelsync/service.go:HandleCoexWebhook", "coex webhook handling", map[string]any{
-		"history_events": len(events.HistoryEvents), "contact_events": len(events.ContactSyncEvents),
+		"history_events": len(events.HistoryEvents), "contact_events": len(events.ContactSyncEvents), "echo_events": len(events.MessageEchoes),
 	})
 	// #endregion
 	for i := range events.ContactSyncEvents {
@@ -349,6 +357,11 @@ func (s *Service) HandleCoexWebhook(ctx context.Context, events *metapkg.CoexWeb
 	}
 	for i := range events.HistoryEvents {
 		if err := s.handleHistoryEvent(ctx, &events.HistoryEvents[i]); err != nil {
+			return err
+		}
+	}
+	for i := range events.MessageEchoes {
+		if err := s.handleMessageEchoEvent(ctx, &events.MessageEchoes[i]); err != nil {
 			return err
 		}
 	}
@@ -380,6 +393,11 @@ func (s *Service) handleContactSyncEvent(ctx context.Context, event *metapkg.Con
 	if err != nil {
 		return err
 	}
+	// #region agent log
+	debug.AgentLog("H8", "channelsync/service.go:handleContactSyncEvent", "contact sync batch processed", map[string]any{
+		"channel_id": ch.ID.String(), "created": result.Created, "updated": result.Updated, "duplicates": result.Duplicates,
+	})
+	// #endregion
 	if result.Created == 0 && result.Updated == 0 && result.Duplicates == 0 {
 		return nil
 	}
@@ -452,10 +470,20 @@ func (s *Service) handleHistoryEvent(ctx context.Context, event *metapkg.History
 		contactPhone := phone.Normalize(thread.ContactPhone)
 		contactEntity, mergeErr := mergeContact(ctx, s.contacts, ch.TeamID, contactPhone, contactPhone, "")
 		if mergeErr != nil {
+			// #region agent log
+			debug.AgentLog("H6", "channelsync/service.go:handleHistoryEvent", "merge contact failed", map[string]any{
+				"channel_id": ch.ID.String(), "phone_number_id": event.PhoneNumberID, "contact_phone": contactPhone, "error": mergeErr.Error(),
+			})
+			// #endregion
 			return mergeErr
 		}
 		conv, convErr := findOrCreateConversation(ctx, s.conversations, ch.TeamID, contactEntity.ID, ch.ID)
 		if convErr != nil {
+			// #region agent log
+			debug.AgentLog("H6", "channelsync/service.go:handleHistoryEvent", "find/create conversation failed", map[string]any{
+				"channel_id": ch.ID.String(), "phone_number_id": event.PhoneNumberID, "contact_id": contactEntity.ID.String(), "error": convErr.Error(),
+			})
+			// #endregion
 			return convErr
 		}
 		if len(thread.Messages) > 0 {
@@ -497,6 +525,11 @@ func (s *Service) handleHistoryEvent(ctx context.Context, event *metapkg.History
 			}
 			if err := s.messages.Create(ctx, msg); err != nil {
 				createErrors++
+				// #region agent log
+				debug.AgentLog("H6", "channelsync/service.go:handleHistoryEvent", "create history message failed", map[string]any{
+					"channel_id": ch.ID.String(), "conversation_id": conv.ID.String(), "wamid": histMsg.ID, "error": err.Error(),
+				})
+				// #endregion
 				return err
 			}
 			createdMessages++
@@ -532,6 +565,96 @@ func (s *Service) handleHistoryEvent(ctx context.Context, event *metapkg.History
 		}
 	}
 	return s.state.UpdateState(ctx, state)
+}
+
+func (s *Service) handleMessageEchoEvent(ctx context.Context, event *metapkg.MessageEchoEvent) error {
+	ch, err := s.channels.FindByPhoneNumberID(ctx, event.PhoneNumberID)
+	if err != nil {
+		// #region agent log
+		debug.AgentLog("H7", "channelsync/service.go:handleMessageEchoEvent", "channel not found for echo", map[string]any{
+			"phone_number_id": event.PhoneNumberID,
+		})
+		// #endregion
+		return nil
+	}
+	contactPhone := phone.Normalize(event.To)
+	// #region agent log
+	debug.AgentLog("H7", "channelsync/service.go:handleMessageEchoEvent", "processing echo", map[string]any{
+		"channel_id": ch.ID.String(), "phone_number_id": event.PhoneNumberID, "from": event.From, "to": event.To, "to_norm": contactPhone, "wamid": event.ID,
+	})
+	// #endregion
+	contactEntity, mergeErr := mergeContact(ctx, s.contacts, ch.TeamID, contactPhone, contactPhone, "")
+	if mergeErr != nil {
+		// #region agent log
+		debug.AgentLog("H7", "channelsync/service.go:handleMessageEchoEvent", "merge contact failed", map[string]any{
+			"channel_id": ch.ID.String(), "to_norm": contactPhone, "error": mergeErr.Error(),
+		})
+		// #endregion
+		return mergeErr
+	}
+	conv, convErr := findOrCreateConversation(ctx, s.conversations, ch.TeamID, contactEntity.ID, ch.ID)
+	if convErr != nil {
+		// #region agent log
+		debug.AgentLog("H7", "channelsync/service.go:handleMessageEchoEvent", "find/create conversation failed", map[string]any{
+			"channel_id": ch.ID.String(), "contact_id": contactEntity.ID.String(), "error": convErr.Error(),
+		})
+		// #endregion
+		return convErr
+	}
+	if event.ID != "" && s.messages != nil {
+		if existing, findErr := s.messages.FindByWAMID(ctx, event.ID); findErr == nil && existing != nil {
+			return nil
+		}
+	}
+	sentAt := metapkg.ParseUnixTimestamp(event.Timestamp)
+	channelID := ch.ID
+	wamid := event.ID
+	now := time.Now().UTC()
+	recipient := contactPhone
+	msg := &message.Message{
+		ID:             uuid.New(),
+		TeamID:         ch.TeamID,
+		ConversationID: conv.ID,
+		ChannelID:      &channelID,
+		WAMID:          &wamid,
+		Direction:      message.DirectionOutbound,
+		Sender:         phone.Normalize(event.From),
+		Recipient:      &recipient,
+		Content:        event.Body,
+		ContentType:    message.ContentText,
+		ReceivedAt:     sentAt,
+		CreatedAt:      now,
+	}
+	if s.messages == nil {
+		// #region agent log
+		debug.AgentLog("H7", "channelsync/service.go:handleMessageEchoEvent", "messages repository is nil", map[string]any{
+			"channel_id": ch.ID.String(), "conversation_id": conv.ID.String(),
+		})
+		// #endregion
+		return nil
+	}
+	if err := s.messages.Create(ctx, msg); err != nil {
+		// #region agent log
+		debug.AgentLog("H7", "channelsync/service.go:handleMessageEchoEvent", "create echo message failed", map[string]any{
+			"channel_id": ch.ID.String(), "wamid": event.ID, "error": err.Error(),
+		})
+		// #endregion
+		return err
+	}
+	if s.inboxSync != nil {
+		_, _ = s.inboxSync.HandleOutbound(ctx, inbox.OutboundParams{
+			TeamID:       ch.TeamID,
+			AgentID:      uuid.Nil,
+			Conversation: conv,
+			Message:      msg,
+		})
+	}
+	// #region agent log
+	debug.AgentLog("H7", "channelsync/service.go:handleMessageEchoEvent", "echo message stored", map[string]any{
+		"channel_id": ch.ID.String(), "conversation_id": conv.ID.String(), "wamid": event.ID, "to": contactPhone,
+	})
+	// #endregion
+	return nil
 }
 
 func (s *Service) processPendingContactEvents(ctx context.Context, channelID, teamID uuid.UUID) (*ContactSyncResult, error) {
@@ -678,8 +801,18 @@ func mergeContact(ctx context.Context, contacts contact.Repository, teamID uuid.
 func mergeContactWithOutcome(ctx context.Context, contacts contact.Repository, teamID uuid.UUID, rawPhone, displayName, profileName string) (mergeOutcome, *contact.Contact, error) {
 	phoneNorm := phone.Normalize(rawPhone)
 	name := pickDisplayName(displayName, profileName, phoneNorm)
+	phonePlus := ""
+	if phoneNorm != "" {
+		phonePlus = "+" + phoneNorm
+	}
 
 	existing, err := contacts.FindByPhone(ctx, teamID, phoneNorm)
+	if err != nil && phonePlus != "" {
+		if alt, altErr := contacts.FindByPhone(ctx, teamID, phonePlus); altErr == nil {
+			existing = alt
+			err = nil
+		}
+	}
 	if err == nil {
 		updated := false
 		if name != "" && name != existing.Name {
@@ -707,12 +840,16 @@ func mergeContactWithOutcome(ctx context.Context, contacts contact.Repository, t
 	}
 
 	now := time.Now().UTC()
+	storePhone := phonePlus
+	if storePhone == "" {
+		storePhone = phoneNorm
+	}
 	c := &contact.Contact{
 		ID:              uuid.New(),
 		TeamID:          teamID,
 		Name:            name,
-		Phone:           phoneNorm,
-		Source:          contact.SourceMetaSync,
+		Phone:           storePhone,
+		Source:          contact.SourceMetaInbound,
 		MarketingStatus: contact.MarketingUnknown,
 		CreatedAt:       now,
 		UpdatedAt:       now,

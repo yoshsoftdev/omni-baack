@@ -253,14 +253,22 @@ func (h *MessageHandler) syncInboundAttachment(ctx context.Context, tenant *reso
 
 func extractInboundMediaRef(messageType string, raw json.RawMessage) (mediaID string, filename string) {
 	var media struct {
-		Image    *struct{ ID string `json:"id"` } `json:"image"`
-		Video    *struct{ ID string `json:"id"` } `json:"video"`
-		Audio    *struct{ ID string `json:"id"` } `json:"audio"`
+		Image *struct {
+			ID string `json:"id"`
+		} `json:"image"`
+		Video *struct {
+			ID string `json:"id"`
+		} `json:"video"`
+		Audio *struct {
+			ID string `json:"id"`
+		} `json:"audio"`
 		Document *struct {
 			ID       string `json:"id"`
 			Filename string `json:"filename"`
 		} `json:"document"`
-		Sticker *struct{ ID string `json:"id"` } `json:"sticker"`
+		Sticker *struct {
+			ID string `json:"id"`
+		} `json:"sticker"`
 	}
 	if err := json.Unmarshal(raw, &media); err != nil {
 		return "", ""

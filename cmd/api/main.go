@@ -11,10 +11,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/api"
-	"github.com/omnichannel/omni-chan-v2/internal/api/v1/handler"
 	v1 "github.com/omnichannel/omni-chan-v2/internal/api/v1"
-	"github.com/omnichannel/omni-chan-v2/internal/eventconsumer"
-	eventconsumeridempotency "github.com/omnichannel/omni-chan-v2/internal/eventconsumer/idempotency"
+	"github.com/omnichannel/omni-chan-v2/internal/api/v1/handler"
 	"github.com/omnichannel/omni-chan-v2/internal/auth"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign/delivery"
@@ -25,6 +23,8 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
 	"github.com/omnichannel/omni-chan-v2/internal/dashboard"
 	"github.com/omnichannel/omni-chan-v2/internal/device"
+	"github.com/omnichannel/omni-chan-v2/internal/eventconsumer"
+	eventconsumeridempotency "github.com/omnichannel/omni-chan-v2/internal/eventconsumer/idempotency"
 	"github.com/omnichannel/omni-chan-v2/internal/inbox"
 	"github.com/omnichannel/omni-chan-v2/internal/message"
 	metasvc "github.com/omnichannel/omni-chan-v2/internal/meta"
@@ -36,21 +36,21 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/segment"
 	"github.com/omnichannel/omni-chan-v2/internal/storageclient"
 	"github.com/omnichannel/omni-chan-v2/internal/tag"
-	"github.com/omnichannel/omni-chan-v2/internal/template"
-	wsserver "github.com/omnichannel/omni-chan-v2/internal/websocket"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
+	"github.com/omnichannel/omni-chan-v2/internal/template"
 	"github.com/omnichannel/omni-chan-v2/internal/user"
-	"github.com/omnichannel/omni-chan-v2/internal/workspace"
+	wsserver "github.com/omnichannel/omni-chan-v2/internal/websocket"
 	"github.com/omnichannel/omni-chan-v2/internal/websocket/hub"
-	jwtmanager "github.com/omnichannel/omni-chan-v2/pkg/jwt"
+	"github.com/omnichannel/omni-chan-v2/internal/workspace"
 	"github.com/omnichannel/omni-chan-v2/pkg/broadcastcancel"
 	"github.com/omnichannel/omni-chan-v2/pkg/cryptoutil"
 	"github.com/omnichannel/omni-chan-v2/pkg/database"
+	jwtmanager "github.com/omnichannel/omni-chan-v2/pkg/jwt"
 	"github.com/omnichannel/omni-chan-v2/pkg/logger"
 	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
 	"github.com/omnichannel/omni-chan-v2/pkg/migrate"
-	"github.com/omnichannel/omni-chan-v2/pkg/uow"
 	redisclient "github.com/omnichannel/omni-chan-v2/pkg/redis"
+	"github.com/omnichannel/omni-chan-v2/pkg/uow"
 	"github.com/omnichannel/omni-chan-v2/pkg/workerregistry"
 	sharedconfig "github.com/omnichannel/omni-chan-v2/shared/config"
 	sharednats "github.com/omnichannel/omni-chan-v2/shared/nats"
@@ -197,6 +197,7 @@ func main() {
 		contactRepo,
 		conversationRepo,
 		messageRepo,
+		inboxSync,
 		teamRepo,
 		metaSyncService,
 		metaClient,
@@ -239,25 +240,25 @@ func main() {
 		DB:     db,
 		JWT:    jwt,
 		V1: v1.Deps{
-			Auth:         handler.NewAuthHandler(authService),
-			Workspace:    handler.NewWorkspaceHandler(workspaceService),
-			Team:         handler.NewTeamHandler(teamService, rbacService),
-			Channel:      handler.NewChannelHandler(channelService, metaHealthService, embeddedSignupService, paymentService, channelSyncService),
-			Template:     handler.NewTemplateHandler(templateService),
-			Contact:      handler.NewContactHandler(contactService),
-			Segment:      handler.NewSegmentHandler(segmentService),
-			Tag:          handler.NewTagHandler(tagService),
-			Campaign:     handler.NewCampaignHandler(campaignService),
-			Operations:   handler.NewOperationsHandler(operationsService),
-			Report:       handler.NewReportHandler(reportService),
-			Conversation: handler.NewConversationHandler(conversationService, collaborationService),
+			Auth:              handler.NewAuthHandler(authService),
+			Workspace:         handler.NewWorkspaceHandler(workspaceService),
+			Team:              handler.NewTeamHandler(teamService, rbacService),
+			Channel:           handler.NewChannelHandler(channelService, metaHealthService, embeddedSignupService, paymentService, channelSyncService),
+			Template:          handler.NewTemplateHandler(templateService),
+			Contact:           handler.NewContactHandler(contactService),
+			Segment:           handler.NewSegmentHandler(segmentService),
+			Tag:               handler.NewTagHandler(tagService),
+			Campaign:          handler.NewCampaignHandler(campaignService),
+			Operations:        handler.NewOperationsHandler(operationsService),
+			Report:            handler.NewReportHandler(reportService),
+			Conversation:      handler.NewConversationHandler(conversationService, collaborationService),
 			Message:           handler.NewMessageHandler(messageService, conversationService, inboxSync),
 			StorageServiceURL: cfg.StorageService.URL,
 			Dashboard:         handler.NewDashboardHandler(dashboardService),
-			Webhook:      handler.NewWebhookHandler(cfg.Meta.VerifyToken),
-			Meta:         metasvc.NewHandler(cfg.Meta),
-			ActorResolver: actorResolver,
-			JWT:           jwt,
+			Webhook:           handler.NewWebhookHandler(cfg.Meta.VerifyToken),
+			Meta:              metasvc.NewHandler(cfg.Meta),
+			ActorResolver:     actorResolver,
+			JWT:               jwt,
 		},
 	})
 
