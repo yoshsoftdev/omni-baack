@@ -282,7 +282,7 @@ func main() {
 		},
 	})
 
-	wsserver.Register(app, wsHub, jwt, log, presenceService)
+	wsserver.Register(app, wsHub, jwt, log, presenceService, collisionService)
 
 	go func() {
 		log.Info("server starting", "addr", cfg.HTTP.Addr())

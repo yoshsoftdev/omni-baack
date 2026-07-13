@@ -12,11 +12,18 @@ import (
 )
 
 const (
-	typingTTL         = 5 * time.Second
-	viewersKeyPrefix  = "inbox:conv:"
-	viewersKeySuffix  = ":viewers"
-	typingKeyTemplate = "inbox:conv:%s:typing:%s"
+	typingTTL           = 5 * time.Second
+	viewersKeyPrefix    = "inbox:conv:"
+	viewersKeySuffix    = ":viewers"
+	typingKeyTemplate   = "inbox:conv:%s:typing:%s"
+	activeViewKeyPrefix = "inbox:user:"
+	activeViewKeySuffix = ":viewing"
 )
+
+type activeView struct {
+	ConversationID string `json:"conversation_id"`
+	AgentName      string `json:"agent_name"`
+}
 
 // CollisionAgent is an agent participating in conversation presence.
 type CollisionAgent struct {
@@ -41,6 +48,9 @@ type CollisionStore interface {
 	SetTyping(ctx context.Context, conversationID, userID, agentName string) error
 	ClearTyping(ctx context.Context, conversationID, userID string) error
 	ListTyping(ctx context.Context, conversationID string) ([]CollisionAgent, error)
+	SetActiveView(ctx context.Context, userID, conversationID, agentName string) error
+	GetActiveView(ctx context.Context, userID string) (conversationID, agentName string, err error)
+	ClearActiveView(ctx context.Context, userID string) error
 }
 
 // RedisCollisionStore stores viewers and typing state in Redis.
@@ -60,12 +70,43 @@ func typingKey(conversationID, userID string) string {
 	return fmt.Sprintf(typingKeyTemplate, conversationID, userID)
 }
 
+func activeViewKey(userID string) string {
+	return activeViewKeyPrefix + userID + activeViewKeySuffix
+}
+
 func (s *RedisCollisionStore) AddViewer(ctx context.Context, conversationID, userID, agentName string) error {
 	return s.client.HSet(ctx, viewersKey(conversationID), userID, agentName).Err()
 }
 
 func (s *RedisCollisionStore) RemoveViewer(ctx context.Context, conversationID, userID string) error {
 	return s.client.HDel(ctx, viewersKey(conversationID), userID).Err()
+}
+
+func (s *RedisCollisionStore) SetActiveView(ctx context.Context, userID, conversationID, agentName string) error {
+	payload, err := json.Marshal(activeView{ConversationID: conversationID, AgentName: agentName})
+	if err != nil {
+		return err
+	}
+	return s.client.Set(ctx, activeViewKey(userID), payload, 0).Err()
+}
+
+func (s *RedisCollisionStore) GetActiveView(ctx context.Context, userID string) (string, string, error) {
+	raw, err := s.client.Get(ctx, activeViewKey(userID)).Result()
+	if err == goredis.Nil {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	var view activeView
+	if err := json.Unmarshal([]byte(raw), &view); err != nil {
+		return "", "", err
+	}
+	return view.ConversationID, view.AgentName, nil
+}
+
+func (s *RedisCollisionStore) ClearActiveView(ctx context.Context, userID string) error {
+	return s.client.Del(ctx, activeViewKey(userID)).Err()
 }
 
 func (s *RedisCollisionStore) ListViewers(ctx context.Context, conversationID string) ([]CollisionAgent, error) {
@@ -130,7 +171,17 @@ func NewCollisionService(store CollisionStore, publisher RealtimePublisher) *Col
 func (s *CollisionService) OpenConversation(ctx context.Context, teamID, conversationID, userID uuid.UUID, agentName string) (CollisionSnapshot, error) {
 	convKey := conversationID.String()
 	userKey := userID.String()
+	if prevConv, prevName, err := s.store.GetActiveView(ctx, userKey); err == nil && prevConv != "" && prevConv != convKey {
+		_ = s.store.RemoveViewer(ctx, prevConv, userKey)
+		_ = s.store.ClearTyping(ctx, prevConv, userKey)
+		if prevSnapshot, snapErr := s.snapshot(ctx, prevConv, userKey, prevName); snapErr == nil {
+			_ = s.publish(ctx, teamID, EventConversationViewClosed, prevSnapshot)
+		}
+	}
 	if err := s.store.AddViewer(ctx, convKey, userKey, agentName); err != nil {
+		return CollisionSnapshot{}, err
+	}
+	if err := s.store.SetActiveView(ctx, userKey, convKey, agentName); err != nil {
 		return CollisionSnapshot{}, err
 	}
 	snapshot, err := s.snapshot(ctx, convKey, userKey, agentName)
@@ -152,6 +203,9 @@ func (s *CollisionService) CloseConversation(ctx context.Context, teamID, conver
 	if err := s.store.ClearTyping(ctx, convKey, userKey); err != nil {
 		return CollisionSnapshot{}, err
 	}
+	if activeConv, _, err := s.store.GetActiveView(ctx, userKey); err == nil && (activeConv == "" || activeConv == convKey) {
+		_ = s.store.ClearActiveView(ctx, userKey)
+	}
 	snapshot, err := s.snapshot(ctx, convKey, userKey, agentName)
 	if err != nil {
 		return CollisionSnapshot{}, err
@@ -160,6 +214,25 @@ func (s *CollisionService) CloseConversation(ctx context.Context, teamID, conver
 		return CollisionSnapshot{}, err
 	}
 	return snapshot, nil
+}
+
+// ClearUserPresence removes the user from any active conversation view (logout/disconnect).
+func (s *CollisionService) ClearUserPresence(ctx context.Context, teamID, userID uuid.UUID) error {
+	userKey := userID.String()
+	convKey, agentName, err := s.store.GetActiveView(ctx, userKey)
+	if err != nil {
+		return err
+	}
+	if convKey == "" {
+		return nil
+	}
+	conversationID, err := uuid.Parse(convKey)
+	if err != nil {
+		_ = s.store.ClearActiveView(ctx, userKey)
+		return nil
+	}
+	_, err = s.CloseConversation(ctx, teamID, conversationID, userID, agentName)
+	return err
 }
 
 func (s *CollisionService) StartTyping(ctx context.Context, teamID, conversationID, userID uuid.UUID, agentName string) (CollisionSnapshot, error) {

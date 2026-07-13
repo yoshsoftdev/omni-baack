@@ -57,6 +57,19 @@ func (h *Hub) Unregister(client *Client) {
 	}
 }
 
+// HasUserConnection reports whether the tenant still has any open socket for userID.
+func (h *Hub) HasUserConnection(tenantID, userID string) bool {
+	room := tenantRoom(tenantID)
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for client := range h.rooms[room] {
+		if client.UserID == userID {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Hub) BroadcastToTenant(tenantID string, payload []byte) {
 	room := tenantRoom(tenantID)
 	h.mu.RLock()

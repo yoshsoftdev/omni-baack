@@ -9,15 +9,17 @@ import (
 
 // MemoryCollisionStore is an in-memory CollisionStore for tests.
 type MemoryCollisionStore struct {
-	mu      sync.Mutex
-	viewers map[string]map[string]string
-	typing  map[string]map[string]string
+	mu          sync.Mutex
+	viewers     map[string]map[string]string
+	typing      map[string]map[string]string
+	activeViews map[string]activeView
 }
 
 func NewMemoryCollisionStore() *MemoryCollisionStore {
 	return &MemoryCollisionStore{
-		viewers: make(map[string]map[string]string),
-		typing:  make(map[string]map[string]string),
+		viewers:     make(map[string]map[string]string),
+		typing:      make(map[string]map[string]string),
+		activeViews: make(map[string]activeView),
 	}
 }
 
@@ -65,6 +67,30 @@ func (s *MemoryCollisionStore) ListTyping(_ context.Context, conversationID stri
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return mapAgents(s.typing[conversationID]), nil
+}
+
+func (s *MemoryCollisionStore) SetActiveView(_ context.Context, userID, conversationID, agentName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.activeViews[userID] = activeView{ConversationID: conversationID, AgentName: agentName}
+	return nil
+}
+
+func (s *MemoryCollisionStore) GetActiveView(_ context.Context, userID string) (string, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	view, ok := s.activeViews[userID]
+	if !ok {
+		return "", "", nil
+	}
+	return view.ConversationID, view.AgentName, nil
+}
+
+func (s *MemoryCollisionStore) ClearActiveView(_ context.Context, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.activeViews, userID)
+	return nil
 }
 
 type recordingPublisher struct {

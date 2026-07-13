@@ -53,9 +53,24 @@ func TestHub_BroadcastToTenant(t *testing.T) {
 	}
 }
 
-func TestTenantIDFromChannel(t *testing.T) {
-	got := tenantIDFromChannel("ws:tenant:abc-123")
-	if got != "abc-123" {
-		t.Errorf("tenantID = %q", got)
+func TestHub_HasUserConnection(t *testing.T) {
+	h := New(logger.New("test"), nil)
+	client := &Client{
+		TenantID: "tenant-1",
+		UserID:   "user-1",
+		send:     make(chan []byte, 1),
+	}
+	h.Register(client)
+
+	if !h.HasUserConnection("tenant-1", "user-1") {
+		t.Fatal("expected user connection")
+	}
+	if h.HasUserConnection("tenant-1", "user-2") {
+		t.Fatal("did not expect other user connection")
+	}
+
+	h.Unregister(client)
+	if h.HasUserConnection("tenant-1", "user-1") {
+		t.Fatal("expected no user connection after unregister")
 	}
 }
