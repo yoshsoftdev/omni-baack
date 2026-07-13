@@ -15,10 +15,16 @@ const (
 	EventConversationReassigned = "conversation.reassigned"
 	EventConversationClosed    = "conversation.closed"
 	EventConversationReopened  = "conversation.reopened"
+	EventConversationDeleted   = "conversation.deleted"
+	EventConversationUnreadChanged = "conversation.unread_changed"
 	EventConversationNoteCreated = "conversation.note.created"
 	EventMessageCreated      = "message.created"
 	EventMessageStatusUpdate = "message.status.updated"
 	EventAssignmentUpdated   = "assignment.updated"
+	EventConversationOpened  = "conversation.opened"
+	EventConversationViewClosed = "conversation.view.closed"
+	EventAgentTypingStart    = "agent.typing.start"
+	EventAgentTypingStop     = "agent.typing.stop"
 )
 
 // RealtimeEvent is broadcast to team WebSocket clients.

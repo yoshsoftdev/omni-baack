@@ -131,7 +131,11 @@ func (s *Service) ApplyDeliveryStatus(ctx context.Context, wamid string, status 
 	if !shouldApplyStatus(m.Status, status) {
 		return nil
 	}
-	return s.messages.UpdateStatus(ctx, m.TeamID, m.ID, status)
+	if err := s.messages.UpdateStatus(ctx, m.TeamID, m.ID, status); err != nil {
+		return err
+	}
+	s.publishStatusUpdate(ctx, m, status)
+	return nil
 }
 
 func shouldApplyStatus(current *Status, next Status) bool {

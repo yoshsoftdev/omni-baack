@@ -11,6 +11,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/storageclient"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
 
@@ -59,6 +60,7 @@ type SendInput struct {
 	Content         string
 	StorageObjectID *uuid.UUID
 	ReplyToWAMID    string
+	ClientMessageID *uuid.UUID
 }
 
 // SendReply persists an agent reply and delivers it through WhatsApp when configured.
@@ -78,6 +80,20 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 	conv, err := s.conversations.FindByID(ctx, teamID, conversationID)
 	if err != nil {
 		return nil, serviceerrors.MapRepository(err)
+	}
+
+	if input.ClientMessageID != nil {
+		existing, findErr := s.messages.FindByClientMessageID(ctx, teamID, conversationID, *input.ClientMessageID)
+		if findErr == nil && existing != nil {
+			enriched := []Message{*existing}
+			if err := s.enrichSenderNames(ctx, enriched); err != nil {
+				return nil, err
+			}
+			return &enriched[0], nil
+		}
+		if findErr != nil && findErr != repository.ErrNotFound {
+			return nil, serviceerrors.MapRepository(findErr)
+		}
 	}
 
 	content := strings.TrimSpace(input.Content)
@@ -189,13 +205,14 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 	}
 
 	msg, err := s.createOutbound(ctx, teamID, userID, actorRole, conversationID, createOutboundInput{
-		Content:     content,
-		ContentType: contentType,
-		Recipient:   recipient,
-		WAMID:       wamid,
-		ReplyToWAMID: nullableWAMID(input.ReplyToWAMID),
+		Content:          content,
+		ContentType:      contentType,
+		Recipient:        recipient,
+		WAMID:            wamid,
+		ReplyToWAMID:     nullableWAMID(input.ReplyToWAMID),
 		ReplyToMessageID: s.resolveReplyTarget(ctx, teamID, conversationID, input.ReplyToWAMID),
-		Attachment:  attachment,
+		Attachment:       attachment,
+		ClientMessageID:  input.ClientMessageID,
 	})
 	if err != nil {
 		return nil, err
@@ -209,13 +226,14 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 }
 
 type createOutboundInput struct {
-	Content     string
-	ContentType ContentType
-	Recipient   *string
-	WAMID       *string
-	ReplyToWAMID *string
+	Content          string
+	ContentType      ContentType
+	Recipient        *string
+	WAMID            *string
+	ReplyToWAMID     *string
 	ReplyToMessageID *uuid.UUID
-	Attachment  *Attachment
+	Attachment       *Attachment
+	ClientMessageID  *uuid.UUID
 }
 
 func (s *Service) createOutbound(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID, input createOutboundInput) (*Message, error) {
@@ -225,21 +243,24 @@ func (s *Service) createOutbound(ctx context.Context, teamID, userID uuid.UUID, 
 	}
 
 	now := time.Now().UTC()
+	sentStatus := StatusSent
 	m := &Message{
-		ID:             uuid.New(),
-		ConversationID: conversationID,
-		TeamID:         teamID,
-		ChannelID:      conv.ChannelID,
-		Direction:      DirectionOutbound,
-		Sender:         userID.String(),
-		Recipient:      input.Recipient,
-		Content:        input.Content,
-		ContentType:    input.ContentType,
-		WAMID:          input.WAMID,
-		ReplyToWAMID:   input.ReplyToWAMID,
+		ID:               uuid.New(),
+		ClientMessageID:  input.ClientMessageID,
+		ConversationID:   conversationID,
+		TeamID:           teamID,
+		ChannelID:        conv.ChannelID,
+		Direction:        DirectionOutbound,
+		Sender:           userID.String(),
+		Recipient:        input.Recipient,
+		Content:          input.Content,
+		ContentType:      input.ContentType,
+		WAMID:            input.WAMID,
+		ReplyToWAMID:     input.ReplyToWAMID,
 		ReplyToMessageID: input.ReplyToMessageID,
-		ReceivedAt:     now,
-		CreatedAt:      now,
+		Status:           &sentStatus,
+		ReceivedAt:       now,
+		CreatedAt:        now,
 	}
 	if m.ContentType == "" {
 		m.ContentType = ContentText

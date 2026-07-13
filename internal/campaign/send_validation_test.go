@@ -12,10 +12,11 @@ import (
 func TestBuildTemplateComponentsBodyOrder(t *testing.T) {
 	email := "john@example.com"
 	c := &contact.Contact{
-		ID:    uuid.New(),
-		Name:  "John",
-		Phone: "628123",
-		Email: &email,
+		ID:           uuid.New(),
+		ContactName:  "John",
+		CustomerName: "John",
+		Phone:        "628123",
+		Email:        &email,
 	}
 	componentsJSON := json.RawMessage(`[{"type":"BODY","text":"Hello {{1}}, email {{2}}"}]`)
 
@@ -49,7 +50,7 @@ func TestValidateMissingVariableNoMetaCall(t *testing.T) {
 	tpl := &template.Template{
 		Components: json.RawMessage(`[{"type":"BODY","text":"Hello {{1}}"}]`),
 	}
-	err := ValidateTemplateSend(tpl, VariableMapping{}, &contact.Contact{Name: "A"}, nil)
+	err := ValidateTemplateSend(tpl, VariableMapping{}, &contact.Contact{CustomerName: "A", ContactName: "A"}, nil)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}

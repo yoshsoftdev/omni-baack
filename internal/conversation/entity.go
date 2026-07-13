@@ -32,6 +32,7 @@ const (
 	ViewMine       InboxView = "mine"
 	ViewUnassigned InboxView = "unassigned"
 	ViewUnread     InboxView = "unread"
+	ViewClosed     InboxView = "closed"
 )
 
 type Conversation struct {
@@ -49,6 +50,9 @@ type Conversation struct {
 	LastCustomerMessageAt *time.Time   `json:"last_customer_message_at,omitempty"`
 	LastAgentMessageAt    *time.Time   `json:"last_agent_message_at,omitempty"`
 	ResolutionAt          *time.Time   `json:"resolution_at,omitempty"`
+	WaitingSince          *time.Time   `json:"waiting_since,omitempty"`
+	BasePriority          int          `json:"base_priority"`
+	PriorityScore         int64        `json:"priority_score"`
 	CreatedAt             time.Time    `json:"created_at"`
 	UpdatedAt             time.Time    `json:"updated_at"`
 	DeletedAt             *time.Time   `json:"deleted_at,omitempty"`
@@ -57,8 +61,9 @@ type Conversation struct {
 type ListFilter struct {
 	Status     *Status
 	AssignedTo *uuid.UUID
-	ChannelID  *uuid.UUID
-	Search     string
+	ChannelID    *uuid.UUID
+	ChannelType  *ChannelType
+	Search       string
 	View       InboxView
 	ActorID    *uuid.UUID
 }
@@ -80,4 +85,22 @@ type InboxSyncUpdate struct {
 	ClearResolutionAt     bool
 	SetResolutionAt       bool
 	TouchLastMessage      bool
+	WaitingSince          *time.Time
+	ClearWaitingSince     bool
+	BasePriority          *int
+	PriorityScore         *int64
+}
+
+// ListCursor is the keyset pagination position for inbox ordering.
+type ListCursor struct {
+	PriorityScore int64
+	LastMessageAt *time.Time
+	ID            uuid.UUID
+}
+
+// CursorPage is a cursor-paginated conversation result.
+type CursorPage struct {
+	Items      []Conversation
+	NextCursor *ListCursor
+	HasMore    bool
 }

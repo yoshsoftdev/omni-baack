@@ -6,6 +6,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/api/middleware"
+	"github.com/omnichannel/omni-chan-v2/internal/api/query"
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
@@ -50,7 +51,7 @@ func (h *Handler) List(c *fiber.Ctx) error {
 
 	page := repository.PageParams{
 		Page:     c.QueryInt("page", 1),
-		PageSize: c.QueryInt("limit", 50),
+		PageSize: query.PageSize(c),
 	}
 	result, err := h.service.List(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), ListFilter{
 		Status:     status,

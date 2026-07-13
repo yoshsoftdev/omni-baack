@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -17,11 +19,13 @@ type Repository interface {
 	FindByID(ctx context.Context, teamID, id uuid.UUID) (*Conversation, error)
 	FindByContactChannel(ctx context.Context, teamID, contactID uuid.UUID, channelID *uuid.UUID) (*Conversation, error)
 	List(ctx context.Context, teamID uuid.UUID, filter ListFilter, page repository.PageParams) (repository.Page[Conversation], error)
+	ListCursor(ctx context.Context, teamID uuid.UUID, filter ListFilter, cursor *ListCursor, limit int) (CursorPage, error)
 	UpdateStatus(ctx context.Context, teamID, id uuid.UUID, status Status) error
 	UpdateAssignment(ctx context.Context, teamID, id uuid.UUID, assignedTo *uuid.UUID) error
 	UpdateUnreadCount(ctx context.Context, teamID, id uuid.UUID, count int) error
 	UpdateLastMessage(ctx context.Context, teamID, id uuid.UUID, update LastMessageUpdate) error
 	ApplyInboxSync(ctx context.Context, teamID, id uuid.UUID, update InboxSyncUpdate) error
+	UpdatePriorityFields(ctx context.Context, teamID, id uuid.UUID, waitingSince *time.Time, clearWaiting bool, basePriority int, priorityScore int64) error
 	MarkRead(ctx context.Context, teamID, id uuid.UUID) error
 	CountOpenByAssignee(ctx context.Context, teamID, userID uuid.UUID) (int64, error)
 	CountByTeamFilter(ctx context.Context, teamID uuid.UUID, filter ListFilter) (int64, error)
@@ -79,6 +83,10 @@ func (r *PostgresRepository) List(ctx context.Context, teamID uuid.UUID, filter 
 		args = append(args, *filter.ChannelID)
 		where += fmt.Sprintf(` AND channel_id = $%d`, len(args))
 	}
+	if filter.ChannelType != nil {
+		args = append(args, string(*filter.ChannelType))
+		where += fmt.Sprintf(` AND channel_type = $%d`, len(args))
+	}
 	switch filter.View {
 	case ViewMine:
 		if filter.ActorID != nil {
@@ -89,6 +97,8 @@ func (r *PostgresRepository) List(ctx context.Context, teamID uuid.UUID, filter 
 		where += ` AND assigned_to IS NULL`
 	case ViewUnread:
 		where += ` AND unread_count > 0`
+	case ViewClosed:
+		where += ` AND status IN ('closed', 'resolved')`
 	}
 	if filter.Search != "" {
 		args = append(args, "%"+filter.Search+"%")
@@ -117,6 +127,127 @@ func (r *PostgresRepository) List(ctx context.Context, teamID uuid.UUID, filter 
 		items = append(items, *c)
 	}
 	return repository.Page[Conversation]{Items: items, Pagination: repository.NewMeta(page.Page, page.PageSize, total)}, rows.Err()
+}
+
+func (r *PostgresRepository) ListCursor(ctx context.Context, teamID uuid.UUID, filter ListFilter, cursor *ListCursor, limit int) (CursorPage, error) {
+	if limit < 1 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	fetchLimit := limit + 1
+
+	fromClause, where, args := buildInboxListQuery(teamID, filter)
+	if cursor != nil {
+		cursorIdx := len(args) + 1
+		args = append(args, cursor.PriorityScore, cursor.LastMessageAt, cursor.ID)
+		where += fmt.Sprintf(`
+			AND (
+				c.priority_score < $%d
+				OR (c.priority_score = $%d AND c.last_message_at < $%d)
+				OR (c.priority_score = $%d AND c.last_message_at IS NOT DISTINCT FROM $%d AND c.id < $%d)
+				OR (c.priority_score = $%d AND c.last_message_at IS NULL AND $%d IS NOT NULL)
+			)`,
+			cursorIdx, cursorIdx, cursorIdx+1,
+			cursorIdx, cursorIdx+1, cursorIdx+2,
+			cursorIdx, cursorIdx+1,
+		)
+	}
+	args = append(args, fetchLimit)
+	limitParam := len(args)
+
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM %s
+		WHERE %s
+		ORDER BY c.priority_score DESC, c.last_message_at DESC NULLS LAST, c.id DESC
+		LIMIT $%d
+	`, conversationSelectColsAliased, fromClause, where, limitParam)
+
+	rows, err := r.db.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return CursorPage{}, err
+	}
+	defer rows.Close()
+
+	items := make([]Conversation, 0, fetchLimit)
+	for rows.Next() {
+		c, err := scanConversationRow(rows)
+		if err != nil {
+			return CursorPage{}, err
+		}
+		items = append(items, *c)
+	}
+	if err := rows.Err(); err != nil {
+		return CursorPage{}, err
+	}
+
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+
+	var next *ListCursor
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		next = &ListCursor{
+			PriorityScore: last.PriorityScore,
+			LastMessageAt: last.LastMessageAt,
+			ID:            last.ID,
+		}
+	}
+
+	return CursorPage{Items: items, NextCursor: next, HasMore: hasMore}, nil
+}
+
+func buildInboxListQuery(teamID uuid.UUID, filter ListFilter) (fromClause, where string, args []any) {
+	args = []any{teamID}
+	fromClause = `conversations c`
+	where = `c.team_id = $1 AND c.deleted_at IS NULL`
+
+	if filter.Status != nil {
+		args = append(args, string(*filter.Status))
+		where += fmt.Sprintf(` AND c.status = $%d`, len(args))
+	}
+	if filter.AssignedTo != nil {
+		args = append(args, *filter.AssignedTo)
+		where += fmt.Sprintf(` AND c.assigned_to = $%d`, len(args))
+	}
+	if filter.ChannelID != nil {
+		args = append(args, *filter.ChannelID)
+		where += fmt.Sprintf(` AND c.channel_id = $%d`, len(args))
+	}
+	if filter.ChannelType != nil {
+		args = append(args, string(*filter.ChannelType))
+		where += fmt.Sprintf(` AND c.channel_type = $%d`, len(args))
+	}
+	switch filter.View {
+	case ViewMine:
+		if filter.ActorID != nil {
+			args = append(args, *filter.ActorID)
+			where += fmt.Sprintf(` AND c.assigned_to = $%d`, len(args))
+		}
+	case ViewUnassigned:
+		where += ` AND c.assigned_to IS NULL`
+	case ViewUnread:
+		where += ` AND c.unread_count > 0`
+	case ViewClosed:
+		where += ` AND c.status IN ('closed', 'resolved')`
+	}
+	if strings.TrimSpace(filter.Search) != "" {
+		fromClause = `conversations c LEFT JOIN contacts ct ON ct.id = c.contact_id AND ct.team_id = c.team_id AND ct.deleted_at IS NULL`
+		pattern := "%" + strings.TrimSpace(filter.Search) + "%"
+		args = append(args, pattern)
+		idx := len(args)
+		where += fmt.Sprintf(` AND (
+			c.last_message_preview ILIKE $%d
+			OR ct.contact_name ILIKE $%d
+			OR ct.customer_name ILIKE $%d
+			OR ct.phone ILIKE $%d
+		)`, idx, idx, idx, idx)
+	}
+	return fromClause, where, args
 }
 
 func (r *PostgresRepository) UpdateStatus(ctx context.Context, teamID, id uuid.UUID, status Status) error {
@@ -202,16 +333,42 @@ func (r *PostgresRepository) ApplyInboxSync(ctx context.Context, teamID, id uuid
 				WHEN $9 THEN NOW()
 				ELSE resolution_at
 			END,
+			waiting_since = CASE
+				WHEN $11 THEN NULL
+				WHEN $12::timestamptz IS NOT NULL THEN $12::timestamptz
+				ELSE waiting_since
+			END,
+			base_priority = COALESCE($13, base_priority),
+			priority_score = COALESCE($14, priority_score),
 			updated_at = NOW()
-		WHERE id = $11 AND team_id = $12 AND deleted_at IS NULL
+		WHERE id = $15 AND team_id = $16 AND deleted_at IS NULL
 	`
 	tag, err := r.db.Pool.Exec(ctx, query,
 		status, unread, u.LastMessagePreview, u.LastMessageAt,
 		u.LastCustomerMessageAt, u.LastAgentMessageAt,
 		u.SetFirstResponseAt, u.ClearResolutionAt, u.SetResolutionAt,
 		u.TouchLastMessage,
+		u.ClearWaitingSince, u.WaitingSince, u.BasePriority, u.PriorityScore,
 		id, teamID,
 	)
+	if err != nil {
+		return repository.MapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (r *PostgresRepository) UpdatePriorityFields(ctx context.Context, teamID, id uuid.UUID, waitingSince *time.Time, clearWaiting bool, basePriority int, priorityScore int64) error {
+	tag, err := r.db.Pool.Exec(ctx, `
+		UPDATE conversations SET
+			waiting_since = CASE WHEN $1 THEN NULL ELSE $2::timestamptz END,
+			base_priority = $3,
+			priority_score = $4,
+			updated_at = NOW()
+		WHERE id = $5 AND team_id = $6 AND deleted_at IS NULL
+	`, clearWaiting, waitingSince, basePriority, priorityScore, id, teamID)
 	if err != nil {
 		return repository.MapError(err)
 	}
@@ -275,7 +432,16 @@ const conversationSelectCols = `
 	id, team_id, contact_id, channel_id, channel_type, status, assigned_to,
 	unread_count, last_message_preview, last_message_at,
 	first_response_at, last_customer_message_at, last_agent_message_at, resolution_at,
+	waiting_since, base_priority, priority_score,
 	created_at, updated_at, deleted_at
+`
+
+const conversationSelectColsAliased = `
+	c.id, c.team_id, c.contact_id, c.channel_id, c.channel_type, c.status, c.assigned_to,
+	c.unread_count, c.last_message_preview, c.last_message_at,
+	c.first_response_at, c.last_customer_message_at, c.last_agent_message_at, c.resolution_at,
+	c.waiting_since, c.base_priority, c.priority_score,
+	c.created_at, c.updated_at, c.deleted_at
 `
 
 func scanConversation(row pgx.Row) (*Conversation, error) { return scanConversationRow(row) }
@@ -287,6 +453,7 @@ func scanConversationRow(row pgx.Row) (*Conversation, error) {
 		&c.ID, &c.TeamID, &c.ContactID, &c.ChannelID, &channelType, &status, &c.AssignedTo,
 		&c.UnreadCount, &c.LastMessagePreview, &c.LastMessageAt,
 		&c.FirstResponseAt, &c.LastCustomerMessageAt, &c.LastAgentMessageAt, &c.ResolutionAt,
+		&c.WaitingSince, &c.BasePriority, &c.PriorityScore,
 		&c.CreatedAt, &c.UpdatedAt, &c.DeletedAt,
 	)
 	if err != nil {

@@ -80,7 +80,7 @@ func (s *Sender) Send(ctx context.Context, in SendInput) (*SendResult, error) {
 
 	contactEntity := in.Contact
 	if contactEntity == nil {
-		contactEntity = &contact.Contact{Name: "", Phone: in.Recipient.Phone}
+		contactEntity = &contact.Contact{ContactName: "", CustomerName: "", Phone: in.Recipient.Phone}
 	}
 
 	components, err := campaign.RenderValidatedTemplate(in.Template, mapping, contactEntity, samples)

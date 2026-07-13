@@ -43,8 +43,9 @@ const (
 )
 
 type Message struct {
-	ID             uuid.UUID   `json:"id"`
-	ConversationID uuid.UUID   `json:"conversation_id"`
+	ID               uuid.UUID   `json:"id"`
+	ClientMessageID  *uuid.UUID  `json:"client_message_id,omitempty"`
+	ConversationID   uuid.UUID   `json:"conversation_id"`
 	TeamID         uuid.UUID   `json:"team_id"`
 	ChannelID      *uuid.UUID  `json:"channel_id,omitempty"`
 	Direction      Direction   `json:"direction"`

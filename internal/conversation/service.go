@@ -119,7 +119,7 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 	return c, nil
 }
 
-func (s *Service) Get(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID) (*Conversation, error) {
+func (s *Service) Get(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID) (*Item, error) {
 	if err := s.authorize(actorRole, rbac.PermConversationView); err != nil {
 		return nil, err
 	}
@@ -130,27 +130,59 @@ func (s *Service) Get(ctx context.Context, teamID, userID uuid.UUID, actorRole s
 	if err != nil {
 		return nil, serviceerrors.MapRepository(err)
 	}
-	return c, nil
+	return s.enrichOne(ctx, teamID, c)
 }
 
-func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID, actorRole string, filter ListFilter, page repository.PageParams) (repository.Page[Conversation], error) {
+func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID, actorRole string, filter ListFilter, page repository.PageParams) (repository.Page[Item], error) {
 	if err := s.authorize(actorRole, rbac.PermConversationView); err != nil {
-		return repository.Page[Conversation]{}, err
+		return repository.Page[Item]{}, err
 	}
 	if err := s.ensureMember(ctx, teamID, userID); err != nil {
-		return repository.Page[Conversation]{}, err
+		return repository.Page[Item]{}, err
 	}
 	if filter.View == ViewMine {
 		filter.ActorID = &userID
 	}
 	result, err := s.conversations.List(ctx, teamID, filter, page)
 	if err != nil {
-		return repository.Page[Conversation]{}, serviceerrors.MapRepository(err)
+		return repository.Page[Item]{}, serviceerrors.MapRepository(err)
 	}
-	return result, nil
+	return s.enrichPage(ctx, teamID, result)
 }
 
-func (s *Service) Assign(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID, assigneeID *uuid.UUID) (*Conversation, error) {
+func (s *Service) ListCursor(ctx context.Context, teamID, userID uuid.UUID, actorRole string, filter ListFilter, cursor *ListCursor, limit int) (CursorListPage, error) {
+	if err := s.authorize(actorRole, rbac.PermConversationView); err != nil {
+		return CursorListPage{}, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return CursorListPage{}, err
+	}
+	if filter.View == ViewMine {
+		filter.ActorID = &userID
+	}
+	result, err := s.conversations.ListCursor(ctx, teamID, filter, cursor, limit)
+	if err != nil {
+		return CursorListPage{}, serviceerrors.MapRepository(err)
+	}
+	contactMap, err := s.loadContactsByConversations(ctx, teamID, result.Items)
+	if err != nil {
+		return CursorListPage{}, err
+	}
+	return CursorListPage{
+		Items:      toItems(result.Items, contactMap),
+		NextCursor: result.NextCursor,
+		HasMore:    result.HasMore,
+	}, nil
+}
+
+// CursorListPage is the enriched cursor page for inbox API responses.
+type CursorListPage struct {
+	Items      []Item
+	NextCursor *ListCursor
+	HasMore    bool
+}
+
+func (s *Service) Assign(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID, assigneeID *uuid.UUID) (*Item, error) {
 	if err := s.authorize(actorRole, rbac.PermConversationAssign); err != nil {
 		return nil, err
 	}
@@ -188,10 +220,10 @@ func (s *Service) Assign(ctx context.Context, teamID, userID uuid.UUID, actorRol
 	if s.inbox != nil {
 		_ = s.inbox.OnAssignment(ctx, teamID, conv)
 	}
-	return conv, nil
+	return s.enrichOne(ctx, teamID, conv)
 }
 
-func (s *Service) UpdateStatus(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID, status Status) (*Conversation, error) {
+func (s *Service) UpdateStatus(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID, status Status) (*Item, error) {
 	if status == StatusClosed || status == StatusResolved {
 		if err := s.authorize(actorRole, rbac.PermConversationClose); err != nil {
 			return nil, err
@@ -232,10 +264,10 @@ func (s *Service) UpdateStatus(ctx context.Context, teamID, userID uuid.UUID, ac
 	if s.inbox != nil {
 		_ = s.inbox.OnStatusChange(ctx, teamID, conv)
 	}
-	return conv, nil
+	return s.enrichOne(ctx, teamID, conv)
 }
 
-func (s *Service) MarkRead(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID) (*Conversation, error) {
+func (s *Service) MarkRead(ctx context.Context, teamID, userID uuid.UUID, actorRole string, conversationID uuid.UUID) (*Item, error) {
 	if err := s.authorize(actorRole, rbac.PermConversationView); err != nil {
 		return nil, err
 	}
@@ -246,12 +278,20 @@ func (s *Service) MarkRead(ctx context.Context, teamID, userID uuid.UUID, actorR
 		return nil, serviceerrors.MapRepository(err)
 	}
 	if s.inbox != nil {
-		return s.inbox.MarkRead(ctx, teamID, conversationID)
+		conv, err := s.inbox.MarkRead(ctx, teamID, conversationID)
+		if err != nil {
+			return nil, serviceerrors.MapRepository(err)
+		}
+		return s.enrichOne(ctx, teamID, conv)
 	}
 	if err := serviceerrors.MapRepository(s.conversations.MarkRead(ctx, teamID, conversationID)); err != nil {
 		return nil, err
 	}
-	return s.conversations.FindByID(ctx, teamID, conversationID)
+	conv, err := s.conversations.FindByID(ctx, teamID, conversationID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	return s.enrichOne(ctx, teamID, conv)
 }
 
 func (s *Service) RecordInboundPreview(ctx context.Context, teamID uuid.UUID, conversationID uuid.UUID, preview string) error {

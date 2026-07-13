@@ -202,7 +202,7 @@ func (m *mockChannelRepo) FindCredentials(context.Context, uuid.UUID) (*channel.
 type mockContactRepo struct{}
 
 func (m *mockContactRepo) FindByID(context.Context, uuid.UUID, uuid.UUID) (*contact.Contact, error) {
-	return &contact.Contact{Name: "Test"}, nil
+	return &contact.Contact{ContactName: "Test", CustomerName: "Test"}, nil
 }
 
 type mockFinalizer struct {

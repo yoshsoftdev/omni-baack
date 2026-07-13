@@ -108,8 +108,10 @@ func resolveContactField(c *contact.Contact, field string) string {
 		return ""
 	}
 	switch field {
-	case "name":
-		return c.Name
+	case "name", "customer_name":
+		return c.CustomerName
+	case "contact_name":
+		return c.ContactName
 	case "phone":
 		return c.Phone
 	case "email":

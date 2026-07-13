@@ -29,7 +29,7 @@ func TestSyncService_HandleOutboundReopensClosedConversation(t *testing.T) {
 	repo := &memConvRepo{conv: conv}
 	rt := &memRT{}
 	collab := &recordingCollaboration{}
-	svc := inbox.NewSyncService(repo, &memSettings{}, nil, rt)
+	svc := inbox.NewSyncService(repo, nil, &memSettings{}, nil, rt)
 	svc.SetCollaboration(collab)
 
 	msg := &message.Message{ID: uuid.New(), Content: "reply", ReceivedAt: time.Now().UTC()}

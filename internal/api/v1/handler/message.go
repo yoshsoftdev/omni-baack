@@ -25,6 +25,7 @@ type sendMessageRequest struct {
 	Content         string `json:"content"`
 	StorageObjectID string `json:"storage_object_id"`
 	ReplyToWAMID    string `json:"reply_to_wamid"`
+	ClientMessageID string `json:"client_message_id"`
 }
 
 type deleteMessageRequest struct {
@@ -75,6 +76,13 @@ func (h *MessageHandler) Send(c *fiber.Ctx) error {
 		}
 		sendInput.StorageObjectID = &objectID
 	}
+	if strings.TrimSpace(req.ClientMessageID) != "" {
+		clientID, parseErr := parseUUIDFromString(req.ClientMessageID)
+		if parseErr != nil {
+			return response.BadRequest(c, "invalid client_message_id")
+		}
+		sendInput.ClientMessageID = &clientID
+	}
 	conv, err := h.conversations.Get(c.Context(), actor.TeamID, actor.UserID, actor.Role, conversationID)
 	if err != nil {
 		return mapError(c, err)
@@ -87,7 +95,7 @@ func (h *MessageHandler) Send(c *fiber.Ctx) error {
 		_, _ = h.inbox.HandleOutbound(c.Context(), inbox.OutboundParams{
 			TeamID:       actor.TeamID,
 			AgentID:      actor.UserID,
-			Conversation: conv,
+			Conversation: &conv.Conversation,
 			Message:      msg,
 		})
 	}

@@ -165,11 +165,21 @@ func Register(router fiber.Router, deps Deps) {
 		conversations.Get("/:id/notes", deps.Conversation.ListNotes)
 		conversations.Post("/:id/notes", deps.Conversation.CreateNote)
 		conversations.Delete("/:id/notes/:noteId", deps.Conversation.DeleteNote)
+		if deps.ConversationPresence != nil {
+			conversations.Post("/:id/presence/open", deps.ConversationPresence.Open)
+			conversations.Post("/:id/presence/close", deps.ConversationPresence.Close)
+			conversations.Post("/:id/presence/typing", deps.ConversationPresence.Typing)
+			conversations.Get("/:id/presence", deps.ConversationPresence.Get)
+		}
 		if deps.Message != nil {
 			conversations.Get("/:id/messages", deps.Message.List)
 			conversations.Post("/:id/messages", deps.Message.Send)
 			conversations.Delete("/:id/messages/:messageId", deps.Message.Delete)
 		}
+	}
+
+	if deps.Inbox != nil {
+		protected.Get("/inbox", deps.Inbox.List)
 	}
 
 	if deps.Workspace != nil {

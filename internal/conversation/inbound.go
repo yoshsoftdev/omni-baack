@@ -8,10 +8,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
+	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
 
 // FindOrCreateForInbound finds or creates a conversation for inbound Meta messages.
 func (s *Service) FindOrCreateForInbound(ctx context.Context, teamID, contactID, channelID uuid.UUID) (*Conversation, bool, error) {
+	if _, err := s.contacts.FindByID(ctx, teamID, contactID); err != nil {
+		return nil, false, serviceerrors.MapRepository(err)
+	}
+
 	channelPtr := &channelID
 	existing, err := s.conversations.FindByContactChannel(ctx, teamID, contactID, channelPtr)
 	if err == nil {

@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/api/middleware"
+	"github.com/omnichannel/omni-chan-v2/internal/api/query"
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
@@ -24,8 +25,10 @@ func NewHandler(service *Service) *Handler {
 }
 
 type contactRequest struct {
-	Name   string   `json:"name"`
-	Phone  string   `json:"phone"`
+	Name         string   `json:"name"`
+	ContactName  string   `json:"contact_name"`
+	CustomerName string   `json:"customer_name"`
+	Phone        string   `json:"phone"`
 	Email  string   `json:"email"`
 	Notes  string   `json:"notes"`
 	TagIDs []string `json:"tag_ids"`
@@ -48,7 +51,7 @@ func (h *Handler) List(c *fiber.Ctx) error {
 
 	page := repository.PageParams{
 		Page:     c.QueryInt("page", 1),
-		PageSize: c.QueryInt("limit", 50),
+		PageSize: query.PageSize(c),
 	}
 	result, err := h.service.List(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), ListFilter{
 		Search: strings.TrimSpace(c.Query("search")),
@@ -90,8 +93,10 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 	}
 
 	contact, err := h.service.Create(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), CreateInput{
-		Name:  req.Name,
-		Phone: req.Phone,
+		Name:         req.Name,
+		ContactName:  req.ContactName,
+		CustomerName: optionalString(req.CustomerName),
+		Phone:        req.Phone,
 		Email: optionalString(req.Email),
 		Notes: optionalString(req.Notes),
 	})
@@ -118,8 +123,10 @@ func (h *Handler) Update(c *fiber.Ctx) error {
 	}
 
 	contact, err := h.service.Update(c.Context(), claims.TeamID, claims.UserID, string(claims.Role), contactID, UpdateInput{
-		Name:  optionalString(req.Name),
-		Phone: optionalString(req.Phone),
+		Name:         optionalString(req.Name),
+		ContactName:  optionalString(req.ContactName),
+		CustomerName: optionalString(req.CustomerName),
+		Phone:        optionalString(req.Phone),
 		Email: optionalString(req.Email),
 		Notes: optionalString(req.Notes),
 	})

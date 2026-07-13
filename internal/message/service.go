@@ -23,6 +23,14 @@ type Service struct {
 	users         user.Repository
 	rbac          *rbac.Service
 	outbound      *OutboundDeps
+	statusPublish StatusUpdatePublisher
+}
+
+// StatusUpdatePublisher emits message delivery status changes to realtime clients.
+type StatusUpdatePublisher func(ctx context.Context, message *Message, status Status) error
+
+func (s *Service) SetStatusPublisher(publisher StatusUpdatePublisher) {
+	s.statusPublish = publisher
 }
 
 func NewService(
@@ -210,7 +218,21 @@ func (s *Service) UpdateDeliveryStatus(ctx context.Context, wamid string, status
 	if err != nil {
 		return serviceerrors.MapRepository(err)
 	}
-	return serviceerrors.MapRepository(s.messages.UpdateStatus(ctx, m.TeamID, m.ID, status))
+	if !shouldApplyStatus(m.Status, status) {
+		return nil
+	}
+	if err := serviceerrors.MapRepository(s.messages.UpdateStatus(ctx, m.TeamID, m.ID, status)); err != nil {
+		return err
+	}
+	s.publishStatusUpdate(ctx, m, status)
+	return nil
+}
+
+func (s *Service) publishStatusUpdate(ctx context.Context, m *Message, status Status) {
+	if s.statusPublish == nil || m == nil {
+		return
+	}
+	_ = s.statusPublish(ctx, m, status)
 }
 
 func (s *Service) MarkDeletedByWAMID(ctx context.Context, teamID uuid.UUID, wamid string, source DeletedBySource) error {

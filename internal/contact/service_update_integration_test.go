@@ -60,7 +60,8 @@ func TestUpdateContactIntegration(t *testing.T) {
 	tagID := uuid.MustParse("8efb611a-ed65-4a3a-bec0-de20698509ba")
 
 	updated, err := svc.Update(ctx, teamID, userID, string(team.RoleOwner), contactID, contact.UpdateInput{
-		Name:            &name,
+		ContactName:     &name,
+		CustomerName:    &name,
 		Phone:           &phone,
 		Province:        &province,
 		Company:         &company,

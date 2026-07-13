@@ -51,6 +51,9 @@ func (m *memConvRepo) FindByContactChannel(context.Context, uuid.UUID, uuid.UUID
 func (m *memConvRepo) List(context.Context, uuid.UUID, conversation.ListFilter, repository.PageParams) (repository.Page[conversation.Conversation], error) {
 	return repository.Page[conversation.Conversation]{}, nil
 }
+func (m *memConvRepo) ListCursor(context.Context, uuid.UUID, conversation.ListFilter, *conversation.ListCursor, int) (conversation.CursorPage, error) {
+	return conversation.CursorPage{}, nil
+}
 func (m *memConvRepo) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, conversation.Status) error { return nil }
 func (m *memConvRepo) UpdateAssignment(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) error     { return nil }
 func (m *memConvRepo) UpdateUnreadCount(context.Context, uuid.UUID, uuid.UUID, int) error            { return nil }
@@ -58,6 +61,9 @@ func (m *memConvRepo) UpdateLastMessage(context.Context, uuid.UUID, uuid.UUID, c
 	return nil
 }
 func (m *memConvRepo) ApplyInboxSync(context.Context, uuid.UUID, uuid.UUID, conversation.InboxSyncUpdate) error {
+	return nil
+}
+func (m *memConvRepo) UpdatePriorityFields(context.Context, uuid.UUID, uuid.UUID, *time.Time, bool, int, int64) error {
 	return nil
 }
 func (m *memConvRepo) MarkRead(context.Context, uuid.UUID, uuid.UUID) error { return nil }

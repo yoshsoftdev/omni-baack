@@ -815,15 +815,16 @@ func mergeContactWithOutcome(ctx context.Context, contacts contact.Repository, t
 	}
 	if err == nil {
 		updated := false
-		if name != "" && name != existing.Name {
-			existing.Name = name
+		customerName := strings.TrimSpace(profileName)
+		if customerName == "" {
+			customerName = strings.TrimSpace(name)
+		}
+		if customerName != "" && customerName != existing.CustomerName {
+			existing.CustomerName = customerName
 			updated = true
 		}
-		if profileName != "" && existing.Notes != nil && strings.Contains(*existing.Notes, profileName) {
-			// no-op
-		} else if profileName != "" {
-			note := "profile_name: " + profileName
-			existing.Notes = &note
+		if name != "" && contact.ShouldAutoUpdateContactName(existing) && name != existing.ContactName {
+			existing.ContactName = name
 			updated = true
 		}
 		if updated {
@@ -844,19 +845,21 @@ func mergeContactWithOutcome(ctx context.Context, contacts contact.Repository, t
 	if storePhone == "" {
 		storePhone = phoneNorm
 	}
+	inboxName := strings.TrimSpace(name)
+	customerName := strings.TrimSpace(profileName)
+	if customerName == "" {
+		customerName = inboxName
+	}
 	c := &contact.Contact{
 		ID:              uuid.New(),
 		TeamID:          teamID,
-		Name:            name,
+		ContactName:     inboxName,
+		CustomerName:    customerName,
 		Phone:           storePhone,
 		Source:          contact.SourceMetaInbound,
 		MarketingStatus: contact.MarketingUnknown,
 		CreatedAt:       now,
 		UpdatedAt:       now,
-	}
-	if profileName != "" {
-		note := "profile_name: " + profileName
-		c.Notes = &note
 	}
 	if err := contacts.Create(ctx, c); err != nil {
 		return mergeOutcome{}, nil, err

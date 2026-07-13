@@ -161,8 +161,11 @@ func main() {
 	inboxSettingsRepo := inbox.NewSettingsRepository(db)
 	inboxAssignment := inbox.NewAssignmentEngine(teamRepo, inboxSettingsRepo, conversationRepo)
 	inboxRealtime := inbox.NewHubPublisher(wsHub)
-	inboxSync := inbox.NewSyncService(conversationRepo, inboxSettingsRepo, inboxAssignment, inboxRealtime)
+	inboxSync := inbox.NewSyncService(conversationRepo, contactRepo, inboxSettingsRepo, inboxAssignment, inboxRealtime)
+	inboxListService := inbox.NewListService(conversationService)
 	presenceService := inbox.NewPresenceService(inbox.NewPresenceRepository(db))
+	collisionStore := inbox.NewRedisCollisionStore(rdb.Client)
+	collisionService := inbox.NewCollisionService(collisionStore, inboxRealtime)
 
 	collaborationService := conversation.NewCollaborationService(
 		conversation.NewActivityRepository(db),
@@ -188,6 +191,21 @@ func main() {
 		Meta:     metaClient,
 		Cipher:   tokenCipher,
 		Storage:  storageClient,
+	})
+	messageService.SetStatusPublisher(func(ctx context.Context, msg *message.Message, status message.Status) error {
+		payload, err := json.Marshal(map[string]any{
+			"message_id":        msg.ID.String(),
+			"conversation_id":   msg.ConversationID.String(),
+			"client_message_id": optionalUUIDString(msg.ClientMessageID),
+			"status":            string(status),
+		})
+		if err != nil {
+			return err
+		}
+		return inboxRealtime.PublishTeamEvent(ctx, msg.TeamID, inbox.RealtimeEvent{
+			Type: inbox.EventMessageStatusUpdate,
+			Data: payload,
+		})
 	})
 	onboardingService := onboarding.NewService(deviceRepo, contactRepo, conversationRepo, messageRepo, teamRepo, metaClient)
 
@@ -252,6 +270,8 @@ func main() {
 			Operations:        handler.NewOperationsHandler(operationsService),
 			Report:            handler.NewReportHandler(reportService),
 			Conversation:      handler.NewConversationHandler(conversationService, collaborationService),
+			ConversationPresence: handler.NewConversationPresenceHandler(collisionService, conversationService, userRepo),
+			Inbox:               handler.NewInboxHandler(inboxListService),
 			Message:           handler.NewMessageHandler(messageService, conversationService, inboxSync),
 			StorageServiceURL: cfg.StorageService.URL,
 			Dashboard:         handler.NewDashboardHandler(dashboardService),
@@ -388,6 +408,14 @@ func startEventConsumer(
 
 type dashboardSyncAdapter struct {
 	svc *channelsync.Service
+}
+
+func optionalUUIDString(id *uuid.UUID) *string {
+	if id == nil {
+		return nil
+	}
+	value := id.String()
+	return &value
 }
 
 func (a *dashboardSyncAdapter) TeamSyncSummary(ctx context.Context, teamID uuid.UUID) (*dashboard.TeamSyncSummary, error) {

@@ -42,6 +42,8 @@ func NewService(
 
 type CreateInput struct {
 	Name            string
+	ContactName     string
+	CustomerName    *string
 	Phone           string
 	Email           *string
 	Notes           *string
@@ -60,6 +62,8 @@ type CreateInput struct {
 
 type UpdateInput struct {
 	Name            *string
+	ContactName     *string
+	CustomerName    *string
 	Phone           *string
 	Email           *string
 	Notes           *string
@@ -119,9 +123,9 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 		return nil, serviceerrors.MapRepository(err)
 	}
 
-	name := strings.TrimSpace(input.Name)
-	if name == "" {
-		return nil, serviceerrors.NewValidation("name", "is required")
+	contactName, customerName, err := resolveCreateNames(input)
+	if err != nil {
+		return nil, err
 	}
 
 	source := input.Source
@@ -137,7 +141,8 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 	c := &Contact{
 		ID:              uuid.New(),
 		TeamID:          teamID,
-		Name:            name,
+		ContactName:     contactName,
+		CustomerName:    customerName,
 		Phone:           phone,
 		Email:           input.Email,
 		Notes:           input.Notes,
@@ -328,12 +333,19 @@ func (s *Service) Update(ctx context.Context, teamID, userID uuid.UUID, actorRol
 	if err != nil {
 		return nil, serviceerrors.MapRepository(err)
 	}
-	if input.Name != nil {
-		name := strings.TrimSpace(*input.Name)
-		if name == "" {
-			return nil, serviceerrors.NewValidation("name", "is required")
+	if input.ContactName != nil || input.Name != nil {
+		contactName, err := resolveUpdateContactName(input)
+		if err != nil {
+			return nil, err
 		}
-		c.Name = name
+		c.ContactName = contactName
+	}
+	if input.CustomerName != nil {
+		customerName := strings.TrimSpace(*input.CustomerName)
+		if customerName == "" {
+			return nil, serviceerrors.NewValidation("customer_name", "is required")
+		}
+		c.CustomerName = customerName
 	}
 	if input.Phone != nil {
 		phone, err := normalizePhone(*input.Phone)
@@ -532,6 +544,7 @@ func (s *Service) enrichContacts(ctx context.Context, teamID uuid.UUID, contacts
 				contacts[i].LastCampaign = stats.LastCampaign
 			}
 		}
+		contacts[i].PopulateLegacyName()
 	}
 	return nil
 }

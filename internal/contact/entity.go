@@ -35,7 +35,9 @@ type TagRef struct {
 type Contact struct {
 	ID              uuid.UUID       `json:"id"`
 	TeamID          uuid.UUID       `json:"team_id"`
-	Name            string          `json:"name"`
+	ContactName     string          `json:"contact_name"`
+	CustomerName    string          `json:"customer_name"`
+	Name            string          `json:"name,omitempty"` // deprecated alias of contact_name
 	Phone           string          `json:"phone"`
 	Email           *string         `json:"email,omitempty"`
 	Notes           *string         `json:"notes,omitempty"`

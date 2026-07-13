@@ -21,6 +21,8 @@ type Deps struct {
 	Operations   *handler.OperationsHandler
 	Report       *handler.ReportHandler
 	Conversation *handler.ConversationHandler
+	ConversationPresence *handler.ConversationPresenceHandler
+	Inbox             *handler.InboxHandler
 	Message           *handler.MessageHandler
 	StorageServiceURL string
 	Dashboard         *handler.DashboardHandler

@@ -29,6 +29,9 @@ func (s *stubMessageRepo) FindByWAMIDKey(_ context.Context, teamID, conversation
 	}
 	return nil, repository.ErrNotFound
 }
+func (s *stubMessageRepo) FindByClientMessageID(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Message, error) {
+	return nil, repository.ErrNotFound
+}
 func (s *stubMessageRepo) ListByConversation(context.Context, uuid.UUID, uuid.UUID, ListFilter, repository.PageParams) (repository.Page[Message], error) {
 	return repository.Page[Message]{}, nil
 }

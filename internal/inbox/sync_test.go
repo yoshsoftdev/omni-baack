@@ -35,6 +35,9 @@ func (m *memConvRepo) FindByContactChannel(context.Context, uuid.UUID, uuid.UUID
 func (m *memConvRepo) List(context.Context, uuid.UUID, conversation.ListFilter, repository.PageParams) (repository.Page[conversation.Conversation], error) {
 	return repository.Page[conversation.Conversation]{}, nil
 }
+func (m *memConvRepo) ListCursor(context.Context, uuid.UUID, conversation.ListFilter, *conversation.ListCursor, int) (conversation.CursorPage, error) {
+	return conversation.CursorPage{}, nil
+}
 func (m *memConvRepo) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, conversation.Status) error {
 	return nil
 }
@@ -59,6 +62,30 @@ func (m *memConvRepo) ApplyInboxSync(_ context.Context, _, _ uuid.UUID, u conver
 	if u.ClearResolutionAt {
 		m.conv.ResolutionAt = nil
 	}
+	if u.ClearWaitingSince {
+		m.conv.WaitingSince = nil
+	}
+	if u.WaitingSince != nil {
+		m.conv.WaitingSince = u.WaitingSince
+	}
+	if u.BasePriority != nil {
+		m.conv.BasePriority = *u.BasePriority
+	}
+	if u.PriorityScore != nil {
+		m.conv.PriorityScore = *u.PriorityScore
+	}
+	return nil
+}
+func (m *memConvRepo) UpdatePriorityFields(_ context.Context, _, _ uuid.UUID, waitingSince *time.Time, clearWaiting bool, basePriority int, priorityScore int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if clearWaiting {
+		m.conv.WaitingSince = nil
+	} else if waitingSince != nil {
+		m.conv.WaitingSince = waitingSince
+	}
+	m.conv.BasePriority = basePriority
+	m.conv.PriorityScore = priorityScore
 	return nil
 }
 func (m *memConvRepo) MarkRead(_ context.Context, _, _ uuid.UUID) error {
@@ -92,7 +119,7 @@ func TestSyncService_ReopenAndUnread(t *testing.T) {
 	}
 	repo := &memConvRepo{conv: conv}
 	rt := &memRT{}
-	svc := inbox.NewSyncService(repo, &memSettings{}, nil, rt)
+	svc := inbox.NewSyncService(repo, nil, &memSettings{}, nil, rt)
 
 	msg := &message.Message{ID: uuid.New(), Content: "hi", ReceivedAt: time.Now().UTC()}
 	_, err := svc.HandleInbound(context.Background(), inbox.InboundParams{
@@ -117,7 +144,7 @@ func TestSyncService_MarkRead(t *testing.T) {
 	conv := &conversation.Conversation{ID: uuid.New(), TeamID: teamID, UnreadCount: 3}
 	repo := &memConvRepo{conv: conv}
 	rt := &memRT{}
-	svc := inbox.NewSyncService(repo, &memSettings{}, nil, rt)
+	svc := inbox.NewSyncService(repo, nil, &memSettings{}, nil, rt)
 	if _, err := svc.MarkRead(context.Background(), teamID, conv.ID); err != nil {
 		t.Fatal(err)
 	}

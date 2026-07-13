@@ -123,7 +123,14 @@ func (h *MessageHandler) process(ctx context.Context, event sharedevents.Canonic
 	if phone == "" {
 		phone = payload.From
 	}
-	contactEntity, err := h.contacts.FindOrCreateFromInbound(ctx, tenant.TeamID, phone, payload.ContactName)
+	contactEntity, err := h.contacts.ResolveInbound(ctx, contact.ResolveInboundInput{
+		TeamID:      tenant.TeamID,
+		RawPhone:    phone,
+		ProfileName: payload.ContactName,
+		Channel:     "whatsapp",
+		ExternalID:  payload.ContactWAID,
+		Source:      contact.SourceMetaInbound,
+	})
 	if err != nil {
 		return err
 	}

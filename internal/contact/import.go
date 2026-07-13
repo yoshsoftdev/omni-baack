@@ -98,7 +98,8 @@ func isHeaderRow(record []string) bool {
 	}
 	first := strings.ToLower(strings.TrimSpace(record[0]))
 	second := strings.ToLower(strings.TrimSpace(record[1]))
-	return first == "name" && (second == "phone" || second == "phone_number" || second == "whatsapp")
+	return (first == "name" || first == "contact_name" || first == "customer_name") &&
+		(second == "phone" || second == "phone_number" || second == "whatsapp")
 }
 
 func fieldAt(record []string, index int) string {

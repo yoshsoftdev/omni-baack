@@ -24,18 +24,20 @@ func findOrCreateContact(ctx context.Context, contacts contact.Repository, teamI
 	}
 
 	now := time.Now().UTC()
+	contactName, customerName := contact.NewInboundNames(name, phoneNorm)
 	c := &contact.Contact{
 		ID:              uuid.New(),
 		TeamID:          teamID,
-		Name:            strings.TrimSpace(name),
+		ContactName:     contactName,
+		CustomerName:    customerName,
 		Phone:           phoneNorm,
 		Source:          contact.SourceWhatsApp,
 		MarketingStatus: contact.MarketingUnknown,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
-	if c.Name == "" {
-		c.Name = phoneNorm
+	if strings.TrimSpace(c.ContactName) == "" {
+		c.ContactName = phoneNorm
 	}
 	if err := contacts.Create(ctx, c); err != nil {
 		return nil, err

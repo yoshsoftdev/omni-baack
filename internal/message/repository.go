@@ -19,6 +19,7 @@ type Repository interface {
 	FindByID(ctx context.Context, teamID, id uuid.UUID) (*Message, error)
 	FindByWAMID(ctx context.Context, wamid string) (*Message, error)
 	FindByWAMIDKey(ctx context.Context, teamID, conversationID uuid.UUID, key string) (*Message, error)
+	FindByClientMessageID(ctx context.Context, teamID, conversationID, clientMessageID uuid.UUID) (*Message, error)
 	ListByConversation(ctx context.Context, teamID, conversationID uuid.UUID, filter ListFilter, page repository.PageParams) (repository.Page[Message], error)
 	UpdateStatus(ctx context.Context, teamID, id uuid.UUID, status Status) error
 	MarkDeletedByID(ctx context.Context, teamID, id uuid.UUID, source DeletedBySource) error
@@ -36,17 +37,17 @@ func NewRepository(db *database.DB) *PostgresRepository {
 func (r *PostgresRepository) Create(ctx context.Context, m *Message) error {
 	_, err := r.db.Pool.Exec(ctx, `
 		INSERT INTO messages (
-			id, conversation_id, team_id, channel_id, direction, sender, recipient,
+			id, client_message_id, conversation_id, team_id, channel_id, direction, sender, recipient,
 			content, content_type, wamid, wamid_key, reply_to_wamid, reply_to_message_id, status, is_deleted, deleted_at, deleted_by_source, raw_payload, received_at, created_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-	`, m.ID, m.ConversationID, m.TeamID, m.ChannelID, string(m.Direction), m.Sender, m.Recipient,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+	`, m.ID, m.ClientMessageID, m.ConversationID, m.TeamID, m.ChannelID, string(m.Direction), m.Sender, m.Recipient,
 		m.Content, string(m.ContentType), m.WAMID, wamidKeyPtr(m.WAMID), m.ReplyToWAMID, m.ReplyToMessageID, statusPtr(m.Status), m.IsDeleted, m.DeletedAt, deletedBySourcePtr(m.DeletedBySource), nullableJSON(m.RawPayload), m.ReceivedAt, m.CreatedAt)
 	return repository.MapError(err)
 }
 
 func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID) (*Message, error) {
 	return scanMessage(r.db.Pool.QueryRow(ctx, `
-		SELECT id, conversation_id, team_id, channel_id, direction, sender, recipient,
+		SELECT id, client_message_id, conversation_id, team_id, channel_id, direction, sender, recipient,
 			content, content_type, wamid, reply_to_wamid, reply_to_message_id, status, is_deleted, deleted_at, deleted_by_source, raw_payload, received_at, created_at
 		FROM messages WHERE id = $1 AND team_id = $2
 		ORDER BY created_at DESC LIMIT 1
@@ -55,7 +56,7 @@ func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID)
 
 func (r *PostgresRepository) FindByWAMID(ctx context.Context, wamid string) (*Message, error) {
 	return scanMessage(r.db.Pool.QueryRow(ctx, `
-		SELECT id, conversation_id, team_id, channel_id, direction, sender, recipient,
+		SELECT id, client_message_id, conversation_id, team_id, channel_id, direction, sender, recipient,
 			content, content_type, wamid, reply_to_wamid, reply_to_message_id, status, is_deleted, deleted_at, deleted_by_source, raw_payload, received_at, created_at
 		FROM messages WHERE wamid = $1
 		ORDER BY created_at DESC LIMIT 1
@@ -69,7 +70,7 @@ func (r *PostgresRepository) FindByWAMIDKey(ctx context.Context, teamID, convers
 	}
 
 	msg, err := scanMessage(r.db.Pool.QueryRow(ctx, `
-		SELECT id, conversation_id, team_id, channel_id, direction, sender, recipient,
+		SELECT id, client_message_id, conversation_id, team_id, channel_id, direction, sender, recipient,
 			content, content_type, wamid, reply_to_wamid, reply_to_message_id, status, is_deleted, deleted_at, deleted_by_source, raw_payload, received_at, created_at
 		FROM messages
 		WHERE team_id = $1 AND conversation_id = $2 AND wamid_key = $3
@@ -83,7 +84,7 @@ func (r *PostgresRepository) FindByWAMIDKey(ctx context.Context, teamID, convers
 	}
 
 	rows, err := r.db.Pool.Query(ctx, `
-		SELECT id, conversation_id, team_id, channel_id, direction, sender, recipient,
+		SELECT id, client_message_id, conversation_id, team_id, channel_id, direction, sender, recipient,
 			content, content_type, wamid, reply_to_wamid, reply_to_message_id, status, is_deleted, deleted_at, deleted_by_source, raw_payload, received_at, created_at
 		FROM messages
 		WHERE team_id = $1 AND conversation_id = $2 AND wamid IS NOT NULL
@@ -106,6 +107,16 @@ func (r *PostgresRepository) FindByWAMIDKey(ctx context.Context, teamID, convers
 	return nil, repository.ErrNotFound
 }
 
+func (r *PostgresRepository) FindByClientMessageID(ctx context.Context, teamID, conversationID, clientMessageID uuid.UUID) (*Message, error) {
+	return scanMessage(r.db.Pool.QueryRow(ctx, `
+		SELECT id, client_message_id, conversation_id, team_id, channel_id, direction, sender, recipient,
+			content, content_type, wamid, reply_to_wamid, reply_to_message_id, status, is_deleted, deleted_at, deleted_by_source, raw_payload, received_at, created_at
+		FROM messages
+		WHERE team_id = $1 AND conversation_id = $2 AND client_message_id = $3 AND is_deleted = FALSE
+		ORDER BY created_at DESC LIMIT 1
+	`, teamID, conversationID, clientMessageID))
+}
+
 func (r *PostgresRepository) ListByConversation(ctx context.Context, teamID, conversationID uuid.UUID, filter ListFilter, page repository.PageParams) (repository.Page[Message], error) {
 	page = page.Normalize()
 	args := []any{teamID, conversationID}
@@ -124,7 +135,7 @@ func (r *PostgresRepository) ListByConversation(ctx context.Context, teamID, con
 	}
 	args = append(args, page.Limit(), page.Offset())
 	rows, err := r.db.Pool.Query(ctx, fmt.Sprintf(`
-		SELECT id, conversation_id, team_id, channel_id, direction, sender, recipient,
+		SELECT id, client_message_id, conversation_id, team_id, channel_id, direction, sender, recipient,
 			content, content_type, wamid, reply_to_wamid, reply_to_message_id, status, is_deleted, deleted_at, deleted_by_source, raw_payload, received_at, created_at
 		FROM messages WHERE %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d
 	`, where, len(args)-1, len(args)), args...)
@@ -231,7 +242,7 @@ func scanMessageRow(row pgx.Row) (*Message, error) {
 	var status *string
 	var deletedBySource *string
 	err := row.Scan(
-		&m.ID, &m.ConversationID, &m.TeamID, &m.ChannelID, &direction, &m.Sender, &m.Recipient,
+		&m.ID, &m.ClientMessageID, &m.ConversationID, &m.TeamID, &m.ChannelID, &direction, &m.Sender, &m.Recipient,
 		&m.Content, &contentType, &m.WAMID, &m.ReplyToWAMID, &m.ReplyToMessageID, &status, &m.IsDeleted, &m.DeletedAt, &deletedBySource, &m.RawPayload, &m.ReceivedAt, &m.CreatedAt,
 	)
 	if err != nil {
