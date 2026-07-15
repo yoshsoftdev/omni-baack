@@ -89,6 +89,83 @@ func (s *Service) IngestInbound(ctx context.Context, input InboundInput) (*Messa
 	return m, true, nil
 }
 
+// OutboundEchoInput is system-level input for provider echo webhooks (IG app / WA Business app).
+type OutboundEchoInput struct {
+	TeamID         uuid.UUID
+	ChannelID      uuid.UUID
+	ConversationID uuid.UUID
+	WAMID          string
+	ReplyToWAMID   string
+	Sender         string
+	Recipient      string
+	Content        string
+	ContentType    ContentType
+	RawPayload     json.RawMessage
+	ReceivedAt     time.Time
+}
+
+// IngestOutboundEcho stores an outbound echo idempotently by wamid (e.g. Instagram is_echo).
+func (s *Service) IngestOutboundEcho(ctx context.Context, input OutboundEchoInput) (*Message, bool, error) {
+	wamid := strings.TrimSpace(input.WAMID)
+	if wamid == "" {
+		return nil, false, errors.New("wamid is required")
+	}
+	if existing, err := s.messages.FindByWAMID(ctx, wamid); err == nil && existing != nil {
+		return existing, false, nil
+	} else if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return nil, false, err
+	}
+
+	content := strings.TrimSpace(input.Content)
+	if content == "" {
+		content = previewForType(input.ContentType)
+	}
+	sender := strings.TrimSpace(input.Sender)
+	if sender == "" {
+		sender = "instagram_app"
+	}
+	contentType := input.ContentType
+	if contentType == "" {
+		contentType = ContentText
+	}
+
+	now := time.Now().UTC()
+	receivedAt := input.ReceivedAt
+	if receivedAt.IsZero() {
+		receivedAt = now
+	}
+	channelID := input.ChannelID
+	wamidCopy := wamid
+	replyToWAMID := strings.TrimSpace(input.ReplyToWAMID)
+	replyToMessageID := s.resolveReplyTarget(ctx, input.TeamID, input.ConversationID, replyToWAMID)
+	sentStatus := StatusSent
+	m := &Message{
+		ID:               uuid.New(),
+		ConversationID:   input.ConversationID,
+		TeamID:           input.TeamID,
+		ChannelID:        &channelID,
+		Direction:        DirectionOutbound,
+		Sender:           sender,
+		Recipient:        nullableString(input.Recipient),
+		Content:          content,
+		ContentType:      contentType,
+		WAMID:            &wamidCopy,
+		ReplyToWAMID:     nullableString(replyToWAMID),
+		ReplyToMessageID: replyToMessageID,
+		Status:           &sentStatus,
+		RawPayload:       input.RawPayload,
+		ReceivedAt:       receivedAt,
+		CreatedAt:        now,
+	}
+	if err := s.messages.Create(ctx, m); err != nil {
+		if existing, findErr := s.messages.FindByWAMID(ctx, wamid); findErr == nil && existing != nil {
+			return existing, false, nil
+		}
+		return nil, false, err
+	}
+	return m, true, nil
+}
+
 func nullableString(v string) *string {
 	if strings.TrimSpace(v) == "" {
 		return nil
@@ -169,7 +246,7 @@ func statusRank(s Status) int {
 // ContentTypeFromMeta maps Meta message types to storage content types.
 func ContentTypeFromMeta(messageType string) ContentType {
 	switch strings.ToLower(strings.TrimSpace(messageType)) {
-	case "text":
+	case "text", "attachment":
 		return ContentText
 	case "image":
 		return ContentImage
@@ -190,6 +267,13 @@ func ContentTypeFromMeta(messageType string) ContentType {
 
 // ExtractTextContent returns a display string from a Meta raw message payload.
 func ExtractTextContent(messageType string, raw json.RawMessage) string {
+	var instagramText struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &instagramText); err == nil && strings.TrimSpace(instagramText.Text) != "" {
+		return instagramText.Text
+	}
+
 	switch strings.ToLower(strings.TrimSpace(messageType)) {
 	case "text":
 		var body struct {

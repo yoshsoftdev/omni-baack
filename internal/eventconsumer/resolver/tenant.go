@@ -57,6 +57,22 @@ func (r *TenantResolver) ResolveByWABAID(ctx context.Context, wabaID string) (*T
 	}, nil
 }
 
+func (r *TenantResolver) ResolveByIGUserID(ctx context.Context, igUserID string) (*TenantContext, error) {
+	igUserID = strings.TrimSpace(igUserID)
+	if igUserID == "" {
+		return nil, terminalDLQ("channel", consumererrors.ErrUnknownChannel)
+	}
+	ch, err := r.channels.FindByIGUserIDGlobal(ctx, igUserID)
+	if err != nil {
+		return nil, terminalDLQ("channel", consumererrors.ErrUnknownChannel)
+	}
+	return &TenantContext{
+		TeamID:    ch.TeamID,
+		ChannelID: ch.ID,
+		Channel:   ch,
+	}, nil
+}
+
 func terminalDLQ(category string, err error) error {
 	return consumererrors.TerminalDLQ(category, err)
 }

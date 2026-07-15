@@ -1,6 +1,8 @@
 package conversation
 
 import (
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 )
@@ -8,11 +10,12 @@ import (
 // Item is the inbox-facing conversation projection with contact labels.
 type Item struct {
 	Conversation
-	ContactName  string `json:"contact_name"`
-	CustomerName string `json:"customer_name,omitempty"`
-	ContactPhone string `json:"contact_phone"`
-	DeviceID     string `json:"device_id,omitempty"`
-	AssigneeName string `json:"assignee_name,omitempty"`
+	ContactName      string `json:"contact_name"`
+	CustomerName     string `json:"customer_name,omitempty"`
+	ContactPhone     string `json:"contact_phone"`
+	ContactAvatarURL string `json:"contact_avatar_url,omitempty"`
+	DeviceID         string `json:"device_id,omitempty"`
+	AssigneeName     string `json:"assignee_name,omitempty"`
 }
 
 func toItem(conv Conversation, contactMap map[uuid.UUID]contact.Contact) Item {
@@ -27,6 +30,9 @@ func toItem(conv Conversation, contactMap map[uuid.UUID]contact.Contact) Item {
 	item.ContactName = contact.ResolveInboxDisplayName(&ct)
 	item.CustomerName = ct.CustomerName
 	item.ContactPhone = ct.Phone
+	if ct.AvatarURL != nil {
+		item.ContactAvatarURL = strings.TrimSpace(*ct.AvatarURL)
+	}
 	return item
 }
 

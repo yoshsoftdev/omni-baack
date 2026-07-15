@@ -17,9 +17,16 @@ type Config struct {
 	Redis           RedisConfig
 	StorageService  StorageServiceConfig
 	JWT             JWTConfig
-	Meta     MetaConfig
-	OTP      OTPConfig
-	NATS     NATSConfig
+	Meta            MetaConfig
+	Instagram       InstagramConfig
+	OTP             OTPConfig
+	NATS            NATSConfig
+}
+
+type InstagramConfig struct {
+	AppID       string
+	AppSecret   string
+	RedirectURI string
 }
 
 type NATSConfig struct {
@@ -122,6 +129,11 @@ func Load() (*Config, error) {
 			APIVersion:         getEnv("META_API_VERSION", "v21.0"),
 			TokenEncryptionKey: getEnv("META_TOKEN_ENCRYPTION_KEY", ""),
 			PaymentSetupURL:    getEnv("META_PAYMENT_SETUP_URL", ""),
+		},
+		Instagram: InstagramConfig{
+			AppID:       getEnv("INSTAGRAM_APP_ID", ""),
+			AppSecret:   getEnv("INSTAGRAM_APP_SECRET", ""),
+			RedirectURI: getEnv("INSTAGRAM_REDIRECT_URI", ""),
 		},
 		OTP: OTPConfig{
 			DefaultDeviceSlug: getEnv("OTP_DEFAULT_DEVICE_SLUG", "dgos-waba"),

@@ -14,6 +14,10 @@ func Register(router fiber.Router, deps Deps) {
 		router.Get("/webhook/meta", deps.Webhook.VerifyMeta)
 	}
 
+	if deps.InstagramOAuth != nil {
+		router.Get("/channels/instagram/callback", deps.InstagramOAuth.Callback)
+	}
+
 	if deps.JWT == nil {
 		return
 	}
@@ -63,6 +67,15 @@ func Register(router fiber.Router, deps Deps) {
 		channels.Get("/", deps.Channel.List)
 		channels.Post("/manual/verify", deps.Channel.VerifyManualConnect)
 		channels.Post("/", deps.Channel.Create)
+		if deps.ChannelManagement != nil {
+			channels.Get("/types", deps.ChannelManagement.ListTypes)
+			channels.Get("/status", deps.ChannelManagement.Status)
+		}
+		if deps.InstagramOAuth != nil {
+			channels.Get("/instagram/connect-url", deps.InstagramOAuth.ConnectURL)
+			channels.Get("/instagram/status", deps.InstagramOAuth.Status)
+			channels.Delete("/instagram/connection", deps.InstagramOAuth.Disconnect)
+		}
 		channels.Get("/:id/health", deps.Channel.Health)
 		channels.Get("/:id/payment-status", deps.Channel.GetPaymentStatus)
 		channels.Post("/:id/payment-link", deps.Channel.CreatePaymentLink)
@@ -82,6 +95,17 @@ func Register(router fiber.Router, deps Deps) {
 		embeddedSignup.Post("/start", deps.Channel.StartTeamEmbeddedSignup)
 		embeddedSignup.Get("/:session_id", deps.Channel.GetTeamEmbeddedSignupStatus)
 		embeddedSignup.Post("/:session_id/complete", deps.Channel.CompleteTeamEmbeddedSignup)
+	} else if deps.ChannelManagement != nil || deps.InstagramOAuth != nil {
+		channels := protected.Group("/channels")
+		if deps.ChannelManagement != nil {
+			channels.Get("/types", deps.ChannelManagement.ListTypes)
+			channels.Get("/status", deps.ChannelManagement.Status)
+		}
+		if deps.InstagramOAuth != nil {
+			channels.Get("/instagram/connect-url", deps.InstagramOAuth.ConnectURL)
+			channels.Get("/instagram/status", deps.InstagramOAuth.Status)
+			channels.Delete("/instagram/connection", deps.InstagramOAuth.Disconnect)
+		}
 	}
 
 	if deps.Template != nil {

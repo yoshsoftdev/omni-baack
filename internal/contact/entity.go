@@ -23,6 +23,7 @@ const (
 	SourceAPI         Source = "api"
 	SourceMetaInbound Source = "meta_inbound"
 	SourceMetaSync    Source = "meta_sync"
+	SourceInstagram   Source = "ig"
 )
 
 // TagRef is a lightweight tag assignment on a contact.
@@ -40,6 +41,7 @@ type Contact struct {
 	Name            string          `json:"name,omitempty"` // deprecated alias of contact_name
 	Phone           string          `json:"phone"`
 	Email           *string         `json:"email,omitempty"`
+	AvatarURL       *string         `json:"avatar_url,omitempty"`
 	Notes           *string         `json:"notes,omitempty"`
 	City            *string         `json:"city,omitempty"`
 	Country         *string         `json:"country,omitempty"`

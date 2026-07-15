@@ -99,6 +99,120 @@ func (s *Service) syncInboundNames(ctx context.Context, existing *Contact, profi
 	return existing, nil
 }
 
+// ResolveInstagramInbound resolves/creates a contact for Instagram DM webhooks.
+// displayName, username, and avatarURL come from the Instagram User Profile API when available.
+func (s *Service) ResolveInstagramInbound(ctx context.Context, teamID uuid.UUID, senderID, displayName, username, avatarURL string) (*Contact, error) {
+	phoneKey := instagramContactKey(senderID)
+	if phoneKey == "ig:" {
+		return nil, errors.New("instagram sender id is required")
+	}
+
+	profileName := strings.TrimSpace(displayName)
+	if profileName == "" {
+		profileName = strings.TrimSpace(username)
+	}
+	if strings.TrimSpace(username) != "" && !strings.HasPrefix(profileName, "@") {
+		if profileName == "" {
+			profileName = "@" + strings.TrimPrefix(strings.TrimSpace(username), "@")
+		}
+	}
+	avatarURL = strings.TrimSpace(avatarURL)
+
+	existing, err := s.contacts.FindByPhone(ctx, teamID, phoneKey)
+	if err == nil {
+		return s.syncInstagramInboundProfile(ctx, existing, profileName, username, avatarURL)
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
+
+	contactName := strings.TrimSpace(profileName)
+	if contactName == "" {
+		contactName = "Instagram User"
+	}
+	customerName := contactName
+
+	now := time.Now().UTC()
+	c := &Contact{
+		ID:              uuid.New(),
+		TeamID:          teamID,
+		ContactName:     contactName,
+		CustomerName:    customerName,
+		Phone:           phoneKey,
+		Source:          SourceInstagram,
+		MarketingStatus: MarketingUnknown,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if avatarURL != "" {
+		c.AvatarURL = &avatarURL
+	}
+	if err := s.contacts.Create(ctx, c); err != nil {
+		if existing, findErr := s.contacts.FindByPhone(ctx, teamID, phoneKey); findErr == nil {
+			return s.syncInstagramInboundProfile(ctx, existing, profileName, username, avatarURL)
+		}
+		return nil, err
+	}
+	c.PopulateLegacyName()
+	return c, nil
+}
+
+func (s *Service) syncInstagramInboundProfile(ctx context.Context, existing *Contact, profileName, username, avatarURL string) (*Contact, error) {
+	updated := false
+	name := strings.TrimSpace(profileName)
+	if name == "" {
+		name = strings.TrimSpace(username)
+		if name != "" && !strings.HasPrefix(name, "@") {
+			name = "@" + strings.TrimPrefix(name, "@")
+		}
+	}
+	if name != "" && name != existing.ContactName && ShouldAutoUpdateContactName(existing) {
+		existing.ContactName = name
+		updated = true
+	}
+	if name != "" && name != existing.CustomerName {
+		existing.CustomerName = name
+		updated = true
+	}
+	if existing.Source != SourceInstagram {
+		existing.Source = SourceInstagram
+		updated = true
+	}
+	if avatarURL != "" {
+		if existing.AvatarURL == nil || strings.TrimSpace(*existing.AvatarURL) != avatarURL {
+			existing.AvatarURL = &avatarURL
+			updated = true
+		}
+	}
+	if !updated {
+		existing.PopulateLegacyName()
+		return existing, nil
+	}
+	existing.UpdatedAt = time.Now().UTC()
+	if err := s.contacts.Update(ctx, existing); err != nil {
+		return nil, err
+	}
+	existing.PopulateLegacyName()
+	return existing, nil
+}
+
+func instagramContactKey(senderID string) string {
+	return "ig:" + strings.TrimSpace(senderID)
+}
+
+// ParseInstagramScopedID extracts the Instagram scoped user id from a contact phone key (ig:{id}).
+func ParseInstagramScopedID(phone string) (string, bool) {
+	phone = strings.TrimSpace(phone)
+	if !strings.HasPrefix(phone, "ig:") {
+		return "", false
+	}
+	id := strings.TrimSpace(strings.TrimPrefix(phone, "ig:"))
+	if id == "" {
+		return "", false
+	}
+	return id, true
+}
+
 func normalizeInboundPhone(raw string) string {
 	digits := phone.Normalize(raw)
 	if digits == "" {

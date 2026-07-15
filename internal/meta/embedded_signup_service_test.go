@@ -171,6 +171,15 @@ func (s *signupChannelRepo) FindByPhoneNumberID(context.Context, string) (*chann
 func (s *signupChannelRepo) FindByWABAID(context.Context, string) (*channel.Channel, error) {
 	return nil, repository.ErrNotFound
 }
+func (s *signupChannelRepo) FindByIGUserID(context.Context, uuid.UUID, string) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
+func (s *signupChannelRepo) FindByIGUserIDGlobal(context.Context, string) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
+func (s *signupChannelRepo) FindConnectedByType(context.Context, uuid.UUID, channel.ChannelType) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
 func (s *signupChannelRepo) UpdateHealthMetadata(context.Context, uuid.UUID, []byte) error { return nil }
 
 type mockMetaClient struct {

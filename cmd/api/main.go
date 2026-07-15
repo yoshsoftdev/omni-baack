@@ -17,6 +17,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign/delivery"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
+	"github.com/omnichannel/omni-chan-v2/internal/channelmgmt"
 	"github.com/omnichannel/omni-chan-v2/internal/channelsync"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
@@ -26,6 +27,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/eventconsumer"
 	eventconsumeridempotency "github.com/omnichannel/omni-chan-v2/internal/eventconsumer/idempotency"
 	"github.com/omnichannel/omni-chan-v2/internal/inbox"
+	"github.com/omnichannel/omni-chan-v2/internal/instagram"
 	"github.com/omnichannel/omni-chan-v2/internal/message"
 	metasvc "github.com/omnichannel/omni-chan-v2/internal/meta"
 	"github.com/omnichannel/omni-chan-v2/internal/onboarding"
@@ -129,7 +131,7 @@ func main() {
 	syncRunRepo := template.NewInMemorySyncRunRepository()
 	metaSyncService := template.NewSyncService(metaClient, channelRepo, templateRepo, syncRunRepo, tokenCipher, log.Logger)
 	channelSyncRepo := channelsync.NewRepository(db)
-	metaHealthService := metasvc.NewHealthService(metaAPI, channelRepo, tokenCipher, metaSyncService)
+	metaHealthService := metasvc.NewHealthService(metaAPI, metaClient, channelRepo, tokenCipher, metaSyncService)
 	embeddedSignupSessionRepo := metasvc.NewEmbeddedSignupSessionRepository(db)
 	paymentService := metasvc.NewPaymentService(metaAPI, channelRepo, tokenCipher, cfg.Meta)
 
@@ -145,6 +147,8 @@ func main() {
 		metaAPI, channelRepo, embeddedSignupSessionRepo, tokenCipher, cfg.Meta, workspaceService, log.Logger,
 	)
 	channelService := channel.NewService(channelRepo, teamRepo, quotaSvc, rbacService, tokenCipher, metaAPI)
+	channelManagementService := channelmgmt.NewService(channelRepo, teamRepo, rbacService)
+	instagramOAuthService := instagram.NewService(channelRepo, teamRepo, rbacService, tokenCipher, metaClient, cfg.Instagram)
 	teamService := team.NewService(teamRepo, userRepo, quotaSvc, rbacService)
 	segmentService := segment.NewService(segmentRepo, teamRepo, rbacService)
 
@@ -262,6 +266,8 @@ func main() {
 			Workspace:         handler.NewWorkspaceHandler(workspaceService),
 			Team:              handler.NewTeamHandler(teamService, rbacService),
 			Channel:           handler.NewChannelHandler(channelService, metaHealthService, embeddedSignupService, paymentService, channelSyncService),
+			ChannelManagement: handler.NewChannelManagementHandler(channelManagementService),
+			InstagramOAuth:    handler.NewInstagramOAuthHandler(instagramOAuthService),
 			Template:          handler.NewTemplateHandler(templateService),
 			Contact:           handler.NewContactHandler(contactService),
 			Segment:           handler.NewSegmentHandler(segmentService),
@@ -360,12 +366,13 @@ func startEventConsumer(
 	deliveryTracker := delivery.NewTracker(campaignRepo, deliveryAggregator, deliveryCompletion, deliveryMetrics, slogLog)
 
 	registry := eventconsumer.NewRegistry(eventconsumer.Deps{
-		Channels:      channelRepo,
-		Contacts:      contactService,
-		Conversations: conversationService,
-		Messages:      messageService,
-		MetaMedia:     metaClient,
-		TokenCipher:   tokenCipher,
+		Channels:         channelRepo,
+		Contacts:         contactService,
+		Conversations:    conversationService,
+		Messages:         messageService,
+		MetaMedia:        metaClient,
+		InstagramProfile: metaClient,
+		TokenCipher:      tokenCipher,
 		Storage:       storageClient,
 		Templates:     templateRepo,
 		Onboarding:    onboardingService,

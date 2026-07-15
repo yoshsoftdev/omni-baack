@@ -19,6 +19,14 @@ type ConnectionType string
 const (
 	ConnectionManual       ConnectionType = "manual"
 	ConnectionEmbeddedCoex ConnectionType = "embedded_coex"
+	ConnectionOAuth        ConnectionType = "oauth"
+)
+
+type ChannelType string
+
+const (
+	TypeWhatsApp  ChannelType = "whatsapp"
+	TypeInstagram ChannelType = "instagram"
 )
 
 type OnboardingStatus string
@@ -31,18 +39,20 @@ const (
 	OnboardingFailed          OnboardingStatus = "failed"
 )
 
-// Channel is a workspace WhatsApp channel (API: ChannelDTO).
+// Channel is a workspace messaging channel (WhatsApp or Instagram).
 type Channel struct {
 	ID              uuid.UUID        `json:"id"`
 	TeamID          uuid.UUID        `json:"team_id"`
 	Name            string           `json:"name"`
 	Provider        string           `json:"provider"`
+	ChannelType     ChannelType      `json:"channel_type"`
 	Status          Status           `json:"status"`
 	ConnectionType  *ConnectionType  `json:"connection_type,omitempty"`
 	PhoneNumber     *string          `json:"phone_number,omitempty"`
 	WABAID          *string          `json:"waba_id,omitempty"`
 	PhoneNumberID   *string          `json:"phone_number_id,omitempty"`
 	BusinessID      *string          `json:"business_id,omitempty"`
+	IGUserID        *string          `json:"ig_user_id,omitempty"`
 	IsCoex          bool             `json:"is_coex"`
 	HealthMetadata  []byte           `json:"-"`
 	LastConnectedAt *time.Time       `json:"last_connected_at,omitempty"`
@@ -70,6 +80,7 @@ type Onboarding struct {
 }
 
 type ListFilter struct {
-	Status *Status
-	Search string
+	Status      *Status
+	ChannelType *ChannelType
+	Search      string
 }

@@ -54,6 +54,15 @@ func (f *fakeChannelRepo) FindByPhoneNumberID(_ context.Context, phone string) (
 func (f *fakeChannelRepo) FindByWABAID(context.Context, string) (*channel.Channel, error) {
 	return nil, repository.ErrNotFound
 }
+func (f *fakeChannelRepo) FindByIGUserID(context.Context, uuid.UUID, string) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
+func (f *fakeChannelRepo) FindByIGUserIDGlobal(context.Context, string) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
+func (f *fakeChannelRepo) FindConnectedByType(context.Context, uuid.UUID, channel.ChannelType) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
 func (f *fakeChannelRepo) UpdateHealthMetadata(context.Context, uuid.UUID, []byte) error { return nil }
 
 type fakeContactRepo struct {
@@ -289,6 +298,7 @@ func TestMessageHandler_NewConversationAndMessage(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 		idempotency.NewMemoryStore(time.Hour),
 		metrics,
 		nil,
@@ -339,6 +349,7 @@ func TestMessageHandler_DuplicateSkipped(t *testing.T) {
 		contact.NewService(contactRepo, nil, nil, nil),
 		conversation.NewService(convRepo, contactRepo, nil, nil),
 		message.NewService(msgRepo, nil, convRepo, nil, nil, nil, nil),
+		nil,
 		nil,
 		nil,
 		nil,

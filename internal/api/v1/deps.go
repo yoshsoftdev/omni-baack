@@ -13,6 +13,8 @@ type Deps struct {
 	Workspace    *handler.WorkspaceHandler
 	Team         *handler.TeamHandler
 	Channel      *handler.ChannelHandler
+	ChannelManagement *handler.ChannelManagementHandler
+	InstagramOAuth    *handler.InstagramOAuthHandler
 	Template     *handler.TemplateHandler
 	Contact      *handler.ContactHandler
 	Segment      *handler.SegmentHandler

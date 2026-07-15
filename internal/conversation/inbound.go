@@ -12,7 +12,10 @@ import (
 )
 
 // FindOrCreateForInbound finds or creates a conversation for inbound Meta messages.
-func (s *Service) FindOrCreateForInbound(ctx context.Context, teamID, contactID, channelID uuid.UUID) (*Conversation, bool, error) {
+func (s *Service) FindOrCreateForInbound(ctx context.Context, teamID, contactID, channelID uuid.UUID, channelType ChannelType) (*Conversation, bool, error) {
+	if channelType == "" {
+		channelType = ChannelWhatsApp
+	}
 	if _, err := s.contacts.FindByID(ctx, teamID, contactID); err != nil {
 		return nil, false, serviceerrors.MapRepository(err)
 	}
@@ -32,7 +35,7 @@ func (s *Service) FindOrCreateForInbound(ctx context.Context, teamID, contactID,
 		TeamID:      teamID,
 		ContactID:   contactID,
 		ChannelID:   channelPtr,
-		ChannelType: ChannelWhatsApp,
+		ChannelType: channelType,
 		Status:      StatusOpen,
 		CreatedAt:   now,
 		UpdatedAt:   now,

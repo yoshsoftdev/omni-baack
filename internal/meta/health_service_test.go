@@ -41,6 +41,15 @@ func (s stubChannelRepo) FindByPhoneNumberID(context.Context, string) (*channel.
 func (s stubChannelRepo) FindByWABAID(context.Context, string) (*channel.Channel, error) {
 	return nil, repository.ErrNotFound
 }
+func (s stubChannelRepo) FindByIGUserID(context.Context, uuid.UUID, string) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
+func (s stubChannelRepo) FindByIGUserIDGlobal(context.Context, string) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
+func (s stubChannelRepo) FindConnectedByType(context.Context, uuid.UUID, channel.ChannelType) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
 func (s stubChannelRepo) UpdateHealthMetadata(context.Context, uuid.UUID, []byte) error { return nil }
 
 func TestHealthServiceMissingWABA(t *testing.T) {
@@ -48,7 +57,7 @@ func TestHealthServiceMissingWABA(t *testing.T) {
 	channelID := uuid.New()
 	cipher, _ := cryptoutil.NewTokenCipherFromBase64("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
 	chRepo := stubChannelRepo{ch: &channel.Channel{ID: channelID, TeamID: teamID}}
-	health := metasvc.NewHealthService(nil, chRepo, cipher, nil)
+	health := metasvc.NewHealthService(nil, nil, chRepo, cipher, nil)
 	result, err := health.CheckChannel(context.Background(), teamID, channelID)
 	if err != nil {
 		t.Fatalf("health: %v", err)

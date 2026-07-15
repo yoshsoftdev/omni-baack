@@ -31,26 +31,32 @@ import (
 // Syncer applies inbox synchronization after message ingestion.
 type Syncer interface {
 	HandleInbound(ctx context.Context, p inbox.InboundParams) (*conversation.Conversation, error)
+	HandleOutbound(ctx context.Context, p inbox.OutboundParams) (*conversation.Conversation, error)
 }
 
 type MessageHandler struct {
-	resolver      *resolver.TenantResolver
-	channels      channel.Repository
-	contacts      *contact.Service
-	conversations *conversation.Service
-	messages      *message.Service
-	inbox         Syncer
-	metaMedia     MetaMediaClient
-	tokenCipher   TokenCipher
-	storage       StorageUploader
-	idempotency   idempotency.Store
-	metrics       *Metrics
-	log           *slog.Logger
+	resolver          *resolver.TenantResolver
+	channels          channel.Repository
+	contacts          *contact.Service
+	conversations     *conversation.Service
+	messages          *message.Service
+	inbox             Syncer
+	metaMedia         MetaMediaClient
+	instagramProfile  InstagramProfileClient
+	tokenCipher       TokenCipher
+	storage           StorageUploader
+	idempotency       idempotency.Store
+	metrics           *Metrics
+	log               *slog.Logger
 }
 
 type MetaMediaClient interface {
 	GetMediaMetadata(ctx context.Context, mediaID, phoneNumberID, accessToken string) (*metaclient.MediaMetadata, error)
 	DownloadMedia(ctx context.Context, mediaURL, accessToken string) (io.ReadCloser, error)
+}
+
+type InstagramProfileClient interface {
+	GetInstagramScopedUser(ctx context.Context, scopedUserID, accessToken string) (*metaclient.InstagramScopedUser, error)
 }
 
 type TokenCipher interface {
@@ -69,6 +75,7 @@ func NewMessageHandler(
 	messages *message.Service,
 	inbox Syncer,
 	metaMedia MetaMediaClient,
+	instagramProfile InstagramProfileClient,
 	tokenCipher TokenCipher,
 	storage StorageUploader,
 	store idempotency.Store,
@@ -79,18 +86,19 @@ func NewMessageHandler(
 		log = slog.Default()
 	}
 	return &MessageHandler{
-		resolver:      resolver,
-		channels:      channels,
-		contacts:      contacts,
-		conversations: conversations,
-		messages:      messages,
-		inbox:         inbox,
-		metaMedia:     metaMedia,
-		tokenCipher:   tokenCipher,
-		storage:       storage,
-		idempotency:   store,
-		metrics:       metrics,
-		log:           log,
+		resolver:         resolver,
+		channels:         channels,
+		contacts:         contacts,
+		conversations:    conversations,
+		messages:         messages,
+		inbox:            inbox,
+		metaMedia:        metaMedia,
+		instagramProfile: instagramProfile,
+		tokenCipher:      tokenCipher,
+		storage:          storage,
+		idempotency:      store,
+		metrics:          metrics,
+		log:              log,
 	}
 }
 
@@ -98,6 +106,10 @@ func (h *MessageHandler) Handle(ctx context.Context, event sharedevents.Canonica
 	payload, err := message.DecodeMetaMessagePayload(event.Payload)
 	if err != nil || payload.WAMID == "" {
 		return TerminalDLQ("message", ErrMalformedEvent)
+	}
+
+	if isInstagramInbound(payload) {
+		return h.handleInstagram(ctx, event, payload)
 	}
 
 	tenant, err := h.resolver.ResolveByPhoneNumberID(ctx, payload.PhoneNumberID)
@@ -118,6 +130,233 @@ func (h *MessageHandler) Handle(ctx context.Context, event sharedevents.Canonica
 	return nil
 }
 
+func isInstagramInbound(payload sharedevents.MetaMessagePayload) bool {
+	return strings.EqualFold(strings.TrimSpace(payload.Platform), "instagram") ||
+		strings.TrimSpace(payload.IGUserID) != ""
+}
+
+func (h *MessageHandler) handleInstagram(ctx context.Context, event sharedevents.CanonicalEvent, payload sharedevents.MetaMessagePayload) error {
+	tenant, err := h.resolver.ResolveByIGUserID(ctx, payload.IGUserID)
+	if err != nil {
+		return err
+	}
+
+	key := idempotency.MessageKey("instagram", payload.WAMID)
+	skipped, err := idempotency.ProcessOnce(ctx, h.idempotency, key, func() error {
+		return h.processInstagram(ctx, event, tenant, payload)
+	})
+	if err != nil {
+		return err
+	}
+	if skipped {
+		h.log.Info("duplicate instagram message skipped", "event_id", event.EventID, "mid", payload.WAMID)
+	}
+	return nil
+}
+
+func (h *MessageHandler) processInstagram(ctx context.Context, event sharedevents.CanonicalEvent, tenant *resolver.TenantContext, payload sharedevents.MetaMessagePayload) error {
+	if payload.IsEcho {
+		return h.processInstagramEcho(ctx, event, tenant, payload)
+	}
+
+	senderID := strings.TrimSpace(payload.From)
+	if senderID == "" {
+		senderID = strings.TrimSpace(payload.ContactWAID)
+	}
+
+	displayName, username, avatarURL := h.fetchInstagramSenderProfile(ctx, tenant.ChannelID, senderID)
+	contactEntity, err := h.contacts.ResolveInstagramInbound(ctx, tenant.TeamID, senderID, displayName, username, avatarURL)
+	if err != nil {
+		return err
+	}
+
+	content := message.ExtractTextContent(payload.MessageType, payload.Raw)
+	if content == "" {
+		content = "New message"
+	}
+	contentType := message.ContentTypeFromMeta(payload.MessageType)
+	receivedAt := message.ParseMetaTimestamp(payload.Timestamp)
+	if !event.OccurredAt.IsZero() {
+		receivedAt = event.OccurredAt
+	}
+
+	conv, convCreated, err := h.conversations.FindOrCreateForInbound(ctx, tenant.TeamID, contactEntity.ID, tenant.ChannelID, conversation.ChannelInstagram)
+	if err != nil {
+		return err
+	}
+	if convCreated {
+		h.metrics.IncConversationsCreated()
+	}
+
+	msg, msgCreated, err := h.messages.IngestInbound(ctx, message.InboundInput{
+		TeamID:         tenant.TeamID,
+		ChannelID:      tenant.ChannelID,
+		ConversationID: conv.ID,
+		WAMID:          payload.WAMID,
+		ReplyToWAMID:   payload.ReplyToWAMID,
+		Sender:         senderID,
+		Content:        content,
+		ContentType:    contentType,
+		RawPayload:     payload.Raw,
+		ReceivedAt:     receivedAt,
+	})
+	if err != nil {
+		h.log.Error("instagram message ingest failed",
+			"event_id", event.EventID,
+			"conversation_id", conv.ID.String(),
+			"mid_len", len(strings.TrimSpace(payload.WAMID)),
+			"error", err.Error(),
+		)
+		return err
+	}
+	if msgCreated {
+		h.metrics.IncMessagesCreated()
+	}
+	if h.inbox != nil {
+		if _, err := h.inbox.HandleInbound(ctx, inbox.InboundParams{
+			TeamID:              tenant.TeamID,
+			Conversation:        conv,
+			ConversationCreated: convCreated,
+			Message:             msg,
+			MessageCreated:      msgCreated,
+			Preview:             content,
+		}); err != nil {
+			return err
+		}
+	} else if msgCreated {
+		unread := conv.UnreadCount + 1
+		if err := h.conversations.TouchInbound(ctx, tenant.TeamID, conv.ID, content, unread); err != nil {
+			return err
+		}
+	}
+
+	if h.log == nil {
+		h.log = slog.Default()
+	}
+	h.log.Info("instagram inbound message ingested",
+		"event_id", event.EventID,
+		"team_id", tenant.TeamID.String(),
+		"channel_id", tenant.ChannelID.String(),
+		"conversation_id", conv.ID.String(),
+		"message_id", msg.ID.String(),
+		"contact", contactEntity.ContactName,
+	)
+	return nil
+}
+
+func (h *MessageHandler) processInstagramEcho(ctx context.Context, event sharedevents.CanonicalEvent, tenant *resolver.TenantContext, payload sharedevents.MetaMessagePayload) error {
+	contactID := strings.TrimSpace(payload.To)
+	if contactID == "" {
+		contactID = strings.TrimSpace(payload.ContactWAID)
+	}
+	if contactID == "" {
+		return TerminalDLQ("message", errors.New("instagram echo missing recipient"))
+	}
+
+	displayName, username, avatarURL := h.fetchInstagramSenderProfile(ctx, tenant.ChannelID, contactID)
+	contactEntity, err := h.contacts.ResolveInstagramInbound(ctx, tenant.TeamID, contactID, displayName, username, avatarURL)
+	if err != nil {
+		return err
+	}
+
+	content := message.ExtractTextContent(payload.MessageType, payload.Raw)
+	if content == "" {
+		content = "New message"
+	}
+	contentType := message.ContentTypeFromMeta(payload.MessageType)
+	receivedAt := message.ParseMetaTimestamp(payload.Timestamp)
+	if !event.OccurredAt.IsZero() {
+		receivedAt = event.OccurredAt
+	}
+
+	conv, convCreated, err := h.conversations.FindOrCreateForInbound(ctx, tenant.TeamID, contactEntity.ID, tenant.ChannelID, conversation.ChannelInstagram)
+	if err != nil {
+		return err
+	}
+	if convCreated {
+		h.metrics.IncConversationsCreated()
+	}
+
+	businessSender := strings.TrimSpace(payload.From)
+	if businessSender == "" {
+		businessSender = "instagram_app"
+	}
+	msg, msgCreated, err := h.messages.IngestOutboundEcho(ctx, message.OutboundEchoInput{
+		TeamID:         tenant.TeamID,
+		ChannelID:      tenant.ChannelID,
+		ConversationID: conv.ID,
+		WAMID:          payload.WAMID,
+		ReplyToWAMID:   payload.ReplyToWAMID,
+		Sender:         businessSender,
+		Recipient:      contactEntity.Phone,
+		Content:        content,
+		ContentType:    contentType,
+		RawPayload:     payload.Raw,
+		ReceivedAt:     receivedAt,
+	})
+	if err != nil {
+		h.log.Error("instagram echo ingest failed",
+			"event_id", event.EventID,
+			"conversation_id", conv.ID.String(),
+			"mid_len", len(strings.TrimSpace(payload.WAMID)),
+			"error", err.Error(),
+		)
+		return err
+	}
+	if msgCreated {
+		h.metrics.IncMessagesCreated()
+	}
+	if msgCreated && h.inbox != nil {
+		if _, err := h.inbox.HandleOutbound(ctx, inbox.OutboundParams{
+			TeamID:       tenant.TeamID,
+			AgentID:      uuid.Nil,
+			Conversation: conv,
+			Message:      msg,
+		}); err != nil {
+			return err
+		}
+	}
+
+	if h.log == nil {
+		h.log = slog.Default()
+	}
+	h.log.Info("instagram echo message ingested",
+		"event_id", event.EventID,
+		"team_id", tenant.TeamID.String(),
+		"channel_id", tenant.ChannelID.String(),
+		"conversation_id", conv.ID.String(),
+		"message_id", msg.ID.String(),
+		"contact", contactEntity.ContactName,
+	)
+	return nil
+}
+
+func (h *MessageHandler) fetchInstagramSenderProfile(ctx context.Context, channelID uuid.UUID, senderID string) (displayName, username, avatarURL string) {
+	if h.instagramProfile == nil || h.tokenCipher == nil || h.channels == nil {
+		return "", "", ""
+	}
+	creds, err := h.channels.FindCredentials(ctx, channelID)
+	if err != nil || creds == nil {
+		return "", "", ""
+	}
+	token, err := h.tokenCipher.Decrypt(creds.AccessTokenEnc)
+	if err != nil || strings.TrimSpace(token) == "" {
+		return "", "", ""
+	}
+	profile, err := h.instagramProfile.GetInstagramScopedUser(ctx, senderID, token)
+	if err != nil {
+		if h.log != nil {
+			h.log.Warn("instagram sender profile lookup failed",
+				"sender_id", senderID,
+				"channel_id", channelID.String(),
+				"error", err.Error(),
+			)
+		}
+		return "", "", ""
+	}
+	return strings.TrimSpace(profile.Name), strings.TrimSpace(profile.Username), strings.TrimSpace(profile.ProfilePic)
+}
+
 func (h *MessageHandler) process(ctx context.Context, event sharedevents.CanonicalEvent, tenant *resolver.TenantContext, payload sharedevents.MetaMessagePayload) error {
 	phone := payload.ContactWAID
 	if phone == "" {
@@ -135,7 +374,7 @@ func (h *MessageHandler) process(ctx context.Context, event sharedevents.Canonic
 		return err
 	}
 
-	conv, convCreated, err := h.conversations.FindOrCreateForInbound(ctx, tenant.TeamID, contactEntity.ID, tenant.ChannelID)
+	conv, convCreated, err := h.conversations.FindOrCreateForInbound(ctx, tenant.TeamID, contactEntity.ID, tenant.ChannelID, conversation.ChannelWhatsApp)
 	if err != nil {
 		return err
 	}
