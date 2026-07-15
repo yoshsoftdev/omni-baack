@@ -29,6 +29,8 @@ type instagramSendMessageResponse struct {
 }
 
 // SendInstagramTextMessage sends a DM from an Instagram professional account to a scoped user (IGSID).
+// replyToMID is accepted for forward-compat but is intentionally not sent to Meta:
+// Instagram Login messaging frequently returns error_subcode 2534002 ("Invalid message ID") for reply_to.
 func (c *Client) SendInstagramTextMessage(ctx context.Context, igUserID, accessToken, recipientScopedID, body, replyToMID string) (string, error) {
 	igUserID = strings.TrimSpace(igUserID)
 	recipientScopedID = strings.TrimSpace(recipientScopedID)
@@ -46,12 +48,7 @@ func (c *Client) SendInstagramTextMessage(ctx context.Context, igUserID, accessT
 	payload := instagramSendMessageRequest{}
 	payload.Recipient.ID = recipientScopedID
 	payload.Message.Text = body
-	replyToMID = strings.TrimSpace(replyToMID)
-	if replyToMID != "" {
-		payload.ReplyTo = &struct {
-			MID string `json:"mid"`
-		}{MID: replyToMID}
-	}
+	_ = replyToMID
 
 	data, err := json.Marshal(payload)
 	if err != nil {

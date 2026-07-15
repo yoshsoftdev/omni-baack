@@ -286,12 +286,13 @@ func (s *Service) deliverInstagram(
 		return nil, nil, serviceerrors.NewValidation("channel", "instagram channel is not connected")
 	}
 
-	mid, sendErr := s.outbound.Meta.SendInstagramTextMessage(ctx, igUserID, token, scopedID, content, replyToMID)
+	mid, sendErr := s.outbound.Meta.SendInstagramTextMessage(ctx, igUserID, token, scopedID, content, "")
 	if sendErr != nil {
 		return nil, nil, serviceerrors.NewValidation("instagram", sendErr.Error())
 	}
 
 	recipient := contactEntity.Phone
+	_ = replyToMID // reply threading is stored locally; Instagram send API rejects many reply_to mids (2534002).
 	return &recipient, &mid, nil
 }
 

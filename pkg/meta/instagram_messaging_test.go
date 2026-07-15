@@ -49,12 +49,12 @@ func TestSendInstagramTextMessage(t *testing.T) {
 	}
 }
 
-func TestSendInstagramTextMessage_WithReply(t *testing.T) {
+func TestSendInstagramTextMessage_IgnoresReplyTo(t *testing.T) {
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		gotBody = string(body)
-		_ = json.NewEncoder(w).Encode(map[string]string{"message_id": "mid.reply"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"message_id": "mid.noreply"})
 	}))
 	defer srv.Close()
 
@@ -64,10 +64,10 @@ func TestSendInstagramTextMessage_WithReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mid != "mid.reply" {
+	if mid != "mid.noreply" {
 		t.Fatalf("mid=%q", mid)
 	}
-	if !strings.Contains(gotBody, `"mid":"mid-original"`) {
-		t.Fatalf("body=%s", gotBody)
+	if strings.Contains(gotBody, "reply_to") {
+		t.Fatalf("reply_to must not be sent to Instagram API: %s", gotBody)
 	}
 }
