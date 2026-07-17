@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -51,7 +52,7 @@ func (r *PostgresRepository) Create(ctx context.Context, c *Contact) error {
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 	`
 	_, err := r.db.Pool.Exec(ctx, query,
-		c.ID, c.TeamID, c.ContactName, c.CustomerName, c.Phone, c.Email, c.AvatarURL, c.Notes, c.City, c.Country, c.Province, c.Company, c.JobTitle,
+		c.ID, c.TeamID, c.ContactName, c.CustomerName, nullableContactPhone(c.Phone), c.Email, c.AvatarURL, c.Notes, c.City, c.Country, c.Province, c.Company, c.JobTitle,
 		c.Language, c.CustomerType, string(c.Source), string(c.MarketingStatus), c.LastActivityAt, c.ImportJobID, c.CreatedAt, c.UpdatedAt,
 	)
 	return repository.MapError(err)
@@ -59,7 +60,7 @@ func (r *PostgresRepository) Create(ctx context.Context, c *Contact) error {
 
 func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID) (*Contact, error) {
 	query := `
-		SELECT id, team_id, contact_name, customer_name, phone, email, avatar_url, notes, city, country, province, company, job_title,
+		SELECT id, team_id, contact_name, customer_name, COALESCE(phone, ''), email, avatar_url, notes, city, country, province, company, job_title,
 			language, customer_type, source, marketing_status, last_activity_at, import_job_id, created_at, updated_at, deleted_at
 		FROM contacts WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL
 	`
@@ -68,7 +69,7 @@ func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID)
 
 func (r *PostgresRepository) FindByPhone(ctx context.Context, teamID uuid.UUID, phone string) (*Contact, error) {
 	query := `
-		SELECT id, team_id, contact_name, customer_name, phone, email, avatar_url, notes, city, country, province, company, job_title,
+		SELECT id, team_id, contact_name, customer_name, COALESCE(phone, ''), email, avatar_url, notes, city, country, province, company, job_title,
 			language, customer_type, source, marketing_status, last_activity_at, import_job_id, created_at, updated_at, deleted_at
 		FROM contacts WHERE team_id = $1 AND phone = $2 AND deleted_at IS NULL
 	`
@@ -97,7 +98,14 @@ func (r *PostgresRepository) List(ctx context.Context, teamID uuid.UUID, filter 
 	}
 	if filter.Search != "" {
 		args = append(args, "%"+filter.Search+"%")
-		where += fmt.Sprintf(` AND (c.contact_name ILIKE $%d OR c.customer_name ILIKE $%d OR c.phone ILIKE $%d OR c.email ILIKE $%d)`, len(args), len(args), len(args), len(args))
+		where += fmt.Sprintf(` AND (
+			c.contact_name ILIKE $%d OR c.customer_name ILIKE $%d OR c.phone ILIKE $%d OR c.email ILIKE $%d
+			OR EXISTS (
+				SELECT 1 FROM provider_profiles p
+				WHERE p.team_id = c.team_id AND p.contact_id = c.id AND p.deleted_at IS NULL
+				  AND (p.display_name ILIKE $%d OR p.username ILIKE $%d OR p.phone ILIKE $%d OR p.email ILIKE $%d)
+			)
+		)`, len(args), len(args), len(args), len(args), len(args), len(args), len(args), len(args))
 	}
 
 	countQ := `SELECT COUNT(DISTINCT c.id) FROM contacts c` + joins + ` WHERE ` + where
@@ -108,7 +116,7 @@ func (r *PostgresRepository) List(ctx context.Context, teamID uuid.UUID, filter 
 
 	args = append(args, page.Limit(), page.Offset())
 	listQ := fmt.Sprintf(`
-		SELECT DISTINCT c.id, c.team_id, c.contact_name, c.customer_name, c.phone, c.email, c.avatar_url, c.notes, c.city, c.country, c.province, c.company, c.job_title,
+		SELECT DISTINCT c.id, c.team_id, c.contact_name, c.customer_name, COALESCE(c.phone, ''), c.email, c.avatar_url, c.notes, c.city, c.country, c.province, c.company, c.job_title,
 			c.language, c.customer_type, c.source, c.marketing_status, c.last_activity_at, c.import_job_id, c.created_at, c.updated_at, c.deleted_at
 		FROM contacts c%s WHERE %s ORDER BY c.created_at DESC LIMIT $%d OFFSET $%d
 	`, joins, where, len(args)-1, len(args))
@@ -135,7 +143,7 @@ func (r *PostgresRepository) ListByIDs(ctx context.Context, teamID uuid.UUID, id
 		return nil, nil
 	}
 	rows, err := r.db.Pool.Query(ctx, `
-		SELECT id, team_id, contact_name, customer_name, phone, email, avatar_url, notes, city, country, province, company, job_title,
+		SELECT id, team_id, contact_name, customer_name, COALESCE(phone, ''), email, avatar_url, notes, city, country, province, company, job_title,
 			language, customer_type, source, marketing_status, last_activity_at, import_job_id, created_at, updated_at, deleted_at
 		FROM contacts WHERE team_id = $1 AND id = ANY($2) AND deleted_at IS NULL
 	`, teamID, ids)
@@ -193,7 +201,7 @@ func (r *PostgresRepository) Update(ctx context.Context, c *Contact) error {
 		WHERE id = $18 AND team_id = $19 AND deleted_at IS NULL
 	`
 	tag, err := r.db.Pool.Exec(ctx, query,
-		c.ContactName, c.CustomerName, c.Phone, c.Email, c.AvatarURL, c.Notes, c.City, c.Country, c.Province, c.Company, c.JobTitle,
+		c.ContactName, c.CustomerName, nullableContactPhone(c.Phone), c.Email, c.AvatarURL, c.Notes, c.City, c.Country, c.Province, c.Company, c.JobTitle,
 		c.Language, c.CustomerType, string(c.Source), string(c.MarketingStatus), c.LastActivityAt, c.UpdatedAt, c.ID, c.TeamID,
 	)
 	if err != nil {
@@ -247,4 +255,12 @@ func scanContactRow(row pgx.Row) (*Contact, error) {
 	c.Source = Source(source)
 	c.MarketingStatus = MarketingStatus(marketing)
 	return &c, nil
+}
+
+func nullableContactPhone(value string) any {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return value
 }

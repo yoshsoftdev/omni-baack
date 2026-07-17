@@ -36,36 +36,42 @@ const (
 )
 
 type Conversation struct {
-	ID                    uuid.UUID    `json:"id"`
-	TeamID                uuid.UUID    `json:"team_id"`
-	ContactID             uuid.UUID    `json:"contact_id"`
-	ChannelID             *uuid.UUID   `json:"channel_id,omitempty"`
-	ChannelType           ChannelType  `json:"channel_type"`
-	Status                Status       `json:"status"`
-	AssignedTo            *uuid.UUID   `json:"assigned_to,omitempty"`
-	UnreadCount           int          `json:"unread_count"`
-	LastMessagePreview    string       `json:"last_message_preview"`
-	LastMessageAt         *time.Time   `json:"last_message_at,omitempty"`
-	FirstResponseAt       *time.Time   `json:"first_response_at,omitempty"`
-	LastCustomerMessageAt *time.Time   `json:"last_customer_message_at,omitempty"`
-	LastAgentMessageAt    *time.Time   `json:"last_agent_message_at,omitempty"`
-	ResolutionAt          *time.Time   `json:"resolution_at,omitempty"`
-	WaitingSince          *time.Time   `json:"waiting_since,omitempty"`
-	BasePriority          int          `json:"base_priority"`
-	PriorityScore         int64        `json:"priority_score"`
-	CreatedAt             time.Time    `json:"created_at"`
-	UpdatedAt             time.Time    `json:"updated_at"`
-	DeletedAt             *time.Time   `json:"deleted_at,omitempty"`
+	ID                    uuid.UUID   `json:"id"`
+	TeamID                uuid.UUID   `json:"team_id"`
+	ContactID             uuid.UUID   `json:"contact_id"`
+	ProviderProfileID     *uuid.UUID  `json:"provider_profile_id,omitempty"`
+	ExternalThreadID      string      `json:"external_thread_id"`
+	Provider              string      `json:"provider"`
+	LinkedProviders       []string    `json:"linked_providers"`
+	IsSourceOfTruth       bool        `json:"is_source_of_truth"`
+	LinkedAccountCount    int         `json:"linked_account_count"`
+	ChannelID             *uuid.UUID  `json:"channel_id,omitempty"`
+	ChannelType           ChannelType `json:"channel_type"`
+	Status                Status      `json:"status"`
+	AssignedTo            *uuid.UUID  `json:"assigned_to,omitempty"`
+	UnreadCount           int         `json:"unread_count"`
+	LastMessagePreview    string      `json:"last_message_preview"`
+	LastMessageAt         *time.Time  `json:"last_message_at,omitempty"`
+	FirstResponseAt       *time.Time  `json:"first_response_at,omitempty"`
+	LastCustomerMessageAt *time.Time  `json:"last_customer_message_at,omitempty"`
+	LastAgentMessageAt    *time.Time  `json:"last_agent_message_at,omitempty"`
+	ResolutionAt          *time.Time  `json:"resolution_at,omitempty"`
+	WaitingSince          *time.Time  `json:"waiting_since,omitempty"`
+	BasePriority          int         `json:"base_priority"`
+	PriorityScore         int64       `json:"priority_score"`
+	CreatedAt             time.Time   `json:"created_at"`
+	UpdatedAt             time.Time   `json:"updated_at"`
+	DeletedAt             *time.Time  `json:"deleted_at,omitempty"`
 }
 
 type ListFilter struct {
-	Status     *Status
-	AssignedTo *uuid.UUID
-	ChannelID    *uuid.UUID
-	ChannelType  *ChannelType
-	Search       string
-	View       InboxView
-	ActorID    *uuid.UUID
+	Status      *Status
+	AssignedTo  *uuid.UUID
+	ChannelID   *uuid.UUID
+	ChannelType *ChannelType
+	Search      string
+	View        InboxView
+	ActorID     *uuid.UUID
 }
 
 type LastMessageUpdate struct {

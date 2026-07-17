@@ -32,6 +32,7 @@ import (
 	metasvc "github.com/omnichannel/omni-chan-v2/internal/meta"
 	"github.com/omnichannel/omni-chan-v2/internal/onboarding"
 	"github.com/omnichannel/omni-chan-v2/internal/operations"
+	"github.com/omnichannel/omni-chan-v2/internal/provider"
 	"github.com/omnichannel/omni-chan-v2/internal/quota"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/report"
@@ -158,6 +159,11 @@ func main() {
 	tagService := tag.NewService(tagRepo, teamRepo, rbacService)
 
 	contactService := contact.NewService(contactRepo, teamRepo, quotaSvc, rbacService)
+	contactLinkRepo := contact.NewLinkRepository(db)
+	providerRepo := provider.NewRepository(db)
+	providerService := provider.NewService(providerRepo, teamRepo, rbacService)
+	contactService.SetProviderRepository(providerRepo)
+	contactService.SetLinkRepository(contactLinkRepo)
 
 	conversationRepo := conversation.NewRepository(db)
 	conversationService := conversation.NewService(conversationRepo, contactRepo, teamRepo, rbacService)
@@ -262,29 +268,30 @@ func main() {
 		DB:     db,
 		JWT:    jwt,
 		V1: v1.Deps{
-			Auth:              handler.NewAuthHandler(authService),
-			Workspace:         handler.NewWorkspaceHandler(workspaceService),
-			Team:              handler.NewTeamHandler(teamService, rbacService),
-			Channel:           handler.NewChannelHandler(channelService, metaHealthService, embeddedSignupService, paymentService, channelSyncService),
-			ChannelManagement: handler.NewChannelManagementHandler(channelManagementService),
-			InstagramOAuth:    handler.NewInstagramOAuthHandler(instagramOAuthService),
-			Template:          handler.NewTemplateHandler(templateService),
-			Contact:           handler.NewContactHandler(contactService),
-			Segment:           handler.NewSegmentHandler(segmentService),
-			Tag:               handler.NewTagHandler(tagService),
-			Campaign:          handler.NewCampaignHandler(campaignService),
-			Operations:        handler.NewOperationsHandler(operationsService),
-			Report:            handler.NewReportHandler(reportService),
-			Conversation:      handler.NewConversationHandler(conversationService, collaborationService),
+			Auth:                 handler.NewAuthHandler(authService),
+			Workspace:            handler.NewWorkspaceHandler(workspaceService),
+			Team:                 handler.NewTeamHandler(teamService, rbacService),
+			Channel:              handler.NewChannelHandler(channelService, metaHealthService, embeddedSignupService, paymentService, channelSyncService),
+			ChannelManagement:    handler.NewChannelManagementHandler(channelManagementService),
+			InstagramOAuth:       handler.NewInstagramOAuthHandler(instagramOAuthService),
+			Template:             handler.NewTemplateHandler(templateService),
+			Contact:              handler.NewContactHandler(contactService),
+			Provider:             handler.NewProviderHandler(providerService),
+			Segment:              handler.NewSegmentHandler(segmentService),
+			Tag:                  handler.NewTagHandler(tagService),
+			Campaign:             handler.NewCampaignHandler(campaignService),
+			Operations:           handler.NewOperationsHandler(operationsService),
+			Report:               handler.NewReportHandler(reportService),
+			Conversation:         handler.NewConversationHandler(conversationService, collaborationService),
 			ConversationPresence: handler.NewConversationPresenceHandler(collisionService, conversationService, userRepo),
-			Inbox:               handler.NewInboxHandler(inboxListService),
-			Message:           handler.NewMessageHandler(messageService, conversationService, inboxSync),
-			StorageServiceURL: cfg.StorageService.URL,
-			Dashboard:         handler.NewDashboardHandler(dashboardService),
-			Webhook:           handler.NewWebhookHandler(cfg.Meta.VerifyToken),
-			Meta:              metasvc.NewHandler(cfg.Meta),
-			ActorResolver:     actorResolver,
-			JWT:               jwt,
+			Inbox:                handler.NewInboxHandler(inboxListService),
+			Message:              handler.NewMessageHandler(messageService, conversationService, inboxSync),
+			StorageServiceURL:    cfg.StorageService.URL,
+			Dashboard:            handler.NewDashboardHandler(dashboardService),
+			Webhook:              handler.NewWebhookHandler(cfg.Meta.VerifyToken),
+			Meta:                 metasvc.NewHandler(cfg.Meta),
+			ActorResolver:        actorResolver,
+			JWT:                  jwt,
 		},
 	})
 
@@ -373,15 +380,15 @@ func startEventConsumer(
 		MetaMedia:        metaClient,
 		InstagramProfile: metaClient,
 		TokenCipher:      tokenCipher,
-		Storage:       storageClient,
-		Templates:     templateRepo,
-		Onboarding:    onboardingService,
-		ChannelSync:   channelSyncService,
-		Inbox:         inboxSync,
-		Delivery:      deliveryTracker,
-		Idempotency:   idempStore,
-		DLQ:           metaSub,
-		Logger:        slogLog,
+		Storage:          storageClient,
+		Templates:        templateRepo,
+		Onboarding:       onboardingService,
+		ChannelSync:      channelSyncService,
+		Inbox:            inboxSync,
+		Delivery:         deliveryTracker,
+		Idempotency:      idempStore,
+		DLQ:              metaSub,
+		Logger:           slogLog,
 	})
 
 	if err := metaSub.Subscribe(ctx, cfg.NATS.ConsumerName+"-meta", registry.HandleCanonical); err != nil {

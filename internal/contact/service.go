@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/omnichannel/omni-chan-v2/internal/provider"
+	"github.com/omnichannel/omni-chan-v2/internal/quota"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
-	"github.com/omnichannel/omni-chan-v2/internal/quota"
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
@@ -24,6 +25,16 @@ type Service struct {
 	teams     team.Repository
 	quota     *quota.Service
 	rbac      *rbac.Service
+	providers provider.Repository
+	links     LinkRepository
+}
+
+func (s *Service) SetProviderRepository(providers provider.Repository) {
+	s.providers = providers
+}
+
+func (s *Service) SetLinkRepository(links LinkRepository) {
+	s.links = links
 }
 
 func NewService(
@@ -189,6 +200,100 @@ func (s *Service) Get(ctx context.Context, teamID, userID uuid.UUID, actorRole s
 		return nil, serviceerrors.MapRepository(err)
 	}
 	return s.enrichContact(ctx, teamID, c, true)
+}
+
+func (s *Service) ListLinks(
+	ctx context.Context,
+	teamID, userID uuid.UUID,
+	actorRole string,
+	contactID uuid.UUID,
+) ([]LinkedContact, error) {
+	if err := s.authorize(actorRole, rbac.PermContactView); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	if _, err := s.contacts.FindByID(ctx, teamID, contactID); err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	if s.links == nil {
+		return []LinkedContact{}, nil
+	}
+	items, err := s.links.ListByContactIDs(ctx, teamID, []uuid.UUID{contactID})
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	if linked, ok := items[contactID]; ok {
+		return linked, nil
+	}
+	return []LinkedContact{}, nil
+}
+
+func (s *Service) LinkContact(
+	ctx context.Context,
+	teamID, userID uuid.UUID,
+	actorRole string,
+	contactID, linkedContactID uuid.UUID,
+) (*LinkedContact, error) {
+	if err := s.authorize(actorRole, rbac.PermContactUpdate); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	if contactID == linkedContactID {
+		return nil, serviceerrors.NewValidation("contact_id", "cannot link a contact to itself")
+	}
+	if s.links == nil {
+		return nil, errors.New("contact link repository is not configured")
+	}
+	if _, err := s.contacts.FindByID(ctx, teamID, contactID); err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	if _, err := s.contacts.FindByID(ctx, teamID, linkedContactID); err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	if err := s.links.Link(ctx, teamID, contactID, linkedContactID, userID); err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	items, err := s.links.ListByContactIDs(ctx, teamID, []uuid.UUID{contactID})
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	for i := range items[contactID] {
+		if items[contactID][i].ID == linkedContactID {
+			return &items[contactID][i], nil
+		}
+	}
+	return nil, serviceerrors.MapRepository(repository.ErrNotFound)
+}
+
+func (s *Service) UnlinkContact(
+	ctx context.Context,
+	teamID, userID uuid.UUID,
+	actorRole string,
+	contactID, linkedContactID uuid.UUID,
+) error {
+	if err := s.authorize(actorRole, rbac.PermContactUpdate); err != nil {
+		return err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return err
+	}
+	if contactID == linkedContactID {
+		return serviceerrors.NewValidation("linked_contact_id", "cannot unlink a contact from itself")
+	}
+	if s.links == nil {
+		return errors.New("contact link repository is not configured")
+	}
+	if _, err := s.contacts.FindByID(ctx, teamID, contactID); err != nil {
+		return serviceerrors.MapRepository(err)
+	}
+	if _, err := s.contacts.FindByID(ctx, teamID, linkedContactID); err != nil {
+		return serviceerrors.MapRepository(err)
+	}
+	return serviceerrors.MapRepository(s.links.Unlink(ctx, teamID, contactID, linkedContactID))
 }
 
 func (s *Service) Stats(ctx context.Context, teamID, userID uuid.UUID, actorRole string) (map[string]int64, error) {
@@ -514,6 +619,8 @@ func (s *Service) enrichContacts(ctx context.Context, teamID uuid.UUID, contacts
 	for i := range contacts {
 		ids[i] = contacts[i].ID
 		contacts[i].Tags = []TagRef{}
+		contacts[i].Providers = []provider.Profile{}
+		contacts[i].LinkedContacts = []LinkedContact{}
 		contacts[i].CustomFields = []CustomFieldValue{}
 	}
 	tagsByContact, err := s.contacts.ListTagsByContactIDs(ctx, teamID, ids)
@@ -523,6 +630,20 @@ func (s *Service) enrichContacts(ctx context.Context, teamID uuid.UUID, contacts
 	fieldsByContact, err := s.contacts.ListCustomFieldsByContactIDs(ctx, teamID, ids)
 	if err != nil {
 		return serviceerrors.MapRepository(err)
+	}
+	providersByContact := map[uuid.UUID][]provider.Profile{}
+	if s.providers != nil {
+		providersByContact, err = s.providers.ListByContactIDs(ctx, teamID, ids)
+		if err != nil {
+			return serviceerrors.MapRepository(err)
+		}
+	}
+	linksByContact := map[uuid.UUID][]LinkedContact{}
+	if s.links != nil {
+		linksByContact, err = s.links.ListByContactIDs(ctx, teamID, ids)
+		if err != nil {
+			return serviceerrors.MapRepository(err)
+		}
 	}
 	var statsByContact map[uuid.UUID]ContactStats
 	if includeStats {
@@ -537,6 +658,12 @@ func (s *Service) enrichContacts(ctx context.Context, teamID uuid.UUID, contacts
 		}
 		if fields, ok := fieldsByContact[contacts[i].ID]; ok {
 			contacts[i].CustomFields = fields
+		}
+		if profiles, ok := providersByContact[contacts[i].ID]; ok {
+			contacts[i].Providers = profiles
+		}
+		if links, ok := linksByContact[contacts[i].ID]; ok {
+			contacts[i].LinkedContacts = links
 		}
 		if includeStats {
 			if stats, ok := statsByContact[contacts[i].ID]; ok {

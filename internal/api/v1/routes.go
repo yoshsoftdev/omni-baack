@@ -126,9 +126,25 @@ func Register(router fiber.Router, deps Deps) {
 		contacts.Delete("/field-definitions/:id", deps.Contact.DeleteFieldDefinition)
 		contacts.Get("/", deps.Contact.List)
 		contacts.Post("/", deps.Contact.Create)
+		if deps.Provider != nil {
+			contacts.Get("/:id/providers", deps.Provider.ListByContact)
+			contacts.Get("/:id/activities", deps.Provider.ListActivities)
+		}
+		contacts.Get("/:id/links", deps.Contact.ListLinks)
+		contacts.Post("/:id/links", deps.Contact.LinkContact)
+		contacts.Delete("/:id/links/:linkedContactId", deps.Contact.UnlinkContact)
 		contacts.Get("/:id", deps.Contact.Get)
 		contacts.Patch("/:id", deps.Contact.Update)
 		contacts.Delete("/:id", deps.Contact.Delete)
+	}
+
+	if deps.Provider != nil {
+		providers := protected.Group("/providers")
+		providers.Get("/", deps.Provider.List)
+		providers.Get("/:id", deps.Provider.Get)
+		providers.Post("/:id/link", deps.Provider.Link)
+		providers.Post("/:id/unlink", deps.Provider.Unlink)
+		providers.Patch("/:id/source-of-truth", deps.Provider.SetSourceOfTruth)
 	}
 
 	if deps.Segment != nil {

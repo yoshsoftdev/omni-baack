@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/omnichannel/omni-chan-v2/internal/provider"
 	"github.com/omnichannel/omni-chan-v2/pkg/phone"
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 )
@@ -43,8 +44,40 @@ func (s *Service) ResolveInbound(ctx context.Context, input ResolveInboundInput)
 		source = SourceMetaInbound
 	}
 
+	if s.providers != nil {
+		profile, profileErr := s.providers.FindByExternalID(ctx, teamID, provider.WhatsApp, phoneNorm)
+		if profileErr == nil {
+			now := time.Now().UTC()
+			profile.DisplayName = strings.TrimSpace(input.ProfileName)
+			profile.Phone = phoneNorm
+			profile.LastObservedAt = &now
+			profile.Status = provider.StatusActive
+			if err := s.providers.UpdateObserved(ctx, profile); err != nil {
+				return nil, err
+			}
+			existing, err := s.contacts.FindByID(ctx, teamID, profile.ContactID)
+			if err != nil {
+				return nil, err
+			}
+			if profile.IsSourceOfTruth && existing.Phone != phoneNorm {
+				existing.Phone = phoneNorm
+				existing.UpdatedAt = now
+				if err := s.contacts.Update(ctx, existing); err != nil {
+					return nil, err
+				}
+			}
+			return s.syncInboundNames(ctx, existing, input.ProfileName, phoneNorm)
+		}
+		if !errors.Is(profileErr, repository.ErrNotFound) {
+			return nil, profileErr
+		}
+	}
+
 	existing, err := s.contacts.FindByPhone(ctx, teamID, phoneNorm)
 	if err == nil {
+		if err := s.observeWhatsAppProfile(ctx, existing, input.ProfileName, phoneNorm); err != nil {
+			return nil, err
+		}
 		return s.syncInboundNames(ctx, existing, input.ProfileName, phoneNorm)
 	}
 	if !errors.Is(err, repository.ErrNotFound) {
@@ -67,12 +100,47 @@ func (s *Service) ResolveInbound(ctx context.Context, input ResolveInboundInput)
 	}
 	if err := s.contacts.Create(ctx, c); err != nil {
 		if existing, findErr := s.contacts.FindByPhone(ctx, teamID, phoneNorm); findErr == nil {
+			if observeErr := s.observeWhatsAppProfile(ctx, existing, input.ProfileName, phoneNorm); observeErr != nil {
+				return nil, observeErr
+			}
 			return s.syncInboundNames(ctx, existing, input.ProfileName, phoneNorm)
 		}
 		return nil, err
 	}
+	if err := s.observeWhatsAppProfile(ctx, c, input.ProfileName, phoneNorm); err != nil {
+		return nil, err
+	}
 	c.PopulateLegacyName()
 	return c, nil
+}
+
+func (s *Service) observeWhatsAppProfile(ctx context.Context, contactEntity *Contact, profileName, phone string) error {
+	if s.providers == nil || contactEntity == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	profile := &provider.Profile{
+		ID:             uuid.New(),
+		TeamID:         contactEntity.TeamID,
+		ContactID:      contactEntity.ID,
+		Provider:       provider.WhatsApp,
+		ProviderUserID: phone,
+		DisplayName:    strings.TrimSpace(profileName),
+		Phone:          phone,
+		ConnectedAt:    now,
+		LastObservedAt: &now,
+		Status:         provider.StatusActive,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := s.providers.Create(ctx, profile); err != nil {
+		if existing, findErr := s.providers.FindByExternalID(ctx, contactEntity.TeamID, provider.WhatsApp, phone); findErr == nil {
+			return s.providers.UpdateObserved(ctx, existing)
+		}
+		return err
+	}
+	contactEntity.Providers = append(contactEntity.Providers, *profile)
+	return nil
 }
 
 func (s *Service) syncInboundNames(ctx context.Context, existing *Contact, profileName, phoneNorm string) (*Contact, error) {
@@ -102,6 +170,14 @@ func (s *Service) syncInboundNames(ctx context.Context, existing *Contact, profi
 // ResolveInstagramInbound resolves/creates a contact for Instagram DM webhooks.
 // displayName, username, and avatarURL come from the Instagram User Profile API when available.
 func (s *Service) ResolveInstagramInbound(ctx context.Context, teamID uuid.UUID, senderID, displayName, username, avatarURL string) (*Contact, error) {
+	senderID = strings.TrimSpace(senderID)
+	if senderID == "" {
+		return nil, errors.New("instagram sender id is required")
+	}
+	if s.providers != nil {
+		return s.resolveCanonicalInstagramInbound(ctx, teamID, senderID, displayName, username, avatarURL)
+	}
+
 	phoneKey := instagramContactKey(senderID)
 	if phoneKey == "ig:" {
 		return nil, errors.New("instagram sender id is required")
@@ -155,6 +231,71 @@ func (s *Service) ResolveInstagramInbound(ctx context.Context, teamID uuid.UUID,
 	}
 	c.PopulateLegacyName()
 	return c, nil
+}
+
+func (s *Service) resolveCanonicalInstagramInbound(ctx context.Context, teamID uuid.UUID, senderID, displayName, username, avatarURL string) (*Contact, error) {
+	now := time.Now().UTC()
+	profile, err := s.providers.FindByExternalID(ctx, teamID, provider.Instagram, senderID)
+	if err == nil {
+		profile.DisplayName = strings.TrimSpace(displayName)
+		profile.Username = strings.TrimPrefix(strings.TrimSpace(username), "@")
+		profile.AvatarURL = strings.TrimSpace(avatarURL)
+		profile.LastObservedAt = &now
+		profile.Status = provider.StatusActive
+		if err := s.providers.UpdateObserved(ctx, profile); err != nil {
+			return nil, err
+		}
+		return s.contacts.FindByID(ctx, teamID, profile.ContactID)
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
+
+	profileName := strings.TrimSpace(displayName)
+	if profileName == "" {
+		profileName = strings.TrimSpace(username)
+	}
+	if profileName == "" {
+		profileName = "Instagram User"
+	}
+	contactEntity := &Contact{
+		ID:              uuid.New(),
+		TeamID:          teamID,
+		ContactName:     profileName,
+		CustomerName:    profileName,
+		Source:          SourceManual,
+		MarketingStatus: MarketingUnknown,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := s.contacts.Create(ctx, contactEntity); err != nil {
+		return nil, err
+	}
+	profile = &provider.Profile{
+		ID:             uuid.New(),
+		TeamID:         teamID,
+		ContactID:      contactEntity.ID,
+		Provider:       provider.Instagram,
+		ProviderUserID: senderID,
+		DisplayName:    strings.TrimSpace(displayName),
+		Username:       strings.TrimPrefix(strings.TrimSpace(username), "@"),
+		AvatarURL:      strings.TrimSpace(avatarURL),
+		ConnectedAt:    now,
+		LastObservedAt: &now,
+		Status:         provider.StatusActive,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := s.providers.Create(ctx, profile); err != nil {
+		if existing, findErr := s.providers.FindByExternalID(ctx, teamID, provider.Instagram, senderID); findErr == nil {
+			_ = s.contacts.SoftDelete(ctx, teamID, contactEntity.ID)
+			return s.contacts.FindByID(ctx, teamID, existing.ContactID)
+		}
+		return nil, err
+	}
+	contactEntity.Providers = []provider.Profile{*profile}
+	contactEntity.PopulateLegacyName()
+	return contactEntity, nil
 }
 
 func (s *Service) syncInstagramInboundProfile(ctx context.Context, existing *Contact, profileName, username, avatarURL string) (*Contact, error) {

@@ -53,6 +53,10 @@ type updateContactRequest struct {
 	CustomFields    map[string]json.RawMessage `json:"custom_fields"`
 }
 
+type linkContactRequest struct {
+	ContactID string `json:"contact_id"`
+}
+
 type createFieldDefinitionRequest struct {
 	FieldKey  string          `json:"field_key"`
 	Label     string          `json:"label"`
@@ -193,6 +197,79 @@ func (h *ContactHandler) Get(c *fiber.Ctx) error {
 		return mapError(c, err)
 	}
 	return response.OK(c, "ok", ct)
+}
+
+func (h *ContactHandler) ListLinks(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	contactID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid contact id")
+	}
+	items, err := h.svc.ListLinks(c.Context(), actor.TeamID, actor.UserID, actor.Role, contactID)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", fiber.Map{"linked_contacts": items})
+}
+
+func (h *ContactHandler) LinkContact(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	contactID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid contact id")
+	}
+	var req linkContactRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	linkedContactID, err := uuid.Parse(strings.TrimSpace(req.ContactID))
+	if err != nil {
+		return response.BadRequest(c, "invalid linked contact id")
+	}
+	item, err := h.svc.LinkContact(
+		c.Context(),
+		actor.TeamID,
+		actor.UserID,
+		actor.Role,
+		contactID,
+		linkedContactID,
+	)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.Created(c, "contacts linked", item)
+}
+
+func (h *ContactHandler) UnlinkContact(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	contactID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid contact id")
+	}
+	linkedContactID, err := parseUUIDParam(c, "linkedContactId")
+	if err != nil {
+		return response.BadRequest(c, "invalid linked contact id")
+	}
+	if err := h.svc.UnlinkContact(
+		c.Context(),
+		actor.TeamID,
+		actor.UserID,
+		actor.Role,
+		contactID,
+		linkedContactID,
+	); err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "contacts unlinked", nil)
 }
 
 func (h *ContactHandler) Create(c *fiber.Ctx) error {

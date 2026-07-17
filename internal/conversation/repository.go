@@ -43,10 +43,10 @@ func NewRepository(db *database.DB) *PostgresRepository {
 func (r *PostgresRepository) Create(ctx context.Context, c *Conversation) error {
 	_, err := r.db.Pool.Exec(ctx, `
 		INSERT INTO conversations (
-			id, team_id, contact_id, channel_id, channel_type, status, assigned_to,
+			id, team_id, contact_id, provider_profile_id, external_thread_id, channel_id, channel_type, status, assigned_to,
 			unread_count, last_message_preview, last_message_at, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-	`, c.ID, c.TeamID, c.ContactID, c.ChannelID, string(c.ChannelType), string(c.Status),
+		) VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,$8,$9,$10,$11,$12,$13,$14)
+	`, c.ID, c.TeamID, c.ContactID, c.ProviderProfileID, c.ExternalThreadID, c.ChannelID, string(c.ChannelType), string(c.Status),
 		c.AssignedTo, c.UnreadCount, c.LastMessagePreview, c.LastMessageAt, c.CreatedAt, c.UpdatedAt)
 	return repository.MapError(err)
 }
@@ -54,15 +54,29 @@ func (r *PostgresRepository) Create(ctx context.Context, c *Conversation) error 
 func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID) (*Conversation, error) {
 	return scanConversation(r.db.Pool.QueryRow(ctx, `
 		SELECT `+conversationSelectCols+`
-		FROM conversations WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL
+		FROM `+conversationFromClause+`
+		WHERE c.id = $1 AND c.team_id = $2 AND c.deleted_at IS NULL
 	`, id, teamID))
 }
 
 func (r *PostgresRepository) FindByContactChannel(ctx context.Context, teamID, contactID uuid.UUID, channelID *uuid.UUID) (*Conversation, error) {
 	return scanConversation(r.db.Pool.QueryRow(ctx, `
 		SELECT `+conversationSelectCols+`
-		FROM conversations
-		WHERE team_id = $1 AND contact_id = $2 AND channel_id IS NOT DISTINCT FROM $3 AND deleted_at IS NULL
+		FROM `+conversationFromClause+`
+		WHERE c.team_id = $1
+		  AND c.channel_id IS NOT DISTINCT FROM $3
+		  AND (
+		      COALESCE(pp.contact_id, c.contact_id) = $2
+		      OR pp.provider_user_id = (
+		          SELECT CASE
+		              WHEN legacy.phone LIKE 'ig:%' THEN regexp_replace(legacy.phone, '^ig:', '')
+		              ELSE legacy.phone
+		          END
+		          FROM contacts legacy
+		          WHERE legacy.id = $2 AND legacy.team_id = $1 AND legacy.deleted_at IS NULL
+		      )
+		  )
+		  AND c.deleted_at IS NULL
 		LIMIT 1
 	`, teamID, contactID, channelID))
 }
@@ -70,48 +84,48 @@ func (r *PostgresRepository) FindByContactChannel(ctx context.Context, teamID, c
 func (r *PostgresRepository) List(ctx context.Context, teamID uuid.UUID, filter ListFilter, page repository.PageParams) (repository.Page[Conversation], error) {
 	page = page.Normalize()
 	args := []any{teamID}
-	where := `team_id = $1 AND deleted_at IS NULL`
+	where := `c.team_id = $1 AND c.deleted_at IS NULL`
 	if filter.Status != nil {
 		args = append(args, string(*filter.Status))
-		where += fmt.Sprintf(` AND status = $%d`, len(args))
+		where += fmt.Sprintf(` AND c.status = $%d`, len(args))
 	}
 	if filter.AssignedTo != nil {
 		args = append(args, *filter.AssignedTo)
-		where += fmt.Sprintf(` AND assigned_to = $%d`, len(args))
+		where += fmt.Sprintf(` AND c.assigned_to = $%d`, len(args))
 	}
 	if filter.ChannelID != nil {
 		args = append(args, *filter.ChannelID)
-		where += fmt.Sprintf(` AND channel_id = $%d`, len(args))
+		where += fmt.Sprintf(` AND c.channel_id = $%d`, len(args))
 	}
 	if filter.ChannelType != nil {
 		args = append(args, string(*filter.ChannelType))
-		where += fmt.Sprintf(` AND channel_type = $%d`, len(args))
+		where += fmt.Sprintf(` AND c.channel_type = $%d`, len(args))
 	}
 	switch filter.View {
 	case ViewMine:
 		if filter.ActorID != nil {
 			args = append(args, *filter.ActorID)
-			where += fmt.Sprintf(` AND assigned_to = $%d`, len(args))
+			where += fmt.Sprintf(` AND c.assigned_to = $%d`, len(args))
 		}
 	case ViewUnassigned:
-		where += ` AND assigned_to IS NULL`
+		where += ` AND c.assigned_to IS NULL`
 	case ViewUnread:
-		where += ` AND unread_count > 0`
+		where += ` AND c.unread_count > 0`
 	case ViewClosed:
-		where += ` AND status IN ('closed', 'resolved')`
+		where += ` AND c.status IN ('closed', 'resolved')`
 	}
 	if filter.Search != "" {
 		args = append(args, "%"+filter.Search+"%")
-		where += fmt.Sprintf(` AND last_message_preview ILIKE $%d`, len(args))
+		where += fmt.Sprintf(` AND c.last_message_preview ILIKE $%d`, len(args))
 	}
 	var total int64
-	if err := r.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM conversations WHERE `+where, args...).Scan(&total); err != nil {
+	if err := r.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM `+conversationFromClause+` WHERE `+where, args...).Scan(&total); err != nil {
 		return repository.Page[Conversation]{}, err
 	}
 	args = append(args, page.Limit(), page.Offset())
 	rows, err := r.db.Pool.Query(ctx, fmt.Sprintf(`
 		SELECT `+conversationSelectCols+`
-		FROM conversations WHERE %s ORDER BY last_message_at DESC NULLS LAST, created_at DESC
+		FROM `+conversationFromClause+` WHERE %s ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
 		LIMIT $%d OFFSET $%d
 	`, where, len(args)-1, len(args)), args...)
 	if err != nil {
@@ -203,7 +217,7 @@ func (r *PostgresRepository) ListCursor(ctx context.Context, teamID uuid.UUID, f
 
 func buildInboxListQuery(teamID uuid.UUID, filter ListFilter) (fromClause, where string, args []any) {
 	args = []any{teamID}
-	fromClause = `conversations c`
+	fromClause = conversationFromClause
 	where = `c.team_id = $1 AND c.deleted_at IS NULL`
 
 	if filter.Status != nil {
@@ -236,16 +250,22 @@ func buildInboxListQuery(teamID uuid.UUID, filter ListFilter) (fromClause, where
 		where += ` AND c.status IN ('closed', 'resolved')`
 	}
 	if strings.TrimSpace(filter.Search) != "" {
-		fromClause = `conversations c LEFT JOIN contacts ct ON ct.id = c.contact_id AND ct.team_id = c.team_id AND ct.deleted_at IS NULL`
 		pattern := "%" + strings.TrimSpace(filter.Search) + "%"
 		args = append(args, pattern)
 		idx := len(args)
 		where += fmt.Sprintf(` AND (
 			c.last_message_preview ILIKE $%d
-			OR ct.contact_name ILIKE $%d
-			OR ct.customer_name ILIKE $%d
-			OR ct.phone ILIKE $%d
-		)`, idx, idx, idx, idx)
+			OR owner.contact_name ILIKE $%d
+			OR owner.customer_name ILIKE $%d
+			OR owner.phone ILIKE $%d
+			OR EXISTS (
+				SELECT 1 FROM provider_profiles search_profile
+				WHERE search_profile.team_id = c.team_id
+				  AND search_profile.contact_id = COALESCE(pp.contact_id, c.contact_id)
+				  AND search_profile.deleted_at IS NULL
+				  AND (search_profile.display_name ILIKE $%d OR search_profile.username ILIKE $%d OR search_profile.phone ILIKE $%d)
+			)
+		)`, idx, idx, idx, idx, idx, idx, idx)
 	}
 	return fromClause, where, args
 }
@@ -429,19 +449,41 @@ func (r *PostgresRepository) SoftDelete(ctx context.Context, teamID, id uuid.UUI
 }
 
 const conversationSelectCols = `
-	id, team_id, contact_id, channel_id, channel_type, status, assigned_to,
-	unread_count, last_message_preview, last_message_at,
-	first_response_at, last_customer_message_at, last_agent_message_at, resolution_at,
-	waiting_since, base_priority, priority_score,
-	created_at, updated_at, deleted_at
-`
-
-const conversationSelectColsAliased = `
-	c.id, c.team_id, c.contact_id, c.channel_id, c.channel_type, c.status, c.assigned_to,
+	c.id, c.team_id, COALESCE(pp.contact_id, c.contact_id), c.provider_profile_id, c.external_thread_id,
+	COALESCE(pp.provider, c.channel_type::text),
+	ARRAY(
+		SELECT DISTINCT linked.provider
+		FROM provider_profiles linked
+		WHERE linked.team_id = c.team_id
+		  AND linked.contact_id = COALESCE(pp.contact_id, c.contact_id)
+		  AND linked.deleted_at IS NULL
+		ORDER BY linked.provider
+	),
+	COALESCE(owner.source_of_truth_profile_id = c.provider_profile_id, false),
+	(
+		SELECT COUNT(*)::int
+		FROM provider_profiles linked
+		WHERE linked.team_id = c.team_id
+		  AND linked.contact_id = COALESCE(pp.contact_id, c.contact_id)
+		  AND linked.deleted_at IS NULL
+	),
+	c.channel_id, c.channel_type, c.status, c.assigned_to,
 	c.unread_count, c.last_message_preview, c.last_message_at,
 	c.first_response_at, c.last_customer_message_at, c.last_agent_message_at, c.resolution_at,
 	c.waiting_since, c.base_priority, c.priority_score,
 	c.created_at, c.updated_at, c.deleted_at
+`
+
+const conversationSelectColsAliased = conversationSelectCols
+
+const conversationFromClause = `
+	conversations c
+	LEFT JOIN provider_profiles pp
+	  ON pp.id = c.provider_profile_id AND pp.team_id = c.team_id AND pp.deleted_at IS NULL
+	LEFT JOIN contacts owner
+	  ON owner.id = COALESCE(pp.contact_id, c.contact_id)
+	 AND owner.team_id = c.team_id
+	 AND owner.deleted_at IS NULL
 `
 
 func scanConversation(row pgx.Row) (*Conversation, error) { return scanConversationRow(row) }
@@ -450,7 +492,9 @@ func scanConversationRow(row pgx.Row) (*Conversation, error) {
 	var c Conversation
 	var channelType, status string
 	err := row.Scan(
-		&c.ID, &c.TeamID, &c.ContactID, &c.ChannelID, &channelType, &status, &c.AssignedTo,
+		&c.ID, &c.TeamID, &c.ContactID, &c.ProviderProfileID, &c.ExternalThreadID, &c.Provider,
+		&c.LinkedProviders, &c.IsSourceOfTruth, &c.LinkedAccountCount,
+		&c.ChannelID, &channelType, &status, &c.AssignedTo,
 		&c.UnreadCount, &c.LastMessagePreview, &c.LastMessageAt,
 		&c.FirstResponseAt, &c.LastCustomerMessageAt, &c.LastAgentMessageAt, &c.ResolutionAt,
 		&c.WaitingSince, &c.BasePriority, &c.PriorityScore,
