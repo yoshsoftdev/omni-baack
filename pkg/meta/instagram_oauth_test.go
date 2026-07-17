@@ -75,28 +75,30 @@ func TestRedactSensitiveJSON(t *testing.T) {
 	}
 }
 
-func TestGetInstagramUser(t *testing.T) {
+func TestGetInstagramMediaPermalink(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer good-token" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(InstagramUser{
-			UserID:      "178414000",
-			Username:    "brand.ig",
-			AccountType: "BUSINESS",
+		if !strings.Contains(r.URL.Path, "/18139494541428835") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"permalink": "https://www.instagram.com/p/ABC123/",
 		})
 	}))
 	defer srv.Close()
 
 	client := NewClient("v21.0")
 	client.SetBaseURL(srv.URL)
-	user, err := client.GetInstagramUser(context.Background(), "good-token")
+	permalink, err := client.GetInstagramMediaPermalink(context.Background(), "18139494541428835", "good-token")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if user.Username != "brand.ig" || user.AccountType != "BUSINESS" {
-		t.Fatalf("unexpected user: %+v", user)
+	if permalink != "https://www.instagram.com/p/ABC123/" {
+		t.Fatalf("permalink=%q", permalink)
 	}
 }
 

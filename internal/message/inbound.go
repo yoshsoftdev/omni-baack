@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -243,6 +244,17 @@ func statusRank(s Status) int {
 	}
 }
 
+// IsInstagramOGShareType reports whether the Meta attachment should be shown
+// as an Open Graph-style link card instead of downloaded media.
+func IsInstagramOGShareType(messageType string) bool {
+	switch strings.ToLower(strings.TrimSpace(messageType)) {
+	case "ig_post", "post", "ig_reel", "reel", "share", "fallback":
+		return true
+	default:
+		return false
+	}
+}
+
 // ContentTypeFromMeta maps Meta message types to storage content types.
 func ContentTypeFromMeta(messageType string) ContentType {
 	switch strings.ToLower(strings.TrimSpace(messageType)) {
@@ -260,11 +272,178 @@ func ContentTypeFromMeta(messageType string) ContentType {
 		return ContentTemplate
 	case "sticker":
 		return ContentImage
-	case "story_mention", "story_reply", "ig_reel", "reel", "share", "ig_post", "ig_story":
+	case "story_mention", "story_reply", "ig_reel", "reel", "share", "ig_post", "post", "ig_story", "fallback":
 		return ContentOther
 	default:
 		return ContentOther
 	}
+}
+
+func formatInstagramShareContent(label, title, mediaURL string) string {
+	parts := make([]string, 0, 3)
+	if strings.TrimSpace(label) != "" {
+		parts = append(parts, strings.TrimSpace(label))
+	}
+	if t := strings.TrimSpace(title); t != "" {
+		parts = append(parts, t)
+	}
+	if u := strings.TrimSpace(mediaURL); u != "" {
+		parts = append(parts, u)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// InstagramShare describes a shared Instagram post/reel/link attachment.
+type InstagramShare struct {
+	Label   string
+	Title   string
+	URL     string
+	MediaID string
+	Type    string
+}
+
+// IsInstagramPublicURL reports whether url is a public Instagram permalink
+// (e.g. /p/, /reel/, /share/) rather than a Meta messaging CDN URL.
+func IsInstagramPublicURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host != "instagram.com" && host != "www.instagram.com" {
+		return false
+	}
+	path := strings.ToLower(parsed.Path)
+	return strings.Contains(path, "/p/") ||
+		strings.Contains(path, "/reel") ||
+		strings.Contains(path, "/share/") ||
+		strings.Contains(path, "/tv/")
+}
+
+func shareAttachmentRank(attType, mediaURL string) int {
+	rank := 0
+	switch strings.ToLower(strings.TrimSpace(attType)) {
+	case "ig_reel", "reel":
+		rank = 40
+	case "ig_post", "post":
+		rank = 30
+	case "share":
+		rank = 20
+	case "fallback":
+		rank = 10
+	default:
+		return 0
+	}
+	if IsInstagramPublicURL(mediaURL) {
+		rank += 100
+	} else if strings.TrimSpace(mediaURL) != "" {
+		rank += 10
+	}
+	return rank
+}
+
+func stringifyJSONID(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return strings.TrimSpace(asString)
+	}
+	var asNumber json.Number
+	if err := json.Unmarshal(raw, &asNumber); err == nil {
+		return strings.TrimSpace(asNumber.String())
+	}
+	return ""
+}
+
+func assetIDFromMediaURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	if id := strings.TrimSpace(parsed.Query().Get("asset_id")); id != "" {
+		return id
+	}
+	return ""
+}
+
+func labelForShareType(attType string) string {
+	switch strings.ToLower(strings.TrimSpace(attType)) {
+	case "ig_reel", "reel":
+		return "Shared a reel"
+	case "ig_post", "post", "share":
+		return "Shared a post"
+	case "fallback":
+		return "Link"
+	default:
+		return ""
+	}
+}
+
+// ExtractInstagramShare picks the best post/reel/share/fallback attachment from a raw IG message.
+// Prefers ig_post/ig_reel over legacy share, and Instagram permalinks over CDN URLs.
+func ExtractInstagramShare(raw json.RawMessage) *InstagramShare {
+	var payload struct {
+		Attachments []struct {
+			Type    string `json:"type"`
+			Payload struct {
+				URL           string          `json:"url"`
+				Title         string          `json:"title"`
+				StoryMediaURL string          `json:"story_media_url"`
+				IGPostMediaID string          `json:"ig_post_media_id"`
+				ID            json.RawMessage `json:"id"`
+				ReelVideoID   json.RawMessage `json:"reel_video_id"`
+			} `json:"payload"`
+		} `json:"attachments"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+
+	var best *InstagramShare
+	bestRank := 0
+	for _, attachment := range payload.Attachments {
+		attType := strings.ToLower(strings.TrimSpace(attachment.Type))
+		mediaURL := strings.TrimSpace(attachment.Payload.URL)
+		if mediaURL == "" {
+			mediaURL = strings.TrimSpace(attachment.Payload.StoryMediaURL)
+		}
+		rank := shareAttachmentRank(attType, mediaURL)
+		if rank == 0 {
+			continue
+		}
+		mediaID := strings.TrimSpace(attachment.Payload.IGPostMediaID)
+		if mediaID == "" {
+			mediaID = stringifyJSONID(attachment.Payload.ID)
+		}
+		if mediaID == "" {
+			mediaID = stringifyJSONID(attachment.Payload.ReelVideoID)
+		}
+		if mediaID == "" {
+			mediaID = assetIDFromMediaURL(mediaURL)
+		}
+		candidate := &InstagramShare{
+			Label:   labelForShareType(attType),
+			Title:   strings.TrimSpace(attachment.Payload.Title),
+			URL:     mediaURL,
+			MediaID: mediaID,
+			Type:    attType,
+		}
+		if best == nil || rank > bestRank {
+			best = candidate
+			bestRank = rank
+		}
+	}
+	return best
+}
+
+// WithInstagramShareURL rebuilds share content using a resolved public Instagram URL.
+func WithInstagramShareURL(share *InstagramShare, publicURL string) string {
+	if share == nil {
+		return ""
+	}
+	return formatInstagramShareContent(share.Label, share.Title, publicURL)
 }
 
 // ExtractTextContent returns a display string from a Meta raw message payload.
@@ -287,32 +466,25 @@ func ExtractTextContent(messageType string, raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &instagramReply); err == nil && instagramReply.ReplyTo != nil && instagramReply.ReplyTo.Story != nil {
 		return "Replied to a story"
 	}
-	var instagramAttachment struct {
+
+	var storyAttachment struct {
 		Attachments []struct {
-			Type    string `json:"type"`
-			Payload struct {
-				URL           string `json:"url"`
-				Title         string `json:"title"`
-				StoryMediaURL string `json:"story_media_url"`
-			} `json:"payload"`
+			Type string `json:"type"`
 		} `json:"attachments"`
 	}
-	if err := json.Unmarshal(raw, &instagramAttachment); err == nil {
-		for _, attachment := range instagramAttachment.Attachments {
+	if err := json.Unmarshal(raw, &storyAttachment); err == nil {
+		for _, attachment := range storyAttachment.Attachments {
 			switch strings.ToLower(strings.TrimSpace(attachment.Type)) {
 			case "story_mention":
 				return "Mentioned your story"
 			case "ig_story":
 				return "Shared a story"
-			case "ig_reel", "reel":
-				return "Shared a reel"
-			case "ig_post", "share":
-				if title := strings.TrimSpace(attachment.Payload.Title); title != "" {
-					return "Shared a post\n" + title
-				}
-				return "Shared a post"
 			}
 		}
+	}
+
+	if share := ExtractInstagramShare(raw); share != nil {
+		return formatInstagramShareContent(share.Label, share.Title, share.URL)
 	}
 
 	switch strings.ToLower(strings.TrimSpace(messageType)) {
@@ -380,8 +552,10 @@ func ExtractTextContent(messageType string, raw json.RawMessage) string {
 		return "Shared a story"
 	case "ig_reel", "reel":
 		return "Shared a reel"
-	case "ig_post", "share":
+	case "ig_post", "post", "share":
 		return "Shared a post"
+	case "fallback":
+		return "Link"
 	}
 	return previewForType(ContentTypeFromMeta(messageType))
 }

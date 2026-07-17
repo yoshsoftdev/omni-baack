@@ -308,6 +308,52 @@ func (c *Client) GetInstagramScopedUser(ctx context.Context, scopedUserID, acces
 	return &user, nil
 }
 
+// GetInstagramMediaPermalink resolves a public Instagram permalink for a media id.
+func (c *Client) GetInstagramMediaPermalink(ctx context.Context, mediaID, accessToken string) (string, error) {
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return "", fmt.Errorf("instagram media id is required")
+	}
+	endpoint := fmt.Sprintf(
+		"https://graph.instagram.com/%s/%s?fields=permalink",
+		c.apiVersion,
+		url.PathEscape(mediaID),
+	)
+	if c.graphBaseURL != "" {
+		endpoint = fmt.Sprintf("%s/%s?fields=permalink", c.graphBaseURL, url.PathEscape(mediaID))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("get instagram media permalink: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	safeBody := redactSensitiveJSON(body)
+	if resp.StatusCode >= 400 {
+		return "", NewAPIError(resp.StatusCode, safeBody)
+	}
+
+	var out struct {
+		Permalink string `json:"permalink"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", fmt.Errorf("decode instagram media permalink: %w", err)
+	}
+	permalink := strings.TrimSpace(out.Permalink)
+	if permalink == "" {
+		return "", fmt.Errorf("instagram media permalink is empty")
+	}
+	return permalink, nil
+}
+
 // ValidateInstagramAccountType rejects personal Instagram accounts.
 func ValidateInstagramAccountType(accountType string) error {
 	normalized := strings.ToUpper(strings.TrimSpace(accountType))

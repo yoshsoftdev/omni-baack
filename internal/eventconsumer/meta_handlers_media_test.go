@@ -89,8 +89,16 @@ func TestExtractInstagramAttachmentURL(t *testing.T) {
 
 func TestPreferAttachmentContentType(t *testing.T) {
 	got := preferAttachmentContentType(message.ContentOther, "image/jpeg", "ig_post")
+	if got != message.ContentOther {
+		t.Fatalf("ig_post should stay other, got=%s", got)
+	}
+	got = preferAttachmentContentType(message.ContentOther, "video/mp4", "ig_reel")
+	if got != message.ContentOther {
+		t.Fatalf("ig_reel should stay other, got=%s", got)
+	}
+	got = preferAttachmentContentType(message.ContentOther, "image/jpeg", "story_mention")
 	if got != message.ContentImage {
-		t.Fatalf("got=%s", got)
+		t.Fatalf("story_mention got=%s", got)
 	}
 }
 

@@ -57,6 +57,7 @@ type MetaMediaClient interface {
 
 type InstagramProfileClient interface {
 	GetInstagramScopedUser(ctx context.Context, scopedUserID, accessToken string) (*metaclient.InstagramScopedUser, error)
+	GetInstagramMediaPermalink(ctx context.Context, mediaID, accessToken string) (string, error)
 }
 
 type TokenCipher interface {
@@ -174,26 +175,33 @@ func (h *MessageHandler) processInstagram(ctx context.Context, event sharedevent
 	if content == "" {
 		content = "New message"
 	}
+	if message.IsInstagramOGShareType(payload.MessageType) {
+		content = h.enrichInstagramShareContent(ctx, tenant.ChannelID, payload.Raw, content)
+	}
 	contentType := message.ContentTypeFromMeta(payload.MessageType)
 	receivedAt := message.ParseMetaTimestamp(payload.Timestamp)
 	if !event.OccurredAt.IsZero() {
 		receivedAt = event.OccurredAt
 	}
 
-	attachment, attachErr := h.syncInboundAttachment(ctx, tenant, payload)
-	if attachErr != nil {
-		if h.log == nil {
-			h.log = slog.Default()
+	var attachment *message.Attachment
+	if !message.IsInstagramOGShareType(payload.MessageType) {
+		var attachErr error
+		attachment, attachErr = h.syncInboundAttachment(ctx, tenant, payload)
+		if attachErr != nil {
+			if h.log == nil {
+				h.log = slog.Default()
+			}
+			h.log.Warn("instagram inbound media sync failed",
+				"event_id", event.EventID,
+				"mid", payload.WAMID,
+				"message_type", payload.MessageType,
+				"error", attachErr,
+			)
 		}
-		h.log.Warn("instagram inbound media sync failed",
-			"event_id", event.EventID,
-			"mid", payload.WAMID,
-			"message_type", payload.MessageType,
-			"error", attachErr,
-		)
-	}
-	if attachment != nil {
-		contentType = preferAttachmentContentType(contentType, attachment.MimeType, payload.MessageType)
+		if attachment != nil {
+			contentType = preferAttachmentContentType(contentType, attachment.MimeType, payload.MessageType)
+		}
 	}
 
 	conv, convCreated, err := h.conversations.FindOrCreateForInbound(ctx, tenant.TeamID, contactEntity.ID, tenant.ChannelID, conversation.ChannelInstagram)
@@ -286,26 +294,33 @@ func (h *MessageHandler) processInstagramEcho(ctx context.Context, event sharede
 	if content == "" {
 		content = "New message"
 	}
+	if message.IsInstagramOGShareType(payload.MessageType) {
+		content = h.enrichInstagramShareContent(ctx, tenant.ChannelID, payload.Raw, content)
+	}
 	contentType := message.ContentTypeFromMeta(payload.MessageType)
 	receivedAt := message.ParseMetaTimestamp(payload.Timestamp)
 	if !event.OccurredAt.IsZero() {
 		receivedAt = event.OccurredAt
 	}
 
-	attachment, attachErr := h.syncInboundAttachment(ctx, tenant, payload)
-	if attachErr != nil {
-		if h.log == nil {
-			h.log = slog.Default()
+	var attachment *message.Attachment
+	if !message.IsInstagramOGShareType(payload.MessageType) {
+		var attachErr error
+		attachment, attachErr = h.syncInboundAttachment(ctx, tenant, payload)
+		if attachErr != nil {
+			if h.log == nil {
+				h.log = slog.Default()
+			}
+			h.log.Warn("instagram echo media sync failed",
+				"event_id", event.EventID,
+				"mid", payload.WAMID,
+				"message_type", payload.MessageType,
+				"error", attachErr,
+			)
 		}
-		h.log.Warn("instagram echo media sync failed",
-			"event_id", event.EventID,
-			"mid", payload.WAMID,
-			"message_type", payload.MessageType,
-			"error", attachErr,
-		)
-	}
-	if attachment != nil {
-		contentType = preferAttachmentContentType(contentType, attachment.MimeType, payload.MessageType)
+		if attachment != nil {
+			contentType = preferAttachmentContentType(contentType, attachment.MimeType, payload.MessageType)
+		}
 	}
 
 	conv, convCreated, err := h.conversations.FindOrCreateForInbound(ctx, tenant.TeamID, contactEntity.ID, tenant.ChannelID, conversation.ChannelInstagram)
@@ -400,6 +415,39 @@ func (h *MessageHandler) fetchInstagramSenderProfile(ctx context.Context, channe
 		return "", "", ""
 	}
 	return strings.TrimSpace(profile.Name), strings.TrimSpace(profile.Username), strings.TrimSpace(profile.ProfilePic)
+}
+
+func (h *MessageHandler) enrichInstagramShareContent(ctx context.Context, channelID uuid.UUID, raw json.RawMessage, content string) string {
+	share := message.ExtractInstagramShare(raw)
+	if share == nil {
+		return content
+	}
+	if message.IsInstagramPublicURL(share.URL) {
+		return message.WithInstagramShareURL(share, share.URL)
+	}
+	if strings.TrimSpace(share.MediaID) == "" || h.instagramProfile == nil || h.tokenCipher == nil || h.channels == nil {
+		return content
+	}
+	creds, err := h.channels.FindCredentials(ctx, channelID)
+	if err != nil || creds == nil {
+		return content
+	}
+	token, err := h.tokenCipher.Decrypt(creds.AccessTokenEnc)
+	if err != nil || strings.TrimSpace(token) == "" {
+		return content
+	}
+	permalink, err := h.instagramProfile.GetInstagramMediaPermalink(ctx, share.MediaID, token)
+	if err != nil || !message.IsInstagramPublicURL(permalink) {
+		if err != nil && h.log != nil {
+			h.log.Warn("instagram share permalink resolve failed",
+				"channel_id", channelID.String(),
+				"media_id", share.MediaID,
+				"error", err.Error(),
+			)
+		}
+		return content
+	}
+	return message.WithInstagramShareURL(share, permalink)
 }
 
 func (h *MessageHandler) process(ctx context.Context, event sharedevents.CanonicalEvent, tenant *resolver.TenantContext, payload sharedevents.MetaMessagePayload) error {
@@ -641,6 +689,9 @@ func mimeHintFromInstagramAttachment(attType, mediaURL string) string {
 }
 
 func preferAttachmentContentType(current message.ContentType, mimeType, messageType string) message.ContentType {
+	if message.IsInstagramOGShareType(messageType) {
+		return current
+	}
 	if current == message.ContentImage || current == message.ContentVideo || current == message.ContentAudio || current == message.ContentDocument {
 		return current
 	}
@@ -648,9 +699,9 @@ func preferAttachmentContentType(current message.ContentType, mimeType, messageT
 		return ct
 	}
 	switch strings.ToLower(strings.TrimSpace(messageType)) {
-	case "image", "story_mention", "ig_story", "ig_post", "share", "sticker":
+	case "image", "story_mention", "ig_story", "sticker":
 		return message.ContentImage
-	case "video", "ig_reel", "reel":
+	case "video":
 		return message.ContentVideo
 	case "audio":
 		return message.ContentAudio

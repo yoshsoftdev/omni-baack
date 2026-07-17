@@ -34,7 +34,11 @@ func TestContentTypeFromMeta_InstagramVariants(t *testing.T) {
 		"story_mention": ContentOther,
 		"story_reply":   ContentOther,
 		"ig_reel":       ContentOther,
+		"reel":          ContentOther,
 		"ig_post":       ContentOther,
+		"post":          ContentOther,
+		"share":         ContentOther,
+		"fallback":      ContentOther,
 		"ig_story":      ContentOther,
 		"file":          ContentDocument,
 	}
@@ -78,13 +82,30 @@ func TestExtractTextContent_StorySignals(t *testing.T) {
 				"type": "ig_post",
 				"payload": map[string]any{
 					"title": "AI that works with humans",
-					"url":   "https://cdn/post.jpg",
+					"url":   "https://www.instagram.com/p/ABC123/",
 				},
 			},
 		},
 	})
-	if got := ExtractTextContent("ig_post", igPostRaw); got != "Shared a post\nAI that works with humans" {
-		t.Fatalf("ig_post got=%q", got)
+	wantPost := "Shared a post\nAI that works with humans\nhttps://www.instagram.com/p/ABC123/"
+	if got := ExtractTextContent("ig_post", igPostRaw); got != wantPost {
+		t.Fatalf("ig_post got=%q want=%q", got, wantPost)
+	}
+
+	igReelRaw, _ := json.Marshal(map[string]any{
+		"attachments": []map[string]any{
+			{
+				"type": "ig_reel",
+				"payload": map[string]any{
+					"title": "Sunset reel",
+					"url":   "https://www.instagram.com/reel/XYZ789/",
+				},
+			},
+		},
+	})
+	wantReel := "Shared a reel\nSunset reel\nhttps://www.instagram.com/reel/XYZ789/"
+	if got := ExtractTextContent("ig_reel", igReelRaw); got != wantReel {
+		t.Fatalf("ig_reel got=%q want=%q", got, wantReel)
 	}
 
 	igStoryRaw, _ := json.Marshal(map[string]any{
@@ -100,5 +121,101 @@ func TestExtractTextContent_StorySignals(t *testing.T) {
 	})
 	if got := ExtractTextContent("ig_story", igStoryRaw); got != "Shared a story" {
 		t.Fatalf("ig_story got=%q", got)
+	}
+}
+
+func TestIsInstagramOGShareType(t *testing.T) {
+	for _, input := range []string{"ig_post", "post", "ig_reel", "reel", "share", "fallback"} {
+		if !IsInstagramOGShareType(input) {
+			t.Fatalf("expected %s to be OG share", input)
+		}
+	}
+	if IsInstagramOGShareType("image") {
+		t.Fatal("image should not be OG share")
+	}
+}
+
+func TestExtractInstagramShare_PrefersIgPostPermalinkOverShareCDN(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{
+		"attachments": []map[string]any{
+			{
+				"type": "share",
+				"payload": map[string]any{
+					"ig_post_media_id": "18139494541428835",
+					"title":            "Workspace post",
+					"url":              "https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=18139494541428835&signature=abc",
+				},
+			},
+			{
+				"type": "ig_post",
+				"payload": map[string]any{
+					"ig_post_media_id": "18139494541428835",
+					"title":            "Workspace post",
+					"url":              "https://www.instagram.com/p/ABC123/",
+				},
+			},
+		},
+	})
+	share := ExtractInstagramShare(raw)
+	if share == nil {
+		t.Fatal("expected share")
+	}
+	if share.Type != "ig_post" {
+		t.Fatalf("type=%q", share.Type)
+	}
+	if share.URL != "https://www.instagram.com/p/ABC123/" {
+		t.Fatalf("url=%q", share.URL)
+	}
+	if share.MediaID != "18139494541428835" {
+		t.Fatalf("media_id=%q", share.MediaID)
+	}
+	got := ExtractTextContent("ig_post", raw)
+	want := "Shared a post\nWorkspace post\nhttps://www.instagram.com/p/ABC123/"
+	if got != want {
+		t.Fatalf("content=%q want=%q", got, want)
+	}
+}
+
+func TestExtractInstagramShare_PrefersIgPostOverShareWhenBothCDN(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{
+		"attachments": []map[string]any{
+			{
+				"type": "share",
+				"payload": map[string]any{
+					"url":   "https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=1&signature=a",
+					"title": "Post",
+				},
+			},
+			{
+				"type": "ig_post",
+				"payload": map[string]any{
+					"ig_post_media_id": "18139494541428835",
+					"url":              "https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=18139494541428835&signature=b",
+					"title":            "Post",
+				},
+			},
+		},
+	})
+	share := ExtractInstagramShare(raw)
+	if share == nil {
+		t.Fatal("expected share")
+	}
+	if share.Type != "ig_post" {
+		t.Fatalf("type=%q", share.Type)
+	}
+	if share.MediaID != "18139494541428835" {
+		t.Fatalf("media_id=%q", share.MediaID)
+	}
+}
+
+func TestIsInstagramPublicURL(t *testing.T) {
+	if !IsInstagramPublicURL("https://www.instagram.com/p/ABC/") {
+		t.Fatal("expected post permalink")
+	}
+	if !IsInstagramPublicURL("https://instagram.com/reel/XYZ/") {
+		t.Fatal("expected reel permalink")
+	}
+	if IsInstagramPublicURL("https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=1") {
+		t.Fatal("cdn should not count as public")
 	}
 }
