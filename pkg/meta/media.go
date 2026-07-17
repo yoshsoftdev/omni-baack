@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"path/filepath"
 	"strings"
 )
@@ -182,7 +183,14 @@ func (c *Client) GetMediaMetadata(ctx context.Context, mediaID, phoneNumberID, a
 }
 
 func (c *Client) DownloadMedia(ctx context.Context, mediaURL, accessToken string) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSpace(mediaURL), nil)
+	mediaURL = strings.TrimSpace(mediaURL)
+	if mediaURL == "" {
+		return nil, fmt.Errorf("media url is required")
+	}
+	if !IsAllowedMetaMediaURL(mediaURL) {
+		return nil, fmt.Errorf("media url host is not allowed")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -197,4 +205,36 @@ func (c *Client) DownloadMedia(ctx context.Context, mediaURL, accessToken string
 		return nil, fmt.Errorf("meta download media error: %s", strings.TrimSpace(string(body)))
 	}
 	return resp.Body, nil
+}
+
+// IsAllowedMetaMediaURL returns true for Meta/Instagram CDN and Graph media hosts.
+func IsAllowedMetaMediaURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "https" && scheme != "http" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return false
+	}
+	allowedExact := map[string]struct{}{
+		"lookaside.fbsbx.com":       {},
+		"lookaside.instagram.com":   {},
+		"scontent.cdninstagram.com": {},
+		"graph.facebook.com":        {},
+		"graph.instagram.com":       {},
+	}
+	if _, ok := allowedExact[host]; ok {
+		return true
+	}
+	if strings.HasSuffix(host, ".fbcdn.net") ||
+		strings.HasSuffix(host, ".cdninstagram.com") ||
+		strings.HasSuffix(host, ".fbsbx.com") {
+		return true
+	}
+	return false
 }

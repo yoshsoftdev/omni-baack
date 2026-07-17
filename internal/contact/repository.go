@@ -17,6 +17,7 @@ import (
 type Repository interface {
 	Create(ctx context.Context, c *Contact) error
 	FindByID(ctx context.Context, teamID, id uuid.UUID) (*Contact, error)
+	ResolveInstagramScopedID(ctx context.Context, teamID, contactID uuid.UUID) (string, error)
 	FindByPhone(ctx context.Context, teamID uuid.UUID, phone string) (*Contact, error)
 	List(ctx context.Context, teamID uuid.UUID, filter ListFilter, page repository.PageParams) (repository.Page[Contact], error)
 	ListByIDs(ctx context.Context, teamID uuid.UUID, ids []uuid.UUID) ([]Contact, error)
@@ -56,6 +57,41 @@ func (r *PostgresRepository) Create(ctx context.Context, c *Contact) error {
 		c.Language, c.CustomerType, string(c.Source), string(c.MarketingStatus), c.LastActivityAt, c.ImportJobID, c.CreatedAt, c.UpdatedAt,
 	)
 	return repository.MapError(err)
+}
+
+func (r *PostgresRepository) ResolveInstagramScopedID(ctx context.Context, teamID, contactID uuid.UUID) (string, error) {
+	// Prefer provider_profiles: linked contacts keep WhatsApp phone on contacts.phone,
+	// so stripping a non-ig phone must never win over the Instagram IGSID.
+	query := `
+		SELECT COALESCE(
+			(
+				SELECT NULLIF(TRIM(p.provider_user_id), '')
+				FROM provider_profiles p
+				WHERE p.team_id = c.team_id
+				  AND p.contact_id = c.id
+				  AND p.provider = 'instagram'
+				  AND p.deleted_at IS NULL
+				ORDER BY p.updated_at DESC
+				LIMIT 1
+			),
+			CASE
+				WHEN c.phone LIKE 'ig:%' THEN NULLIF(TRIM(BOTH FROM regexp_replace(c.phone, '^ig:', '')), '')
+				ELSE NULL
+			END,
+			''
+		)
+		FROM contacts c
+		WHERE c.id = $1 AND c.team_id = $2 AND c.deleted_at IS NULL
+	`
+	var scopedID string
+	if err := r.db.Pool.QueryRow(ctx, query, contactID, teamID).Scan(&scopedID); err != nil {
+		return "", repository.MapError(err)
+	}
+	scopedID = strings.TrimSpace(scopedID)
+	if scopedID == "" {
+		return "", repository.ErrNotFound
+	}
+	return scopedID, nil
 }
 
 func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID) (*Contact, error) {

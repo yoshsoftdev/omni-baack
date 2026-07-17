@@ -8,6 +8,18 @@ import (
 	sharedwamid "github.com/omnichannel/omni-chan-v2/shared/wamid"
 )
 
+func (s *Service) resolveOutboundReplyMID(ctx context.Context, teamID, conversationID uuid.UUID, input SendInput) string {
+	if input.ReplyToMessageID != nil {
+		target, err := s.messages.FindByID(ctx, teamID, *input.ReplyToMessageID)
+		if err == nil && target != nil && target.ConversationID == conversationID && target.WAMID != nil {
+			if mid := strings.TrimSpace(*target.WAMID); mid != "" {
+				return mid
+			}
+		}
+	}
+	return strings.TrimSpace(input.ReplyToWAMID)
+}
+
 func (s *Service) resolveReplyTarget(ctx context.Context, teamID, conversationID uuid.UUID, replyToWAMID string) *uuid.UUID {
 	replyToWAMID = strings.TrimSpace(replyToWAMID)
 	if replyToWAMID == "" {

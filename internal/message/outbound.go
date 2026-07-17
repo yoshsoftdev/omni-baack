@@ -12,6 +12,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/storageclient"
+	"github.com/omnichannel/omni-chan-v2/pkg/meta"
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
@@ -25,12 +26,18 @@ type MetaMessenger interface {
 	SendMediaMessageWithContext(ctx context.Context, phoneNumberID, accessToken, to, messageType, mediaID, caption, filename, replyToWAMID string) (string, error)
 	DeleteMessage(ctx context.Context, phoneNumberID, accessToken, wamid string) error
 	SendInstagramTextMessage(ctx context.Context, igUserID, accessToken, recipientScopedID, body, replyToMID string) (string, error)
+	SendInstagramMediaMessage(ctx context.Context, igUserID, accessToken, recipientScopedID, contentType, mediaURL, caption, replyToMID string) (string, error)
 }
 
 // StorageDownloader fetches uploaded objects from storage-service.
 type StorageDownloader interface {
 	Download(ctx context.Context, teamID, objectID uuid.UUID) (io.ReadCloser, *storageclient.StoredObject, error)
 	GetMetadata(ctx context.Context, teamID, objectID uuid.UUID) (*storageclient.StoredObject, error)
+}
+
+// MediaURLIssuer mints short-lived Main API media URLs for Meta to fetch.
+type MediaURLIssuer interface {
+	Issue(teamID, objectID uuid.UUID) (string, error)
 }
 
 // ChannelStore loads channel credentials for outbound delivery.
@@ -42,6 +49,7 @@ type ChannelStore interface {
 // ContactStore loads contact phone numbers for outbound delivery.
 type ContactStore interface {
 	FindByID(ctx context.Context, teamID, id uuid.UUID) (*contact.Contact, error)
+	ResolveInstagramScopedID(ctx context.Context, teamID, contactID uuid.UUID) (string, error)
 }
 
 // TokenDecryptor decrypts stored Meta access tokens.
@@ -51,18 +59,20 @@ type TokenDecryptor interface {
 
 // OutboundDeps wires channel delivery for agent replies.
 type OutboundDeps struct {
-	Channels ChannelStore
-	Contacts ContactStore
-	Meta     MetaMessenger
-	Cipher   TokenDecryptor
-	Storage  StorageDownloader
+	Channels  ChannelStore
+	Contacts  ContactStore
+	Meta      MetaMessenger
+	Cipher    TokenDecryptor
+	Storage   StorageDownloader
+	MediaURLs MediaURLIssuer
 }
 
 type SendInput struct {
-	Content         string
-	StorageObjectID *uuid.UUID
-	ReplyToWAMID    string
-	ClientMessageID *uuid.UUID
+	Content          string
+	StorageObjectID  *uuid.UUID
+	ReplyToWAMID     string
+	ReplyToMessageID *uuid.UUID
+	ClientMessageID  *uuid.UUID
 }
 
 // SendReply persists an agent reply and delivers it through the connected channel when configured.
@@ -103,6 +113,11 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 		return nil, serviceerrors.NewValidation("content", "is required when no attachment is provided")
 	}
 
+	channelHint := conversation.ChannelWhatsApp
+	if conv.ChannelType == conversation.ChannelInstagram {
+		channelHint = conversation.ChannelInstagram
+	}
+
 	var attachment *Attachment
 	contentType := ContentText
 	if input.StorageObjectID != nil {
@@ -113,7 +128,7 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 		if metaErr != nil {
 			return nil, serviceerrors.NewValidation("storage_object_id", "invalid storage object")
 		}
-		validatedType, validateErr := ValidateAttachment(meta.MimeType, meta.SizeBytes)
+		validatedType, validateErr := ValidateAttachmentForChannel(meta.MimeType, meta.SizeBytes, channelHint)
 		if validateErr != nil {
 			return nil, serviceerrors.NewValidation("attachment", validateErr.Error())
 		}
@@ -131,6 +146,8 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 
 	var recipient *string
 	var wamid *string
+	var deliveryNotice string
+	replyToMID := s.resolveOutboundReplyMID(ctx, teamID, conversationID, input)
 
 	if s.outbound != nil &&
 		s.outbound.Meta != nil &&
@@ -161,11 +178,13 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 		}
 
 		channelType := outboundChannelType(conv, ch)
+		deliveryContent := content
 		switch channelType {
 		case conversation.ChannelInstagram:
-			recipient, wamid, err = s.deliverInstagram(ctx, ch, contactEntity, token, content, attachment, input.ReplyToWAMID)
+			deliveryContent, deliveryNotice = s.prepareInstagramReplyDelivery(ctx, teamID, conversationID, content, contentType, input)
+			recipient, wamid, err = s.deliverInstagram(ctx, teamID, ch, contactEntity, token, deliveryContent, contentType, attachment, "")
 		default:
-			recipient, wamid, err = s.deliverWhatsApp(ctx, teamID, ch, contactEntity, token, content, contentType, attachment, input.ReplyToWAMID)
+			recipient, wamid, err = s.deliverWhatsApp(ctx, teamID, ch, contactEntity, token, content, contentType, attachment, replyToMID)
 		}
 		if err != nil {
 			return nil, err
@@ -177,8 +196,8 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 		ContentType:      contentType,
 		Recipient:        recipient,
 		WAMID:            wamid,
-		ReplyToWAMID:     nullableWAMID(input.ReplyToWAMID),
-		ReplyToMessageID: s.resolveReplyTarget(ctx, teamID, conversationID, input.ReplyToWAMID),
+		ReplyToWAMID:     nullableWAMID(replyToMID),
+		ReplyToMessageID: s.resolveReplyTarget(ctx, teamID, conversationID, replyToMID),
 		Attachment:       attachment,
 		ClientMessageID:  input.ClientMessageID,
 	})
@@ -190,6 +209,10 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 		return nil, err
 	}
 	*msg = enriched[0]
+	if strings.TrimSpace(deliveryNotice) != "" {
+		notice := deliveryNotice
+		msg.DeliveryNotice = &notice
+	}
 	return msg, nil
 }
 
@@ -265,18 +288,24 @@ func (s *Service) deliverWhatsApp(
 
 func (s *Service) deliverInstagram(
 	ctx context.Context,
+	teamID uuid.UUID,
 	ch *channel.Channel,
 	contactEntity *contact.Contact,
 	token, content string,
+	contentType ContentType,
 	attachment *Attachment,
 	replyToMID string,
 ) (*string, *string, error) {
-	if attachment != nil {
-		return nil, nil, serviceerrors.NewValidation("attachment", "instagram attachments are not supported yet")
-	}
 	scopedID, ok := contact.ParseInstagramScopedID(contactEntity.Phone)
-	if !ok {
-		return nil, nil, serviceerrors.NewValidation("contact", "instagram recipient id is required")
+	if !ok && s.outbound != nil && s.outbound.Contacts != nil {
+		resolvedID, resolveErr := s.outbound.Contacts.ResolveInstagramScopedID(ctx, contactEntity.TeamID, contactEntity.ID)
+		if resolveErr == nil {
+			scopedID = strings.TrimSpace(resolvedID)
+			ok = contact.IsValidInstagramScopedID(scopedID)
+		}
+	}
+	if !ok || !contact.IsValidInstagramScopedID(scopedID) {
+		return nil, nil, serviceerrors.NewValidation("contact", "instagram recipient id is required (linked Instagram profile IGSID)")
 	}
 	igUserID := ""
 	if ch.IGUserID != nil {
@@ -285,14 +314,42 @@ func (s *Service) deliverInstagram(
 	if igUserID == "" {
 		return nil, nil, serviceerrors.NewValidation("channel", "instagram channel is not connected")
 	}
-
-	mid, sendErr := s.outbound.Meta.SendInstagramTextMessage(ctx, igUserID, token, scopedID, content, "")
+	replyToMID = strings.TrimSpace(replyToMID)
+	sendFn := func(replyTarget string) (string, error) {
+		if attachment != nil {
+			if s.outbound == nil || s.outbound.MediaURLs == nil {
+				return "", serviceerrors.NewValidation("attachment", "media proxy is not configured")
+			}
+			if mimeErr := meta.ValidateInstagramOutboundMIME(attachment.MimeType); mimeErr != nil {
+				return "", serviceerrors.NewValidation("attachment", mimeErr.Error())
+			}
+			mediaURL, urlErr := s.outbound.MediaURLs.Issue(teamID, attachment.StorageObjectID)
+			if urlErr != nil {
+				return "", serviceerrors.NewValidation("attachment", "unable to create media url: "+urlErr.Error())
+			}
+			caption := strings.TrimSpace(content)
+			if caption == "" || strings.EqualFold(caption, strings.TrimSpace(attachment.Filename)) {
+				caption = ""
+			}
+			return s.outbound.Meta.SendInstagramMediaMessage(
+				ctx,
+				igUserID,
+				token,
+				scopedID,
+				WhatsAppMessageType(contentType),
+				mediaURL,
+				caption,
+				replyTarget,
+			)
+		}
+		return s.outbound.Meta.SendInstagramTextMessage(ctx, igUserID, token, scopedID, content, replyTarget)
+	}
+	mid, sendErr := sendFn(replyToMID)
 	if sendErr != nil {
 		return nil, nil, serviceerrors.NewValidation("instagram", sendErr.Error())
 	}
 
 	recipient := contactEntity.Phone
-	_ = replyToMID // reply threading is stored locally; Instagram send API rejects many reply_to mids (2534002).
 	return &recipient, &mid, nil
 }
 

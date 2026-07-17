@@ -65,6 +65,7 @@ type Message struct {
 	Attachment     *Attachment `json:"attachment,omitempty"`
 	ReceivedAt     time.Time   `json:"received_at"`
 	CreatedAt      time.Time   `json:"created_at"`
+	DeliveryNotice *string     `json:"delivery_notice,omitempty"`
 }
 
 type ListFilter struct {

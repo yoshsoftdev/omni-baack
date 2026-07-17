@@ -56,6 +56,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/pkg/uow"
 	"github.com/omnichannel/omni-chan-v2/pkg/workerregistry"
 	sharedconfig "github.com/omnichannel/omni-chan-v2/shared/config"
+	"github.com/omnichannel/omni-chan-v2/shared/mediatoken"
 	sharednats "github.com/omnichannel/omni-chan-v2/shared/nats"
 )
 
@@ -195,12 +196,19 @@ func main() {
 	messageRepo := message.NewRepository(db)
 	attachmentRepo := message.NewAttachmentRepository(db)
 	storageClient := storageclient.New(cfg.StorageService.URL, cfg.NATS.InternalToken)
+	mediaTokenIssuer := mediatoken.NewIssuer(cfg.MediaProxy.TokenSecret, cfg.MediaProxy.TokenTTL)
+	mediaURLService := message.NewMediaURLService(
+		cfg.MediaProxy.TokenSecret,
+		cfg.MediaProxy.PublicWebhookBaseURL,
+		cfg.MediaProxy.TokenTTL,
+	)
 	messageService := message.NewService(messageRepo, attachmentRepo, conversationRepo, teamRepo, userRepo, rbacService, &message.OutboundDeps{
-		Channels: channelRepo,
-		Contacts: contactRepo,
-		Meta:     metaClient,
-		Cipher:   tokenCipher,
-		Storage:  storageClient,
+		Channels:  channelRepo,
+		Contacts:  contactRepo,
+		Meta:      metaClient,
+		Cipher:    tokenCipher,
+		Storage:   storageClient,
+		MediaURLs: mediaURLService,
 	})
 	messageService.SetStatusPublisher(func(ctx context.Context, msg *message.Message, status message.Status) error {
 		payload, err := json.Marshal(map[string]any{
@@ -286,6 +294,7 @@ func main() {
 			ConversationPresence: handler.NewConversationPresenceHandler(collisionService, conversationService, userRepo),
 			Inbox:                handler.NewInboxHandler(inboxListService),
 			Message:              handler.NewMessageHandler(messageService, conversationService, inboxSync),
+			MediaProxy:           handler.NewMediaProxyHandler(mediaTokenIssuer, storageClient, cfg.NATS.InternalToken),
 			StorageServiceURL:    cfg.StorageService.URL,
 			Dashboard:            handler.NewDashboardHandler(dashboardService),
 			Webhook:              handler.NewWebhookHandler(cfg.Meta.VerifyToken),

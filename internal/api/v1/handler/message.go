@@ -22,10 +22,11 @@ func NewMessageHandler(svc *message.Service, conversations *conversation.Service
 }
 
 type sendMessageRequest struct {
-	Content         string `json:"content"`
-	StorageObjectID string `json:"storage_object_id"`
-	ReplyToWAMID    string `json:"reply_to_wamid"`
-	ClientMessageID string `json:"client_message_id"`
+	Content          string `json:"content"`
+	StorageObjectID  string `json:"storage_object_id"`
+	ReplyToWAMID     string `json:"reply_to_wamid"`
+	ReplyToMessageID string `json:"reply_to_message_id"`
+	ClientMessageID  string `json:"client_message_id"`
 }
 
 type deleteMessageRequest struct {
@@ -68,6 +69,13 @@ func (h *MessageHandler) Send(c *fiber.Ctx) error {
 	sendInput := message.SendInput{
 		Content:      req.Content,
 		ReplyToWAMID: strings.TrimSpace(req.ReplyToWAMID),
+	}
+	if strings.TrimSpace(req.ReplyToMessageID) != "" {
+		replyToMessageID, parseErr := parseUUIDFromString(req.ReplyToMessageID)
+		if parseErr != nil {
+			return response.BadRequest(c, "invalid reply_to_message_id")
+		}
+		sendInput.ReplyToMessageID = &replyToMessageID
 	}
 	if strings.TrimSpace(req.StorageObjectID) != "" {
 		objectID, parseErr := parseUUIDFromString(req.StorageObjectID)

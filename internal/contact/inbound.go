@@ -245,7 +245,11 @@ func (s *Service) resolveCanonicalInstagramInbound(ctx context.Context, teamID u
 		if err := s.providers.UpdateObserved(ctx, profile); err != nil {
 			return nil, err
 		}
-		return s.contacts.FindByID(ctx, teamID, profile.ContactID)
+		existing, findErr := s.contacts.FindByID(ctx, teamID, profile.ContactID)
+		if findErr != nil {
+			return nil, findErr
+		}
+		return s.ensureInstagramContactPhone(ctx, existing, senderID)
 	}
 	if !errors.Is(err, repository.ErrNotFound) {
 		return nil, err
@@ -263,7 +267,8 @@ func (s *Service) resolveCanonicalInstagramInbound(ctx context.Context, teamID u
 		TeamID:          teamID,
 		ContactName:     profileName,
 		CustomerName:    profileName,
-		Source:          SourceManual,
+		Phone:           instagramContactKey(senderID),
+		Source:          SourceInstagram,
 		MarketingStatus: MarketingUnknown,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -289,7 +294,11 @@ func (s *Service) resolveCanonicalInstagramInbound(ctx context.Context, teamID u
 	if err := s.providers.Create(ctx, profile); err != nil {
 		if existing, findErr := s.providers.FindByExternalID(ctx, teamID, provider.Instagram, senderID); findErr == nil {
 			_ = s.contacts.SoftDelete(ctx, teamID, contactEntity.ID)
-			return s.contacts.FindByID(ctx, teamID, existing.ContactID)
+			existingContact, contactErr := s.contacts.FindByID(ctx, teamID, existing.ContactID)
+			if contactErr != nil {
+				return nil, contactErr
+			}
+			return s.ensureInstagramContactPhone(ctx, existingContact, senderID)
 		}
 		return nil, err
 	}
@@ -341,6 +350,35 @@ func instagramContactKey(senderID string) string {
 	return "ig:" + strings.TrimSpace(senderID)
 }
 
+func (s *Service) ensureInstagramContactPhone(ctx context.Context, existing *Contact, senderID string) (*Contact, error) {
+	if existing == nil {
+		return nil, errors.New("contact is required")
+	}
+	phoneKey := instagramContactKey(senderID)
+	if phoneKey == "ig:" {
+		return nil, errors.New("instagram sender id is required")
+	}
+	updated := false
+	if _, ok := ParseInstagramScopedID(existing.Phone); !ok {
+		existing.Phone = phoneKey
+		updated = true
+	}
+	if existing.Source != SourceInstagram {
+		existing.Source = SourceInstagram
+		updated = true
+	}
+	if !updated {
+		existing.PopulateLegacyName()
+		return existing, nil
+	}
+	existing.UpdatedAt = time.Now().UTC()
+	if err := s.contacts.Update(ctx, existing); err != nil {
+		return nil, err
+	}
+	existing.PopulateLegacyName()
+	return existing, nil
+}
+
 // ParseInstagramScopedID extracts the Instagram scoped user id from a contact phone key (ig:{id}).
 func ParseInstagramScopedID(phone string) (string, bool) {
 	phone = strings.TrimSpace(phone)
@@ -348,10 +386,24 @@ func ParseInstagramScopedID(phone string) (string, bool) {
 		return "", false
 	}
 	id := strings.TrimSpace(strings.TrimPrefix(phone, "ig:"))
-	if id == "" {
+	if !IsValidInstagramScopedID(id) {
 		return "", false
 	}
 	return id, true
+}
+
+// IsValidInstagramScopedID reports whether id is a Meta Instagram-scoped user id (digits only).
+func IsValidInstagramScopedID(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeInboundPhone(raw string) string {

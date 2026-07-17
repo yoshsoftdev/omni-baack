@@ -1,6 +1,11 @@
 package message
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/omnichannel/omni-chan-v2/internal/conversation"
+)
 
 func TestValidateAttachment(t *testing.T) {
 	contentType, err := ValidateAttachment("image/jpeg", 1024)
@@ -21,5 +26,27 @@ func TestValidateAttachment(t *testing.T) {
 	_, err = ValidateAttachment("image/jpeg", 0)
 	if err == nil {
 		t.Fatal("expected empty upload error")
+	}
+}
+
+func TestValidateAttachmentForChannel_InstagramVideo(t *testing.T) {
+	ct, err := ValidateAttachmentForChannel("video/mp4", 20*1024*1024, conversation.ChannelInstagram)
+	if err != nil || ct != ContentVideo {
+		t.Fatalf("mp4 = %v, %v", ct, err)
+	}
+
+	ct, err = ValidateAttachmentForChannel("video/quicktime", 1024, conversation.ChannelInstagram)
+	if err != nil || ct != ContentVideo {
+		t.Fatalf("mov = %v, %v", ct, err)
+	}
+
+	_, err = ValidateAttachmentForChannel("video/3gpp", 1024, conversation.ChannelInstagram)
+	if err == nil || !strings.Contains(err.Error(), "3GPP") {
+		t.Fatalf("expected 3gpp rejection, got %v", err)
+	}
+
+	_, err = ValidateAttachmentForChannel("video/mp4", 20*1024*1024, conversation.ChannelWhatsApp)
+	if err == nil {
+		t.Fatal("expected whatsapp 16MB video limit")
 	}
 }

@@ -10,6 +10,11 @@ import (
 func Register(router fiber.Router, deps Deps) {
 	router.Get("/health", health)
 
+	// Internal-only media stream consumed by webhook-service.
+	if deps.MediaProxy != nil {
+		router.Get("/internal/media/:token", deps.MediaProxy.Serve)
+	}
+
 	if deps.Webhook != nil {
 		router.Get("/webhook/meta", deps.Webhook.VerifyMeta)
 	}

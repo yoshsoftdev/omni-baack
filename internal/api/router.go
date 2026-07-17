@@ -25,6 +25,7 @@ func NewRouter(deps Deps) *fiber.App {
 		AppName:      deps.Config.App.Name,
 		ReadTimeout:  deps.Config.HTTP.ReadTimeout,
 		WriteTimeout: deps.Config.HTTP.WriteTimeout,
+		BodyLimit:    100 * 1024 * 1024,
 	})
 
 	app.Use(recover.New())

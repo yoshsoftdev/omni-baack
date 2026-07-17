@@ -11,16 +11,17 @@ import (
 )
 
 type Config struct {
-	App      AppConfig
-	HTTP     HTTPConfig
-	Database DatabaseConfig
-	Redis           RedisConfig
-	StorageService  StorageServiceConfig
-	JWT             JWTConfig
-	Meta            MetaConfig
-	Instagram       InstagramConfig
-	OTP             OTPConfig
-	NATS            NATSConfig
+	App            AppConfig
+	HTTP           HTTPConfig
+	Database       DatabaseConfig
+	Redis          RedisConfig
+	StorageService StorageServiceConfig
+	MediaProxy     MediaProxyConfig
+	JWT            JWTConfig
+	Meta           MetaConfig
+	Instagram      InstagramConfig
+	OTP            OTPConfig
+	NATS           NATSConfig
 }
 
 type InstagramConfig struct {
@@ -80,6 +81,13 @@ type StorageServiceConfig struct {
 	URL string
 }
 
+// MediaProxyConfig controls short-lived webhook media URLs for Meta Instagram fetch.
+type MediaProxyConfig struct {
+	PublicWebhookBaseURL string
+	TokenSecret          string
+	TokenTTL             time.Duration
+}
+
 type JWTConfig struct {
 	AccessSecret  string
 	RefreshSecret string
@@ -114,6 +122,11 @@ func Load() (*Config, error) {
 		},
 		StorageService: StorageServiceConfig{
 			URL: getEnv("STORAGE_SERVICE_URL", "http://127.0.0.1:8082"),
+		},
+		MediaProxy: MediaProxyConfig{
+			PublicWebhookBaseURL: getEnv("WEBHOOK_PUBLIC_BASE_URL", ""),
+			TokenSecret:          getEnv("MEDIA_TOKEN_SECRET", ""),
+			TokenTTL:             getEnvDuration("MEDIA_TOKEN_TTL", 5*time.Minute),
 		},
 		JWT: JWTConfig{
 			AccessSecret:  getEnv("JWT_ACCESS_SECRET", ""),
@@ -178,6 +191,13 @@ func (c *Config) Validate() error {
 	}
 	if c.NATS.InternalToken == "" && c.App.Env == "development" {
 		c.NATS.InternalToken = "dev-internal-token"
+	}
+	if c.MediaProxy.TokenSecret == "" {
+		if c.App.Env == "development" {
+			c.MediaProxy.TokenSecret = c.NATS.InternalToken
+		} else {
+			return fmt.Errorf("MEDIA_TOKEN_SECRET is required")
+		}
 	}
 	return nil
 }

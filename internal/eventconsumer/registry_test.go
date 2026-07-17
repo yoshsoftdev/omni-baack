@@ -85,6 +85,9 @@ func (f *fakeContactRepo) FindByPhone(_ context.Context, _ uuid.UUID, phone stri
 	}
 	return c, nil
 }
+func (f *fakeContactRepo) ResolveInstagramScopedID(context.Context, uuid.UUID, uuid.UUID) (string, error) {
+	return "", repository.ErrNotFound
+}
 func (f *fakeContactRepo) List(context.Context, uuid.UUID, contact.ListFilter, repository.PageParams) (repository.Page[contact.Contact], error) {
 	return repository.Page[contact.Contact]{}, nil
 }
@@ -148,6 +151,9 @@ func (f *fakeConversationRepo) FindByContactChannel(_ context.Context, teamID, c
 func (f *fakeConversationRepo) List(context.Context, uuid.UUID, conversation.ListFilter, repository.PageParams) (repository.Page[conversation.Conversation], error) {
 	return repository.Page[conversation.Conversation]{}, nil
 }
+func (f *fakeConversationRepo) ListCursor(context.Context, uuid.UUID, conversation.ListFilter, *conversation.ListCursor, int) (conversation.CursorPage, error) {
+	return conversation.CursorPage{}, nil
+}
 func (f *fakeConversationRepo) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, conversation.Status) error {
 	return nil
 }
@@ -160,6 +166,9 @@ func (f *fakeConversationRepo) UpdateLastMessage(context.Context, uuid.UUID, uui
 }
 func (f *fakeConversationRepo) SoftDelete(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (f *fakeConversationRepo) ApplyInboxSync(context.Context, uuid.UUID, uuid.UUID, conversation.InboxSyncUpdate) error {
+	return nil
+}
+func (f *fakeConversationRepo) UpdatePriorityFields(context.Context, uuid.UUID, uuid.UUID, *time.Time, bool, int, int64) error {
 	return nil
 }
 func (f *fakeConversationRepo) MarkRead(context.Context, uuid.UUID, uuid.UUID) error { return nil }
@@ -193,6 +202,9 @@ func (f *fakeMessageRepo) FindByWAMID(_ context.Context, wamid string) (*message
 	return m, nil
 }
 func (f *fakeMessageRepo) FindByWAMIDKey(context.Context, uuid.UUID, uuid.UUID, string) (*message.Message, error) {
+	return nil, repository.ErrNotFound
+}
+func (f *fakeMessageRepo) FindByClientMessageID(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*message.Message, error) {
 	return nil, repository.ErrNotFound
 }
 func (f *fakeMessageRepo) ListByConversation(context.Context, uuid.UUID, uuid.UUID, message.ListFilter, repository.PageParams) (repository.Page[message.Message], error) {

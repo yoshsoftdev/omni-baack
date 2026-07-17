@@ -180,6 +180,22 @@ func (h *MessageHandler) processInstagram(ctx context.Context, event sharedevent
 		receivedAt = event.OccurredAt
 	}
 
+	attachment, attachErr := h.syncInboundAttachment(ctx, tenant, payload)
+	if attachErr != nil {
+		if h.log == nil {
+			h.log = slog.Default()
+		}
+		h.log.Warn("instagram inbound media sync failed",
+			"event_id", event.EventID,
+			"mid", payload.WAMID,
+			"message_type", payload.MessageType,
+			"error", attachErr,
+		)
+	}
+	if attachment != nil {
+		contentType = preferAttachmentContentType(contentType, attachment.MimeType, payload.MessageType)
+	}
+
 	conv, convCreated, err := h.conversations.FindOrCreateForInbound(ctx, tenant.TeamID, contactEntity.ID, tenant.ChannelID, conversation.ChannelInstagram)
 	if err != nil {
 		return err
@@ -208,6 +224,12 @@ func (h *MessageHandler) processInstagram(ctx context.Context, event sharedevent
 			"error", err.Error(),
 		)
 		return err
+	}
+	if msgCreated && attachment != nil {
+		if err := h.messages.AttachToMessage(ctx, tenant.TeamID, msg.ID, attachment); err != nil {
+			return err
+		}
+		msg.Attachment = attachment
 	}
 	if msgCreated {
 		h.metrics.IncMessagesCreated()
@@ -240,6 +262,7 @@ func (h *MessageHandler) processInstagram(ctx context.Context, event sharedevent
 		"conversation_id", conv.ID.String(),
 		"message_id", msg.ID.String(),
 		"contact", contactEntity.ContactName,
+		"has_attachment", attachment != nil,
 	)
 	return nil
 }
@@ -267,6 +290,22 @@ func (h *MessageHandler) processInstagramEcho(ctx context.Context, event sharede
 	receivedAt := message.ParseMetaTimestamp(payload.Timestamp)
 	if !event.OccurredAt.IsZero() {
 		receivedAt = event.OccurredAt
+	}
+
+	attachment, attachErr := h.syncInboundAttachment(ctx, tenant, payload)
+	if attachErr != nil {
+		if h.log == nil {
+			h.log = slog.Default()
+		}
+		h.log.Warn("instagram echo media sync failed",
+			"event_id", event.EventID,
+			"mid", payload.WAMID,
+			"message_type", payload.MessageType,
+			"error", attachErr,
+		)
+	}
+	if attachment != nil {
+		contentType = preferAttachmentContentType(contentType, attachment.MimeType, payload.MessageType)
 	}
 
 	conv, convCreated, err := h.conversations.FindOrCreateForInbound(ctx, tenant.TeamID, contactEntity.ID, tenant.ChannelID, conversation.ChannelInstagram)
@@ -302,6 +341,12 @@ func (h *MessageHandler) processInstagramEcho(ctx context.Context, event sharede
 			"error", err.Error(),
 		)
 		return err
+	}
+	if msgCreated && attachment != nil {
+		if err := h.messages.AttachToMessage(ctx, tenant.TeamID, msg.ID, attachment); err != nil {
+			return err
+		}
+		msg.Attachment = attachment
 	}
 	if msgCreated {
 		h.metrics.IncMessagesCreated()
@@ -458,10 +503,6 @@ func (h *MessageHandler) process(ctx context.Context, event sharedevents.Canonic
 }
 
 func (h *MessageHandler) syncInboundAttachment(ctx context.Context, tenant *resolver.TenantContext, payload sharedevents.MetaMessagePayload) (*message.Attachment, error) {
-	mediaID, fallbackFilename := extractInboundMediaRef(payload.MessageType, payload.Raw)
-	if strings.TrimSpace(mediaID) == "" {
-		return nil, nil
-	}
 	if h.channels == nil || h.metaMedia == nil || h.tokenCipher == nil || h.storage == nil {
 		return nil, fmt.Errorf("inbound media dependencies are not configured")
 	}
@@ -473,21 +514,57 @@ func (h *MessageHandler) syncInboundAttachment(ctx context.Context, tenant *reso
 	if err != nil {
 		return nil, err
 	}
-	metaInfo, err := h.metaMedia.GetMediaMetadata(ctx, mediaID, payload.PhoneNumberID, token)
-	if err != nil {
-		return nil, err
+
+	mediaID, fallbackFilename := extractInboundMediaRef(payload.MessageType, payload.Raw)
+	if strings.TrimSpace(mediaID) != "" {
+		metaInfo, metaErr := h.metaMedia.GetMediaMetadata(ctx, mediaID, payload.PhoneNumberID, token)
+		if metaErr != nil {
+			return nil, metaErr
+		}
+		reader, dlErr := h.metaMedia.DownloadMedia(ctx, metaInfo.URL, token)
+		if dlErr != nil {
+			return nil, dlErr
+		}
+		defer reader.Close()
+		mimeType := normalizeInboundMIME(metaInfo.MimeType, payload.MessageType)
+		filename := buildInboundFilename(fallbackFilename, metaInfo.ID, mimeType)
+		uploaded, upErr := h.storage.Upload(ctx, tenant.TeamID, "attachments", filename, mimeType, reader)
+		if upErr != nil {
+			return nil, upErr
+		}
+		return &message.Attachment{
+			StorageObjectID: uploaded.ID,
+			MimeType:        uploaded.MimeType,
+			SizeBytes:       uploaded.SizeBytes,
+			Filename:        filename,
+		}, nil
 	}
-	reader, err := h.metaMedia.DownloadMedia(ctx, metaInfo.URL, token)
-	if err != nil {
-		return nil, err
+
+	mediaURL, attType, igFilename := extractInstagramAttachmentURL(payload.Raw)
+	if strings.TrimSpace(mediaURL) == "" {
+		return nil, nil
+	}
+	if !metaclient.IsAllowedMetaMediaURL(mediaURL) {
+		return nil, fmt.Errorf("instagram media url host is not allowed")
+	}
+	reader, dlErr := h.metaMedia.DownloadMedia(ctx, mediaURL, token)
+	if dlErr != nil {
+		return nil, dlErr
 	}
 	defer reader.Close()
 
-	mimeType := normalizeInboundMIME(metaInfo.MimeType, payload.MessageType)
-	filename := buildInboundFilename(fallbackFilename, metaInfo.ID, mimeType)
-	uploaded, err := h.storage.Upload(ctx, tenant.TeamID, "attachments", filename, mimeType, reader)
-	if err != nil {
-		return nil, err
+	messageType := payload.MessageType
+	if strings.TrimSpace(messageType) == "" {
+		messageType = attType
+	}
+	mimeType := normalizeInboundMIME("", messageType)
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		mimeType = mimeHintFromInstagramAttachment(attType, mediaURL)
+	}
+	filename := buildInboundFilename(igFilename, "ig-media", mimeType)
+	uploaded, upErr := h.storage.Upload(ctx, tenant.TeamID, "attachments", filename, mimeType, reader)
+	if upErr != nil {
+		return nil, upErr
 	}
 	return &message.Attachment{
 		StorageObjectID: uploaded.ID,
@@ -495,6 +572,116 @@ func (h *MessageHandler) syncInboundAttachment(ctx context.Context, tenant *reso
 		SizeBytes:       uploaded.SizeBytes,
 		Filename:        filename,
 	}, nil
+}
+
+func extractInstagramAttachmentURL(raw json.RawMessage) (mediaURL, attachmentType, filename string) {
+	var payload struct {
+		Attachments []struct {
+			Type    string `json:"type"`
+			Payload struct {
+				URL           string `json:"url"`
+				Title         string `json:"title"`
+				StoryMediaURL string `json:"story_media_url"`
+			} `json:"payload"`
+		} `json:"attachments"`
+		ReplyTo *struct {
+			Story *struct {
+				URL string `json:"url"`
+			} `json:"story"`
+		} `json:"reply_to"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", "", ""
+	}
+	for _, attachment := range payload.Attachments {
+		attType := strings.ToLower(strings.TrimSpace(attachment.Type))
+		url := strings.TrimSpace(attachment.Payload.URL)
+		if url == "" {
+			url = strings.TrimSpace(attachment.Payload.StoryMediaURL)
+		}
+		if url == "" {
+			continue
+		}
+		name := ""
+		if title := strings.TrimSpace(attachment.Payload.Title); title != "" {
+			name = sanitizeAttachmentFilename(title)
+		}
+		return url, attType, name
+	}
+	if payload.ReplyTo != nil && payload.ReplyTo.Story != nil {
+		if url := strings.TrimSpace(payload.ReplyTo.Story.URL); url != "" {
+			return url, "story_reply", ""
+		}
+	}
+	return "", "", ""
+}
+
+func mimeHintFromInstagramAttachment(attType, mediaURL string) string {
+	lowerURL := strings.ToLower(mediaURL)
+	switch {
+	case strings.Contains(lowerURL, ".mp4"), strings.Contains(lowerURL, "video"):
+		return "video/mp4"
+	case strings.Contains(lowerURL, ".png"):
+		return "image/png"
+	case strings.Contains(lowerURL, ".webp"):
+		return "image/webp"
+	case strings.Contains(lowerURL, ".pdf"):
+		return "application/pdf"
+	}
+	switch strings.ToLower(strings.TrimSpace(attType)) {
+	case "video", "ig_reel", "reel":
+		return "video/mp4"
+	case "audio":
+		return "audio/mp4"
+	case "file", "document":
+		return "application/pdf"
+	default:
+		return "image/jpeg"
+	}
+}
+
+func preferAttachmentContentType(current message.ContentType, mimeType, messageType string) message.ContentType {
+	if current == message.ContentImage || current == message.ContentVideo || current == message.ContentAudio || current == message.ContentDocument {
+		return current
+	}
+	if ct, err := message.ContentTypeFromMIME(mimeType); err == nil {
+		return ct
+	}
+	switch strings.ToLower(strings.TrimSpace(messageType)) {
+	case "image", "story_mention", "ig_story", "ig_post", "share", "sticker":
+		return message.ContentImage
+	case "video", "ig_reel", "reel":
+		return message.ContentVideo
+	case "audio":
+		return message.ContentAudio
+	case "file", "document":
+		return message.ContentDocument
+	default:
+		lower := strings.ToLower(mimeType)
+		switch {
+		case strings.HasPrefix(lower, "image/"):
+			return message.ContentImage
+		case strings.HasPrefix(lower, "video/"):
+			return message.ContentVideo
+		case strings.HasPrefix(lower, "audio/"):
+			return message.ContentAudio
+		default:
+			return current
+		}
+	}
+}
+
+func sanitizeAttachmentFilename(title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return ""
+	}
+	title = strings.ReplaceAll(title, "\n", " ")
+	runes := []rune(title)
+	if len(runes) > 40 {
+		title = string(runes[:40])
+	}
+	return strings.TrimSpace(title) + ".jpg"
 }
 
 func extractInboundMediaRef(messageType string, raw json.RawMessage) (mediaID string, filename string) {
@@ -550,15 +737,13 @@ func normalizeInboundMIME(metaMIME, messageType string) string {
 		return metaMIME
 	}
 	switch strings.ToLower(strings.TrimSpace(messageType)) {
-	case "image":
+	case "image", "story_mention", "ig_story", "ig_post", "share", "sticker", "story_reply":
 		return "image/jpeg"
-	case "sticker":
-		return "image/webp"
-	case "video":
+	case "video", "ig_reel", "reel":
 		return "video/mp4"
 	case "audio":
 		return "audio/ogg"
-	case "document":
+	case "document", "file":
 		return "application/pdf"
 	default:
 		return metaMIME

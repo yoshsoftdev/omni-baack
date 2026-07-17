@@ -27,6 +27,7 @@ type Deps struct {
 	ConversationPresence *handler.ConversationPresenceHandler
 	Inbox                *handler.InboxHandler
 	Message              *handler.MessageHandler
+	MediaProxy           *handler.MediaProxyHandler
 	StorageServiceURL    string
 	Dashboard            *handler.DashboardHandler
 	Webhook              *handler.WebhookHandler

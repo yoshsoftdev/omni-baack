@@ -14,7 +14,17 @@ type stubMessageRepo struct {
 }
 
 func (s *stubMessageRepo) Create(context.Context, *Message) error { return nil }
-func (s *stubMessageRepo) FindByID(context.Context, uuid.UUID, uuid.UUID) (*Message, error) {
+func (s *stubMessageRepo) FindByID(_ context.Context, teamID, id uuid.UUID) (*Message, error) {
+	for _, m := range s.byWAMID {
+		if m != nil && m.TeamID == teamID && m.ID == id {
+			return m, nil
+		}
+	}
+	for _, m := range s.byKey {
+		if m != nil && m.TeamID == teamID && m.ID == id {
+			return m, nil
+		}
+	}
 	return nil, repository.ErrNotFound
 }
 func (s *stubMessageRepo) FindByWAMID(_ context.Context, wamid string) (*Message, error) {
@@ -73,5 +83,32 @@ func TestResolveReplyTarget_WAToWAContext(t *testing.T) {
 	got := svc.resolveReplyTarget(context.Background(), teamID, conversationID, replyContextWAMID)
 	if got == nil || *got != originalID {
 		t.Fatalf("resolveReplyTarget() = %v, want %v", got, originalID)
+	}
+}
+
+func TestResolveOutboundReplyMID_FromMessageID(t *testing.T) {
+	teamID := uuid.New()
+	conversationID := uuid.New()
+	targetID := uuid.New()
+	fullMID := "aWdfZAG1faXRlbToxOklHMessageFullMIDExample1234567890"
+
+	repo := &stubMessageRepo{
+		byWAMID: map[string]*Message{
+			fullMID: {
+				ID:             targetID,
+				TeamID:         teamID,
+				ConversationID: conversationID,
+				WAMID:          &fullMID,
+			},
+		},
+	}
+	svc := &Service{messages: repo}
+
+	got := svc.resolveOutboundReplyMID(context.Background(), teamID, conversationID, SendInput{
+		ReplyToMessageID: &targetID,
+		ReplyToWAMID:     "3B2BFF4E507D3A92AAFE",
+	})
+	if got != fullMID {
+		t.Fatalf("resolveOutboundReplyMID() = %q, want %q", got, fullMID)
 	}
 }

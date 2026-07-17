@@ -254,12 +254,14 @@ func ContentTypeFromMeta(messageType string) ContentType {
 		return ContentVideo
 	case "audio":
 		return ContentAudio
-	case "document":
+	case "document", "file":
 		return ContentDocument
 	case "template":
 		return ContentTemplate
 	case "sticker":
 		return ContentImage
+	case "story_mention", "story_reply", "ig_reel", "reel", "share", "ig_post", "ig_story":
+		return ContentOther
 	default:
 		return ContentOther
 	}
@@ -273,6 +275,45 @@ func ExtractTextContent(messageType string, raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &instagramText); err == nil && strings.TrimSpace(instagramText.Text) != "" {
 		return instagramText.Text
 	}
+	var instagramReply struct {
+		ReplyTo *struct {
+			Story *struct {
+				ID  string `json:"id"`
+				URL string `json:"url"`
+			} `json:"story"`
+			MID string `json:"mid"`
+		} `json:"reply_to"`
+	}
+	if err := json.Unmarshal(raw, &instagramReply); err == nil && instagramReply.ReplyTo != nil && instagramReply.ReplyTo.Story != nil {
+		return "Replied to a story"
+	}
+	var instagramAttachment struct {
+		Attachments []struct {
+			Type    string `json:"type"`
+			Payload struct {
+				URL           string `json:"url"`
+				Title         string `json:"title"`
+				StoryMediaURL string `json:"story_media_url"`
+			} `json:"payload"`
+		} `json:"attachments"`
+	}
+	if err := json.Unmarshal(raw, &instagramAttachment); err == nil {
+		for _, attachment := range instagramAttachment.Attachments {
+			switch strings.ToLower(strings.TrimSpace(attachment.Type)) {
+			case "story_mention":
+				return "Mentioned your story"
+			case "ig_story":
+				return "Shared a story"
+			case "ig_reel", "reel":
+				return "Shared a reel"
+			case "ig_post", "share":
+				if title := strings.TrimSpace(attachment.Payload.Title); title != "" {
+					return "Shared a post\n" + title
+				}
+				return "Shared a post"
+			}
+		}
+	}
 
 	switch strings.ToLower(strings.TrimSpace(messageType)) {
 	case "text":
@@ -284,13 +325,14 @@ func ExtractTextContent(messageType string, raw json.RawMessage) string {
 		if err := json.Unmarshal(raw, &body); err == nil && body.Text.Body != "" {
 			return body.Text.Body
 		}
-	case "image", "video", "audio", "document", "sticker":
+	case "image", "video", "audio", "document", "file", "sticker":
 		var media struct {
 			Image    *struct{ Caption string `json:"caption"` } `json:"image"`
 			Video    *struct{ Caption string `json:"caption"` } `json:"video"`
 			Audio    *struct{} `json:"audio"`
 			Document *struct{ Caption string `json:"caption"`; Filename string `json:"filename"` } `json:"document"`
 			Sticker  *struct{} `json:"sticker"`
+			File     *struct{ Url string `json:"url"` } `json:"file"`
 		}
 		if err := json.Unmarshal(raw, &media); err == nil {
 			switch messageType {
@@ -309,6 +351,10 @@ func ExtractTextContent(messageType string, raw json.RawMessage) string {
 					}
 					return media.Document.Filename
 				}
+			case "file":
+				if media.File != nil {
+					return "File"
+				}
 			}
 		}
 	case "location":
@@ -326,6 +372,16 @@ func ExtractTextContent(messageType string, raw json.RawMessage) string {
 		}
 	case "contacts":
 		return "Contact shared"
+	case "story_mention":
+		return "Mentioned your story"
+	case "story_reply":
+		return "Replied to a story"
+	case "ig_story":
+		return "Shared a story"
+	case "ig_reel", "reel":
+		return "Shared a reel"
+	case "ig_post", "share":
+		return "Shared a post"
 	}
 	return previewForType(ContentTypeFromMeta(messageType))
 }
