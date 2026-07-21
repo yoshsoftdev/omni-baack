@@ -229,7 +229,12 @@ func (m *createTestChannelRepo) FindByID(_ context.Context, teamID, id uuid.UUID
 	if teamID != m.teamID || id != m.channelID {
 		return nil, repository.ErrNotFound
 	}
-	return &channel.Channel{ID: id, TeamID: teamID, Status: channel.StatusConnected}, nil
+	return &channel.Channel{
+		ID:          id,
+		TeamID:      teamID,
+		Status:      channel.StatusConnected,
+		ChannelType: channel.TypeWhatsApp,
+	}, nil
 }
 func (m *createTestChannelRepo) FindOnboarding(_ context.Context, channelID uuid.UUID) (*channel.Onboarding, error) {
 	if channelID != m.channelID {
@@ -260,6 +265,15 @@ func (m *createTestChannelRepo) FindByPhoneNumberID(context.Context, string) (*c
 	return nil, repository.ErrNotFound
 }
 func (m *createTestChannelRepo) FindByWABAID(context.Context, string) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
+func (m *createTestChannelRepo) FindByIGUserID(context.Context, uuid.UUID, string) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
+func (m *createTestChannelRepo) FindByIGUserIDGlobal(context.Context, string) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
+func (m *createTestChannelRepo) FindConnectedByType(context.Context, uuid.UUID, channel.ChannelType) (*channel.Channel, error) {
 	return nil, repository.ErrNotFound
 }
 func (m *createTestChannelRepo) UpdateHealthMetadata(context.Context, uuid.UUID, []byte) error { return nil }
@@ -339,6 +353,12 @@ func (createTestRbacRepo) ListPermissionsByRoleID(context.Context, uuid.UUID) ([
 }
 func (createTestRbacRepo) GetPermissionMatrix(context.Context) ([]rbac.PermissionMatrixRow, error) {
 	return nil, nil
+}
+func (createTestRbacRepo) CreateRole(context.Context, *rbac.Role) error { return nil }
+func (createTestRbacRepo) UpdateRole(context.Context, *rbac.Role) error { return nil }
+func (createTestRbacRepo) SoftDeleteRole(context.Context, uuid.UUID) error { return nil }
+func (createTestRbacRepo) ReplaceRolePermissions(context.Context, uuid.UUID, []string) error {
+	return nil
 }
 
 func testCampaignRBAC(t *testing.T) *rbac.Service {

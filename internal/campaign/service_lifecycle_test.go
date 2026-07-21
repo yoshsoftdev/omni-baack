@@ -130,6 +130,12 @@ func (lifecycleRbacRepo) ListPermissionsByRoleID(context.Context, uuid.UUID) ([]
 func (lifecycleRbacRepo) GetPermissionMatrix(context.Context) ([]rbac.PermissionMatrixRow, error) {
 	return nil, nil
 }
+func (lifecycleRbacRepo) CreateRole(context.Context, *rbac.Role) error { return nil }
+func (lifecycleRbacRepo) UpdateRole(context.Context, *rbac.Role) error { return nil }
+func (lifecycleRbacRepo) SoftDeleteRole(context.Context, uuid.UUID) error { return nil }
+func (lifecycleRbacRepo) ReplaceRolePermissions(context.Context, uuid.UUID, []string) error {
+	return nil
+}
 
 func lifecycleTestRBAC(t *testing.T) *rbac.Service {
 	t.Helper()

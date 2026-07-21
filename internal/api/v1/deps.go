@@ -20,6 +20,7 @@ type Deps struct {
 	Provider             *handler.ProviderHandler
 	Segment              *handler.SegmentHandler
 	Tag                  *handler.TagHandler
+	QuickReply           *handler.QuickReplyHandler
 	Campaign             *handler.CampaignHandler
 	Operations           *handler.OperationsHandler
 	Report               *handler.ReportHandler

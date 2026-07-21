@@ -42,11 +42,13 @@ type SendResult struct {
 
 // Sender renders variables and calls Meta Cloud API.
 type Sender struct {
-	meta     MetaSender
-	channels ChannelStore
-	cipher   *cryptoutil.TokenCipher
-	metrics  *Metrics
-	log      *slog.Logger
+	meta          MetaSender
+	channels      ChannelStore
+	cipher        *cryptoutil.TokenCipher
+	metrics       *Metrics
+	log           *slog.Logger
+	storage       campaign.HeaderStorageDownloader
+	mediaUploader campaign.HeaderMediaUploader
 }
 
 func NewSender(meta MetaSender, channels ChannelStore, cipher *cryptoutil.TokenCipher, metrics *Metrics, log *slog.Logger) *Sender {
@@ -54,6 +56,16 @@ func NewSender(meta MetaSender, channels ChannelStore, cipher *cryptoutil.TokenC
 		log = slog.Default()
 	}
 	return &Sender{meta: meta, channels: channels, cipher: cipher, metrics: metrics, log: log}
+}
+
+// WithHeaderMediaResolver configures storage-backed header media resolution for template sends.
+func (s *Sender) WithHeaderMediaResolver(
+	storage campaign.HeaderStorageDownloader,
+	uploader campaign.HeaderMediaUploader,
+) *Sender {
+	s.storage = storage
+	s.mediaUploader = uploader
+	return s
 }
 
 func (s *Sender) Send(ctx context.Context, in SendInput) (*SendResult, error) {
@@ -83,6 +95,32 @@ func (s *Sender) Send(ctx context.Context, in SendInput) (*SendResult, error) {
 		contactEntity = &contact.Contact{ContactName: "", CustomerName: "", Phone: in.Recipient.Phone}
 	}
 
+	creds, err := s.channels.FindCredentials(ctx, in.Channel.ID)
+	if err != nil {
+		return nil, err
+	}
+	token, err := s.cipher.Decrypt(creds.AccessTokenEnc)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt channel token: %w", err)
+	}
+
+	mapping, err = campaign.ResolveHeaderMediaForSend(
+		ctx,
+		mapping,
+		in.Template,
+		in.Campaign.TeamID,
+		*in.Channel.PhoneNumberID,
+		token,
+		s.storage,
+		s.mediaUploader,
+	)
+	if err != nil {
+		if s.metrics != nil {
+			s.metrics.IncTemplateRenderFailed(in.Channel.ID)
+		}
+		return nil, err
+	}
+
 	components, err := campaign.RenderValidatedTemplate(in.Template, mapping, contactEntity, samples)
 	if err != nil {
 		if campaign.IsSendValidationError(err) {
@@ -100,15 +138,6 @@ func (s *Sender) Send(ctx context.Context, in SendInput) (*SendResult, error) {
 	if s.metrics != nil {
 		s.metrics.IncTemplateRenderSuccess(in.Channel.ID)
 		recordMediaSendMetrics(s.metrics, in.Channel.ID, mapping)
-	}
-
-	creds, err := s.channels.FindCredentials(ctx, in.Channel.ID)
-	if err != nil {
-		return nil, err
-	}
-	token, err := s.cipher.Decrypt(creds.AccessTokenEnc)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt channel token: %w", err)
 	}
 
 	sendStart := time.Now()

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
+	"github.com/omnichannel/omni-chan-v2/internal/storageclient"
 	"github.com/omnichannel/omni-chan-v2/pkg/cryptoutil"
 	metapkg "github.com/omnichannel/omni-chan-v2/pkg/meta"
 	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
@@ -22,6 +24,19 @@ type MetaTemplatePageLister interface {
 	ListMessageTemplatesPage(ctx context.Context, wabaID, accessToken, after string) ([]metapkg.MessageTemplate, string, error)
 }
 
+type headerMediaDownloader interface {
+	Download(ctx context.Context, teamID, objectID uuid.UUID) (io.ReadCloser, *storageclient.StoredObject, error)
+}
+
+type resumableMediaUploader interface {
+	UploadResumableMedia(
+		ctx context.Context,
+		appID, accessToken, fileName, mimeType string,
+		body io.Reader,
+		sizeBytes int64,
+	) (string, error)
+}
+
 // SyncService pulls templates from Meta with pagination, retry, drift detection, and audit trail.
 type SyncService struct {
 	meta     MetaTemplatePageLister
@@ -30,6 +45,8 @@ type SyncService struct {
 	syncRuns SyncRunRepository
 	cipher   *cryptoutil.TokenCipher
 	log      *slog.Logger
+	appID    string
+	storage  headerMediaDownloader
 }
 
 func NewSyncService(
@@ -51,6 +68,18 @@ func NewSyncService(
 		cipher:    cipher,
 		log:       log,
 	}
+}
+
+// WithAppID configures Meta App ID used for resumable media uploads (template headers).
+func (s *SyncService) WithAppID(appID string) *SyncService {
+	s.appID = strings.TrimSpace(appID)
+	return s
+}
+
+// WithStorage configures storage-service download for converting object ids to Meta header handles.
+func (s *SyncService) WithStorage(storage headerMediaDownloader) *SyncService {
+	s.storage = storage
+	return s
 }
 
 type SyncResult struct {

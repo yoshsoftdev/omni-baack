@@ -204,27 +204,12 @@ func (r *AudienceResolver) collectRecipients(
 				}
 			}
 		case campaign.AudienceSegment:
-			page := repository.PageParams{Page: 1, PageSize: r.chunkSize}
-			for {
-				ids, total, err := r.segments.ListMemberContactIDs(ctx, aud.SourceID, page)
-				if err != nil {
-					return resolveResult{}, err
-				}
-				batch, err := r.contacts.ListByIDs(ctx, camp.TeamID, ids)
-				if err != nil {
-					return resolveResult{}, err
-				}
-				for _, c := range batch {
-					if _, ok := seen[c.ID]; !ok {
-						seen[c.ID] = struct{}{}
-						contacts = append(contacts, c)
-					}
-				}
-				if int64(page.Page*page.PageSize) >= total || len(ids) == 0 {
-					break
-				}
-				page.Page++
-			}
+			// Legacy campaigns may still reference segments; skip resolving them.
+			r.log.Warn("skipping legacy segment audience source",
+				"campaign_id", camp.ID.String(),
+				"source_id", aud.SourceID.String(),
+			)
+			continue
 		}
 	}
 
@@ -268,14 +253,29 @@ func classifyContact(c contact.Contact) (campaign.RecipientStatus, skipReason) {
 	if c.MarketingStatus == contact.MarketingUnsubscribed {
 		return campaign.RecipientSkipped, skipOptOut
 	}
-	if !isValidPhone(c.Phone) {
+	if !isWhatsAppEligibleContact(c) {
 		return campaign.RecipientSkipped, skipInvalid
 	}
 	return campaign.RecipientPending, skipNone
 }
 
-func isValidPhone(phone string) bool {
+// isWhatsAppEligibleContact rejects Instagram-only / synthetic phones that cannot receive WA templates.
+func isWhatsAppEligibleContact(c contact.Contact) bool {
+	if c.Source == contact.SourceInstagram {
+		return false
+	}
+	return isValidWhatsAppPhone(c.Phone)
+}
+
+func isValidWhatsAppPhone(phone string) bool {
 	phone = strings.TrimSpace(phone)
+	if phone == "" {
+		return false
+	}
+	lower := strings.ToLower(phone)
+	if strings.HasPrefix(lower, "ig:") {
+		return false
+	}
 	if len(phone) < 8 {
 		return false
 	}

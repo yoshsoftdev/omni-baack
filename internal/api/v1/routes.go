@@ -116,6 +116,7 @@ func Register(router fiber.Router, deps Deps) {
 	if deps.Template != nil {
 		templates := protected.Group("/templates")
 		templates.Get("/", deps.Template.List)
+		templates.Post("/", deps.Template.Create)
 		templates.Get("/sync/history", deps.Template.SyncHistory)
 		templates.Get("/sync/history/:id", deps.Template.GetSyncHistory)
 		templates.Post("/sync", deps.Template.Sync)
@@ -170,6 +171,15 @@ func Register(router fiber.Router, deps Deps) {
 		tags.Delete("/:id", deps.Tag.Delete)
 		tags.Post("/:id/contacts/:contact_id", deps.Tag.Assign)
 		tags.Delete("/:id/contacts/:contact_id", deps.Tag.Unassign)
+	}
+
+	if deps.QuickReply != nil {
+		quickReplies := protected.Group("/quick-replies")
+		quickReplies.Get("/", deps.QuickReply.List)
+		quickReplies.Post("/", deps.QuickReply.Create)
+		quickReplies.Get("/:id", deps.QuickReply.Get)
+		quickReplies.Patch("/:id", deps.QuickReply.Update)
+		quickReplies.Delete("/:id", deps.QuickReply.Delete)
 	}
 
 	if deps.Campaign != nil {

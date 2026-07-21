@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
+	"github.com/omnichannel/omni-chan-v2/internal/storageclient"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 	"github.com/omnichannel/omni-chan-v2/pkg/broadcastcancel"
 	"github.com/omnichannel/omni-chan-v2/pkg/cryptoutil"
@@ -74,6 +76,10 @@ func main() {
 	metrics := worker.NewMetrics()
 	metrics.IncWorkerRestart()
 	sender := worker.NewSender(metaClient, channelRepo, tokenCipher, metrics, slogLog)
+	if strings.TrimSpace(cfg.StorageService.URL) != "" {
+		storageClient := storageclient.New(cfg.StorageService.URL, cfg.NATS.InternalToken)
+		sender = sender.WithHeaderMediaResolver(storageClient, metaClient)
+	}
 
 	localLimiter := worker.NewMemoryRateLimiter(workerCfg.RateLimitPerSec)
 	var redisCLI *redisclient.Client

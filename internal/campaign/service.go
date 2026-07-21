@@ -150,10 +150,9 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 		variableMapping = json.RawMessage(`{}`)
 	}
 
-	audiences := buildAudiences(campaignID, input.Audiences, input.SegmentID, now)
+	audiences := buildAudiences(campaignID, input.Audiences, now)
 	sourceSummary, _ := json.Marshal(map[string]any{
 		"audiences": audiences,
-		"segment_id": input.SegmentID,
 	})
 
 	initialStatus := StatusDraft
@@ -166,7 +165,7 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 		TeamID:          teamID,
 		ChannelID:       input.ChannelID,
 		TemplateID:      input.TemplateID,
-		SegmentID:       input.SegmentID,
+		SegmentID:       nil,
 		Name:            strings.TrimSpace(input.Name),
 		Description:     input.Description,
 		Status:          initialStatus,
@@ -294,10 +293,7 @@ func (s *Service) Update(ctx context.Context, teamID, userID uuid.UUID, actorRol
 		c.ScheduledAt = input.ScheduledAt
 	}
 	if input.SegmentID != nil {
-		if err := validateSegmentExists(ctx, s.segments, teamID, *input.SegmentID); err != nil {
-			return nil, err
-		}
-		c.SegmentID = input.SegmentID
+		return nil, serviceerrors.NewValidation("segment_id", "segment audiences are no longer supported; use tags or contact_ids")
 	}
 	c.UpdatedAt = time.Now().UTC()
 
@@ -329,12 +325,10 @@ func (s *Service) validateCreateInput(ctx context.Context, teamID uuid.UUID, inp
 		return err
 	}
 	if input.SegmentID != nil {
-		if err := validateSegmentExists(ctx, s.segments, teamID, *input.SegmentID); err != nil {
-			return err
-		}
+		return serviceerrors.NewValidation("segment_id", "segment audiences are no longer supported; use tags or contact_ids")
 	}
-	if len(input.Audiences) == 0 && input.SegmentID == nil {
-		return serviceerrors.NewValidation("audiences", "segment or audience sources are required")
+	if len(input.Audiences) == 0 {
+		return serviceerrors.NewValidation("audiences", "tag_ids or contact_ids are required")
 	}
 	for _, a := range input.Audiences {
 		if err := validateAudienceSource(a); err != nil {
@@ -363,30 +357,25 @@ func validateSendMode(mode SendMode, scheduledAt *time.Time) error {
 
 func validateAudienceSource(a AudienceInput) error {
 	switch a.SourceType {
-	case AudienceSegment, AudienceTag, AudienceContact:
+	case AudienceTag, AudienceContact:
 		if a.SourceID == uuid.Nil {
 			return serviceerrors.NewValidation("audiences.source_id", "is required")
 		}
 		return nil
+	case AudienceSegment:
+		return serviceerrors.NewValidation("audiences", "segment audiences are no longer supported; use tags or contact_ids")
 	default:
 		return serviceerrors.NewValidation("audiences.source_type", "invalid value")
 	}
 }
 
-func buildAudiences(campaignID uuid.UUID, inputs []AudienceInput, segmentID *uuid.UUID, now time.Time) []Audience {
-	audiences := make([]Audience, 0, len(inputs)+1)
+func buildAudiences(campaignID uuid.UUID, inputs []AudienceInput, now time.Time) []Audience {
+	audiences := make([]Audience, 0, len(inputs))
 	seen := map[string]struct{}{}
-	if segmentID != nil {
-		audiences = append(audiences, Audience{
-			ID:         uuid.New(),
-			CampaignID: campaignID,
-			SourceType: AudienceSegment,
-			SourceID:   *segmentID,
-			CreatedAt:  now,
-		})
-		seen["segment:"+segmentID.String()] = struct{}{}
-	}
 	for _, in := range inputs {
+		if in.SourceType == AudienceSegment {
+			continue
+		}
 		key := string(in.SourceType) + ":" + in.SourceID.String()
 		if _, ok := seen[key]; ok {
 			continue

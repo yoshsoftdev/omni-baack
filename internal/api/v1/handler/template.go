@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/api/v1/dto"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
@@ -15,6 +17,15 @@ type TemplateHandler struct {
 
 func NewTemplateHandler(svc *template.Service) *TemplateHandler {
 	return &TemplateHandler{svc: svc}
+}
+
+type createTemplateRequest struct {
+	DeviceID   string          `json:"device_id"`
+	ChannelID  string          `json:"channel_id"`
+	Name       string          `json:"name"`
+	Language   string          `json:"language"`
+	Category   string          `json:"category"`
+	Components json.RawMessage `json:"components"`
 }
 
 func (h *TemplateHandler) List(c *fiber.Ctx) error {
@@ -60,6 +71,38 @@ func (h *TemplateHandler) Get(c *fiber.Ctx) error {
 		return mapError(c, err)
 	}
 	return response.OK(c, "ok", tpl)
+}
+
+func (h *TemplateHandler) Create(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	var req createTemplateRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+
+	rawChannelID := strings.TrimSpace(req.ChannelID)
+	if rawChannelID == "" {
+		rawChannelID = strings.TrimSpace(req.DeviceID)
+	}
+	channelID, err := uuid.Parse(rawChannelID)
+	if err != nil {
+		return response.BadRequest(c, "channel_id (or device_id) is required")
+	}
+
+	tpl, err := h.svc.Create(c.Context(), actor.TeamID, actor.UserID, actor.Role, template.CreateInput{
+		ChannelID:  channelID,
+		Name:       req.Name,
+		Language:   req.Language,
+		Category:   req.Category,
+		Components: req.Components,
+	})
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.Created(c, "template submitted to Meta for review", tpl)
 }
 
 func (h *TemplateHandler) Sync(c *fiber.Ctx) error {

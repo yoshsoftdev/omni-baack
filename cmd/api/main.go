@@ -34,6 +34,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/operations"
 	"github.com/omnichannel/omni-chan-v2/internal/provider"
 	"github.com/omnichannel/omni-chan-v2/internal/quota"
+	"github.com/omnichannel/omni-chan-v2/internal/quickreply"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/report"
 	"github.com/omnichannel/omni-chan-v2/internal/segment"
@@ -131,7 +132,10 @@ func main() {
 		os.Exit(1)
 	}
 	syncRunRepo := template.NewInMemorySyncRunRepository()
-	metaSyncService := template.NewSyncService(metaClient, channelRepo, templateRepo, syncRunRepo, tokenCipher, log.Logger)
+	storageClient := storageclient.New(cfg.StorageService.URL, cfg.NATS.InternalToken)
+	metaSyncService := template.NewSyncService(metaClient, channelRepo, templateRepo, syncRunRepo, tokenCipher, log.Logger).
+		WithAppID(cfg.Meta.AppID).
+		WithStorage(storageClient)
 	channelSyncRepo := channelsync.NewRepository(db)
 	metaHealthService := metasvc.NewHealthService(metaAPI, metaClient, channelRepo, tokenCipher, metaSyncService)
 	embeddedSignupSessionRepo := metasvc.NewEmbeddedSignupSessionRepository(db)
@@ -158,6 +162,9 @@ func main() {
 
 	tagRepo := tag.NewRepository(db)
 	tagService := tag.NewService(tagRepo, teamRepo, rbacService)
+
+	quickReplyRepo := quickreply.NewRepository(db)
+	quickReplyService := quickreply.NewService(quickReplyRepo, teamRepo, rbacService)
 
 	contactService := contact.NewService(contactRepo, teamRepo, quotaSvc, rbacService)
 	contactLinkRepo := contact.NewLinkRepository(db)
@@ -195,7 +202,6 @@ func main() {
 
 	messageRepo := message.NewRepository(db)
 	attachmentRepo := message.NewAttachmentRepository(db)
-	storageClient := storageclient.New(cfg.StorageService.URL, cfg.NATS.InternalToken)
 	mediaTokenIssuer := mediatoken.NewIssuer(cfg.MediaProxy.TokenSecret, cfg.MediaProxy.TokenTTL)
 	mediaURLService := message.NewMediaURLService(
 		cfg.MediaProxy.TokenSecret,
@@ -287,6 +293,7 @@ func main() {
 			Provider:             handler.NewProviderHandler(providerService),
 			Segment:              handler.NewSegmentHandler(segmentService),
 			Tag:                  handler.NewTagHandler(tagService),
+			QuickReply:           handler.NewQuickReplyHandler(quickReplyService),
 			Campaign:             handler.NewCampaignHandler(campaignService),
 			Operations:           handler.NewOperationsHandler(operationsService),
 			Report:               handler.NewReportHandler(reportService),

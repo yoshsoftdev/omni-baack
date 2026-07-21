@@ -75,6 +75,15 @@ func (s stubChannelRepo) FindByPhoneNumberID(context.Context, string) (*channel.
 func (s stubChannelRepo) FindByWABAID(context.Context, string) (*channel.Channel, error) {
 	return nil, repository.ErrNotFound
 }
+func (s stubChannelRepo) FindByIGUserID(context.Context, uuid.UUID, string) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
+func (s stubChannelRepo) FindByIGUserIDGlobal(context.Context, string) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
+func (s stubChannelRepo) FindConnectedByType(context.Context, uuid.UUID, channel.ChannelType) (*channel.Channel, error) {
+	return nil, repository.ErrNotFound
+}
 func (s stubChannelRepo) UpdateHealthMetadata(context.Context, uuid.UUID, []byte) error { return nil }
 
 type memoryTemplateRepo struct {

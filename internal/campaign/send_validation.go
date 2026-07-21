@@ -50,6 +50,8 @@ func ValidateTemplateSend(
 		return &SendValidationError{Code: ValidationCodeValidationError, Message: "template is required"}
 	}
 
+	mapping = ApplyTemplateHeaderMediaDefaults(mapping, tpl)
+
 	required, err := metaclient.RequiredTemplateVariables(tpl.Components)
 	if err != nil {
 		return &SendValidationError{Code: ValidationCodeValidationError, Message: err.Error()}
@@ -167,6 +169,7 @@ func RenderValidatedTemplate(
 	contact *contact.Contact,
 	sampleValues map[string]string,
 ) ([]metaclient.TemplateComponent, error) {
+	mapping = ApplyTemplateHeaderMediaDefaults(mapping, tpl)
 	if err := ValidateTemplateSend(tpl, mapping, contact, sampleValues); err != nil {
 		return nil, err
 	}

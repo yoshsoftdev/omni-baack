@@ -6,7 +6,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
-	"github.com/omnichannel/omni-chan-v2/internal/segment"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
@@ -15,6 +14,12 @@ func validateChannelForCampaign(ctx context.Context, channels channel.Repository
 	ch, err := channels.FindByID(ctx, teamID, channelID)
 	if err != nil {
 		return serviceerrors.MapRepository(err)
+	}
+	if ch.ChannelType == channel.TypeInstagram {
+		return serviceerrors.NewValidation("channel_id", "campaigns can only send via WhatsApp channels")
+	}
+	if ch.ChannelType != "" && ch.ChannelType != channel.TypeWhatsApp {
+		return serviceerrors.NewValidation("channel_id", "campaigns can only send via WhatsApp channels")
 	}
 	if ch.Status != channel.StatusConnected {
 		return serviceerrors.NewValidation("channel_id", "channel must be connected")
@@ -44,9 +49,4 @@ func validateTemplateForCampaign(ctx context.Context, templates template.Reposit
 		return serviceerrors.NewValidation("template_id", "template name is required")
 	}
 	return nil
-}
-
-func validateSegmentExists(ctx context.Context, segments segment.Repository, teamID, segmentID uuid.UUID) error {
-	_, _, err := segments.FindByID(ctx, teamID, segmentID)
-	return serviceerrors.MapRepository(err)
 }

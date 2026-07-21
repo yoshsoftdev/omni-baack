@@ -130,22 +130,24 @@ func (h *CampaignHandler) Create(c *fiber.Ctx) error {
 		scheduledAt = &parsed
 		sendMode = campaign.SendLater
 	}
-	audiences := make([]campaign.AudienceInput, 0, len(req.SegmentIDs)+len(req.ContactIDs)+len(req.TagIDs))
-	for _, id := range parseUUIDList(req.SegmentIDs) {
-		audiences = append(audiences, campaign.AudienceInput{SourceType: campaign.AudienceSegment, SourceID: id})
-	}
+	audiences := make([]campaign.AudienceInput, 0, len(req.ContactIDs)+len(req.TagIDs))
 	for _, id := range parseUUIDList(req.ContactIDs) {
 		audiences = append(audiences, campaign.AudienceInput{SourceType: campaign.AudienceContact, SourceID: id})
 	}
 	for _, id := range parseUUIDList(req.TagIDs) {
 		audiences = append(audiences, campaign.AudienceInput{SourceType: campaign.AudienceTag, SourceID: id})
 	}
+	segmentIDs := parseUUIDList(req.SegmentIDs)
+	if len(segmentIDs) > 0 || segmentID != nil {
+		return response.BadRequest(c, "segment audiences are no longer supported; use tag_ids or contact_ids")
+	}
+
 	result, err := h.svc.Create(c.Context(), actor.TeamID, actor.UserID, actor.Role, campaign.CreateInput{
 		Name:            strings.TrimSpace(req.Name),
 		Description:     req.Description,
 		ChannelID:       channelID,
 		TemplateID:      templateID,
-		SegmentID:       segmentID,
+		SegmentID:       nil,
 		Audiences:       audiences,
 		VariableMapping: req.VariableMapping,
 		SampleValues:    req.SampleValues,
@@ -156,7 +158,11 @@ func (h *CampaignHandler) Create(c *fiber.Ctx) error {
 	if err != nil {
 		return mapError(c, err)
 	}
-	return response.Created(c, "campaign created", result)
+	camp, err := h.svc.GetResponse(c.Context(), actor.TeamID, actor.UserID, actor.Role, result.Campaign.ID)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.Created(c, "campaign created", camp)
 }
 
 func (h *CampaignHandler) Update(c *fiber.Ctx) error {
@@ -231,11 +237,14 @@ func (h *CampaignHandler) Send(c *fiber.Ctx) error {
 	if err != nil {
 		return response.BadRequest(c, "invalid campaign id")
 	}
-	result, err := h.svc.Send(c.Context(), actor.TeamID, actor.UserID, actor.Role, id)
+	if _, err := h.svc.Send(c.Context(), actor.TeamID, actor.UserID, actor.Role, id); err != nil {
+		return mapError(c, err)
+	}
+	camp, err := h.svc.GetResponse(c.Context(), actor.TeamID, actor.UserID, actor.Role, id)
 	if err != nil {
 		return mapError(c, err)
 	}
-	return response.OK(c, "campaign queued for send", result)
+	return response.OK(c, "campaign queued for send", camp)
 }
 
 type cancelCampaignRequest struct {

@@ -25,8 +25,11 @@ func TestValidateSendMode(t *testing.T) {
 }
 
 func TestValidateAudienceSource(t *testing.T) {
-	if err := validateAudienceSource(AudienceInput{SourceType: AudienceSegment, SourceID: uuid.New()}); err != nil {
-		t.Fatalf("valid segment audience: %v", err)
+	if err := validateAudienceSource(AudienceInput{SourceType: AudienceTag, SourceID: uuid.New()}); err != nil {
+		t.Fatalf("valid tag audience: %v", err)
+	}
+	if err := validateAudienceSource(AudienceInput{SourceType: AudienceSegment, SourceID: uuid.New()}); err == nil {
+		t.Fatal("expected error for segment audience")
 	}
 	if err := validateAudienceSource(AudienceInput{SourceType: "invalid"}); err == nil {
 		t.Fatal("expected error for invalid source type")

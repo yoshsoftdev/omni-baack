@@ -100,11 +100,11 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 			segmentIDs = append(segmentIDs, id)
 		}
 	}
-
-	audiences := make([]AudienceInput, 0, len(req.ContactIDs)+len(req.TagIDs)+len(segmentIDs))
-	for _, id := range segmentIDs {
-		audiences = append(audiences, AudienceInput{SourceType: AudienceSegment, SourceID: id})
+	if len(segmentIDs) > 0 {
+		return response.BadRequest(c, "segment audiences are no longer supported; use tag_ids or contact_ids")
 	}
+
+	audiences := make([]AudienceInput, 0, len(req.ContactIDs)+len(req.TagIDs))
 	for _, id := range parseUUIDs(req.ContactIDs) {
 		audiences = append(audiences, AudienceInput{SourceType: AudienceContact, SourceID: id})
 	}
