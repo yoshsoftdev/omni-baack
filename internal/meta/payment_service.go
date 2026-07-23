@@ -15,10 +15,19 @@ import (
 const (
 	PaymentStatusConfigured = "configured"
 	PaymentStatusMissing    = "missing"
+	PaymentStatusRestricted = "restricted"
+
+	PaymentMessageMissing = "Metode pembayaran belum dikonfigurasi."
+	PaymentMessageOK      = "Payment OK"
+	PaymentMessageRestricted = "Akun WhatsApp Business sedang dibatasi oleh Meta. Silakan buka WhatsApp Manager untuk melihat dan menyelesaikan masalah."
 )
 
 type PaymentStatusResult struct {
-	Status string `json:"status"`
+	Status             string `json:"status"`
+	Message            string `json:"message"`
+	WABAStatus         string `json:"waba_status,omitempty"`
+	HasPrimaryFunding  bool   `json:"has_primary_funding"`
+	PrimaryFundingID   string `json:"primary_funding_id,omitempty"`
 }
 
 type PaymentLinkResult struct {
@@ -37,14 +46,7 @@ func NewPaymentService(meta MetaClient, channels channel.Repository, cipher *cry
 }
 
 func (s *PaymentService) GetPaymentStatus(ctx context.Context, teamID, channelID uuid.UUID) (*PaymentStatusResult, error) {
-	configured, err := s.channelPaymentConfigured(ctx, teamID, channelID)
-	if err != nil {
-		return nil, err
-	}
-	if configured {
-		return &PaymentStatusResult{Status: PaymentStatusConfigured}, nil
-	}
-	return &PaymentStatusResult{Status: PaymentStatusMissing}, nil
+	return s.inspectChannelPayment(ctx, teamID, channelID)
 }
 
 func (s *PaymentService) GetPaymentLink(ctx context.Context, teamID, channelID uuid.UUID) (*PaymentLinkResult, error) {
@@ -75,7 +77,7 @@ func (s *PaymentService) TeamHasPaymentConfigured(ctx context.Context, teamID uu
 		return false, serviceerrors.MapRepository(err)
 	}
 	for _, ch := range page.Items {
-		ok, err := s.channelPaymentConfigured(ctx, teamID, ch.ID)
+		ok, err := s.ChannelPaymentConfigured(ctx, teamID, ch.ID)
 		if err != nil {
 			return false, err
 		}
@@ -87,33 +89,77 @@ func (s *PaymentService) TeamHasPaymentConfigured(ctx context.Context, teamID uu
 }
 
 func (s *PaymentService) ChannelPaymentConfigured(ctx context.Context, teamID, channelID uuid.UUID) (bool, error) {
-	return s.channelPaymentConfigured(ctx, teamID, channelID)
+	result, err := s.inspectChannelPayment(ctx, teamID, channelID)
+	if err != nil {
+		return false, err
+	}
+	return result.Status == PaymentStatusConfigured, nil
 }
 
 func (s *PaymentService) channelPaymentConfigured(ctx context.Context, teamID, channelID uuid.UUID) (bool, error) {
+	return s.ChannelPaymentConfigured(ctx, teamID, channelID)
+}
+
+func (s *PaymentService) inspectChannelPayment(ctx context.Context, teamID, channelID uuid.UUID) (*PaymentStatusResult, error) {
 	ch, err := s.channels.FindByID(ctx, teamID, channelID)
 	if err != nil {
-		return false, serviceerrors.MapRepository(err)
+		return nil, serviceerrors.MapRepository(err)
 	}
 	if ch.WABAID == nil || strings.TrimSpace(*ch.WABAID) == "" {
-		return false, nil
+		return classifyPaymentStatus("", ""), nil
 	}
 	if s.meta == nil || s.cipher == nil {
-		return false, nil
+		return classifyPaymentStatus("", ""), nil
 	}
 	creds, err := s.channels.FindCredentials(ctx, channelID)
 	if err != nil {
-		return false, nil
+		return classifyPaymentStatus("", ""), nil
 	}
 	token, err := s.cipher.Decrypt(creds.AccessTokenEnc)
 	if err != nil || strings.TrimSpace(token) == "" {
-		return false, nil
+		return classifyPaymentStatus("", ""), nil
 	}
+
 	waba, err := s.meta.GetWABA(ctx, strings.TrimSpace(*ch.WABAID), token)
-	if err != nil {
-		return false, nil
+	if err != nil || waba == nil {
+		return classifyPaymentStatus("", ""), nil
 	}
-	return strings.TrimSpace(waba.PrimaryFundingID) != "", nil
+	return classifyPaymentStatus(waba.PrimaryFundingID, waba.Status), nil
+}
+
+// classifyPaymentStatus maps Meta WABA fields to payment UI state.
+// GET /{WABA_ID}?fields=primary_funding_id,status
+func classifyPaymentStatus(primaryFundingID, wabaStatus string) *PaymentStatusResult {
+	fundingID := strings.TrimSpace(primaryFundingID)
+	status := strings.TrimSpace(wabaStatus)
+	hasFunding := fundingID != ""
+
+	result := &PaymentStatusResult{
+		WABAStatus:        status,
+		HasPrimaryFunding: hasFunding,
+	}
+	if hasFunding {
+		result.PrimaryFundingID = fundingID
+	}
+
+	if isWABARestricted(status) {
+		result.Status = PaymentStatusRestricted
+		result.Message = PaymentMessageRestricted
+		return result
+	}
+	if !hasFunding {
+		result.Status = PaymentStatusMissing
+		result.Message = PaymentMessageMissing
+		return result
+	}
+	result.Status = PaymentStatusConfigured
+	result.Message = PaymentMessageOK
+	return result
+}
+
+func isWABARestricted(status string) bool {
+	normalized := strings.ToUpper(strings.TrimSpace(status))
+	return normalized == "RESTRICTED"
 }
 
 func defaultPaymentSetupURL(ch *channel.Channel) string {

@@ -56,5 +56,47 @@ func TestPaymentStatusConstants(t *testing.T) {
 	if PaymentStatusConfigured == PaymentStatusMissing {
 		t.Fatal("payment status constants must differ")
 	}
+	if PaymentStatusRestricted == PaymentStatusConfigured {
+		t.Fatal("restricted must differ from configured")
+	}
 	_ = uuid.Nil
+}
+
+func TestClassifyPaymentStatus(t *testing.T) {
+	t.Run("missing funding", func(t *testing.T) {
+		got := classifyPaymentStatus("", "ACTIVE")
+		if got.Status != PaymentStatusMissing || got.Message != PaymentMessageMissing {
+			t.Fatalf("got %+v", got)
+		}
+		if got.HasPrimaryFunding {
+			t.Fatal("expected no funding")
+		}
+	})
+
+	t.Run("payment ok", func(t *testing.T) {
+		got := classifyPaymentStatus("funding-1", "ACTIVE")
+		if got.Status != PaymentStatusConfigured || got.Message != PaymentMessageOK {
+			t.Fatalf("got %+v", got)
+		}
+		if !got.HasPrimaryFunding || got.PrimaryFundingID != "funding-1" {
+			t.Fatalf("funding fields = %+v", got)
+		}
+	})
+
+	t.Run("restricted overrides funding", func(t *testing.T) {
+		got := classifyPaymentStatus("funding-1", "RESTRICTED")
+		if got.Status != PaymentStatusRestricted || got.Message != PaymentMessageRestricted {
+			t.Fatalf("got %+v", got)
+		}
+		if got.WABAStatus != "RESTRICTED" {
+			t.Fatalf("waba status = %q", got.WABAStatus)
+		}
+	})
+
+	t.Run("restricted case insensitive", func(t *testing.T) {
+		got := classifyPaymentStatus("", "restricted")
+		if got.Status != PaymentStatusRestricted {
+			t.Fatalf("got %+v", got)
+		}
+	})
 }

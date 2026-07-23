@@ -57,3 +57,30 @@ func TestIsValidTemplateName(t *testing.T) {
 		t.Fatal("expected invalid")
 	}
 }
+
+func TestStripMetaInternalExampleFieldsRemovesStorageObjectID(t *testing.T) {
+	raw := json.RawMessage(`[
+		{"type":"HEADER","format":"IMAGE","example":{"header_handle":["4::abc"],"storage_object_id":["11111111-1111-1111-1111-111111111111"]}},
+		{"type":"BODY","text":"Hi"}
+	]`)
+	out, err := stripMetaInternalExampleFields(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var items []map[string]any
+	if err := json.Unmarshal(out, &items); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	example, _ := items[0]["example"].(map[string]any)
+	if example == nil {
+		t.Fatal("expected header example")
+	}
+	if _, ok := example["storage_object_id"]; ok {
+		t.Fatal("storage_object_id must not be sent to Meta")
+	}
+	handles, _ := example["header_handle"].([]any)
+	if len(handles) != 1 || handles[0] != "4::abc" {
+		t.Fatalf("header_handle = %#v", handles)
+	}
+}

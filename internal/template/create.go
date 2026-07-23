@@ -84,6 +84,10 @@ func (s *SyncService) CreateOnMeta(
 	if err != nil {
 		return nil, err
 	}
+	metaComponents, err := stripMetaInternalExampleFields(components)
+	if err != nil {
+		return nil, serviceerrors.NewValidation("components", "failed to prepare components for Meta")
+	}
 
 	wabaID := stringValue(ch.WABAID)
 	var created *metapkg.CreateTemplateResponse
@@ -93,7 +97,7 @@ func (s *SyncService) CreateOnMeta(
 			Name:       name,
 			Language:   language,
 			Category:   category,
-			Components: components,
+			Components: metaComponents,
 		})
 		return retryErr
 	})
@@ -205,6 +209,30 @@ func (s *SyncService) resolveStorageHeaderHandles(
 		return nil, serviceerrors.NewValidation("components", "failed to rewrite media header handles")
 	}
 	return out, nil
+}
+
+// stripMetaInternalExampleFields removes app-only keys from component examples before Meta API calls.
+func stripMetaInternalExampleFields(components json.RawMessage) (json.RawMessage, error) {
+	var items []map[string]any
+	if err := json.Unmarshal(components, &items); err != nil {
+		return nil, err
+	}
+	changed := false
+	for _, item := range items {
+		example, _ := item["example"].(map[string]any)
+		if example == nil {
+			continue
+		}
+		if _, ok := example["storage_object_id"]; ok {
+			delete(example, "storage_object_id")
+			item["example"] = example
+			changed = true
+		}
+	}
+	if !changed {
+		return components, nil
+	}
+	return json.Marshal(items)
 }
 
 func (s *SyncService) uploadStorageObjectAsHeaderHandle(
