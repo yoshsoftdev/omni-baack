@@ -13,6 +13,8 @@ type MetaClient interface {
 	GetPhoneNumbers(ctx context.Context, wabaID, accessToken string) ([]PhoneNumber, error)
 	GetPhoneNumber(ctx context.Context, phoneNumberID, accessToken string) (*PhoneNumber, error)
 	GetWABA(ctx context.Context, wabaID, accessToken string) (*WABA, error)
+	GetWABAPrimaryFunding(ctx context.Context, wabaID, accessToken string) (string, error)
+	GetWABAHealthStatus(ctx context.Context, wabaID, accessToken string) (*metapkg.WABAHealthStatus, error)
 	GetBusiness(ctx context.Context, businessID, accessToken string) (*Business, error)
 	Ping(ctx context.Context, accessToken string) error
 	ExchangeEmbeddedCode(ctx context.Context, appID, appSecret, code string) (*TokenResponse, error)
@@ -52,6 +54,14 @@ func (c *GraphClient) GetPhoneNumber(ctx context.Context, phoneNumberID, accessT
 
 func (c *GraphClient) GetWABA(ctx context.Context, wabaID, accessToken string) (*WABA, error) {
 	return c.inner.GetWABA(ctx, wabaID, accessToken)
+}
+
+func (c *GraphClient) GetWABAPrimaryFunding(ctx context.Context, wabaID, accessToken string) (string, error) {
+	return c.inner.GetWABAPrimaryFunding(ctx, wabaID, accessToken)
+}
+
+func (c *GraphClient) GetWABAHealthStatus(ctx context.Context, wabaID, accessToken string) (*metapkg.WABAHealthStatus, error) {
+	return c.inner.GetWABAHealthStatus(ctx, wabaID, accessToken)
 }
 
 func (c *GraphClient) GetBusiness(ctx context.Context, businessID, accessToken string) (*Business, error) {

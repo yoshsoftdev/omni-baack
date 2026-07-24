@@ -121,6 +121,7 @@ func Register(router fiber.Router, deps Deps) {
 		templates.Get("/sync/history/:id", deps.Template.GetSyncHistory)
 		templates.Post("/sync", deps.Template.Sync)
 		templates.Get("/:id", deps.Template.Get)
+		templates.Delete("/:id", deps.Template.Delete)
 	}
 
 	if deps.Contact != nil {

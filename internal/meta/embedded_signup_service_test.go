@@ -202,6 +202,12 @@ func (m *mockMetaClient) GetPhoneNumber(context.Context, string, string) (*metas
 	return &metasvc.PhoneNumber{ID: "phone-1", DisplayPhoneNumber: "+123"}, nil
 }
 func (m *mockMetaClient) GetWABA(context.Context, string, string) (*metasvc.WABA, error) { return nil, nil }
+func (m *mockMetaClient) GetWABAPrimaryFunding(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (m *mockMetaClient) GetWABAHealthStatus(context.Context, string, string) (*metapkg.WABAHealthStatus, error) {
+	return &metapkg.WABAHealthStatus{CanSendMessage: "AVAILABLE"}, nil
+}
 func (m *mockMetaClient) GetBusiness(context.Context, string, string) (*metasvc.Business, error) {
 	return &metasvc.Business{ID: "biz-1"}, nil
 }

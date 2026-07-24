@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	sharedevents "github.com/omnichannel/omni-chan-v2/shared/events"
@@ -34,21 +35,42 @@ func (c *Consumer) Subscribe(ctx context.Context, nc *nats.Conn) error {
 	if err != nil {
 		return err
 	}
-	_, err = js.AddConsumer(c.stream, &nats.ConsumerConfig{
-		Durable:       c.durable,
-		FilterSubject: sharedevents.SubjectBroadcastBatchSend,
-		AckPolicy:     nats.AckExplicitPolicy,
-	})
-	if err != nil && err != nats.ErrConsumerNameAlreadyInUse {
-		c.log.Warn("add consumer", "error", err)
+	// PullSubscribe matches JetStream durable pull consumers (default when no DeliverSubject).
+	sub, err := js.PullSubscribe(
+		sharedevents.SubjectBroadcastBatchSend,
+		c.durable,
+		nats.BindStream(c.stream),
+		nats.ManualAck(),
+	)
+	if err != nil {
+		return err
 	}
-	_, err = js.Subscribe(sharedevents.SubjectBroadcastBatchSend, func(msg *nats.Msg) {
-		if err := c.processor.HandleRaw(ctx, msg.Data); err != nil {
-			c.log.Error("batch send failed", "error", err)
-			_ = msg.Nak()
-			return
+	c.log.Info("broadcast batch.send subscriber started", "stream", c.stream, "consumer", c.durable)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			msgs, err := sub.Fetch(10, nats.MaxWait(2*time.Second))
+			if err != nil {
+				if err == nats.ErrTimeout || err == context.Canceled || err == context.DeadlineExceeded {
+					continue
+				}
+				c.log.Error("batch.send fetch failed", "error", err)
+				continue
+			}
+			for _, msg := range msgs {
+				if err := c.processor.HandleRaw(ctx, msg.Data); err != nil {
+					c.log.Error("batch send failed", "error", err)
+					_ = msg.Nak()
+					continue
+				}
+				_ = msg.Ack()
+			}
 		}
-		_ = msg.Ack()
-	}, nats.Bind(c.stream, c.durable))
-	return err
+	}()
+	return nil
 }

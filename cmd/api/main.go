@@ -137,9 +137,9 @@ func main() {
 		WithAppID(cfg.Meta.AppID).
 		WithStorage(storageClient)
 	channelSyncRepo := channelsync.NewRepository(db)
-	metaHealthService := metasvc.NewHealthService(metaAPI, metaClient, channelRepo, tokenCipher, metaSyncService)
+	metaHealthService := metasvc.NewHealthService(metaAPI, metaClient, channelRepo, tokenCipher, metaSyncService, log.Logger)
 	embeddedSignupSessionRepo := metasvc.NewEmbeddedSignupSessionRepository(db)
-	paymentService := metasvc.NewPaymentService(metaAPI, channelRepo, tokenCipher, cfg.Meta)
+	paymentService := metasvc.NewPaymentService(metaAPI, channelRepo, tokenCipher, cfg.Meta, log.Logger)
 
 	workspaceService := workspace.NewService(
 		teamRepo, quotaSvc, rbacService,

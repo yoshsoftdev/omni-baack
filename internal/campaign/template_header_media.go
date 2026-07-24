@@ -6,6 +6,7 @@ import (
 	"io"
 	"path"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/storageclient"
@@ -76,30 +77,46 @@ func ExtractTemplateHeaderMedia(components json.RawMessage) (TemplateHeaderMedia
 	return TemplateHeaderMedia{}, false
 }
 
-func headerMappingHasMedia(header *HeaderMapping) bool {
+func headerMappingHasSendableMedia(header *HeaderMapping) bool {
 	if header == nil {
 		return false
 	}
-	return strings.TrimSpace(header.MediaLink) != "" || strings.TrimSpace(header.MediaID) != ""
+	if strings.TrimSpace(header.MediaLink) != "" {
+		return true
+	}
+	return IsWhatsAppCloudMediaID(header.MediaID)
 }
 
-// ApplyTemplateHeaderMediaDefaults fills missing header media from the template definition.
-func ApplyTemplateHeaderMediaDefaults(mapping VariableMapping, tpl *template.Template) VariableMapping {
-	if tpl == nil || headerMappingHasMedia(mapping.Header) {
-		return mapping
+// IsWhatsAppCloudMediaID reports whether id is a Cloud API media id (digits only).
+// Template creation header_handle values (e.g. "4:...") must never be sent as image.id.
+func IsWhatsAppCloudMediaID(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
 	}
+	for _, r := range id {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
+}
 
+// TemplateHasStorageBackedHeaderMedia reports whether send can upload media from storage.
+func TemplateHasStorageBackedHeaderMedia(tpl *template.Template) bool {
+	if tpl == nil {
+		return false
+	}
 	defaults, ok := ExtractTemplateHeaderMedia(tpl.Components)
-	if !ok {
-		return mapping
-	}
+	return ok && strings.TrimSpace(defaults.StorageObjectID) != ""
+}
 
-	if mapping.Header == nil {
-		mapping.Header = &HeaderMapping{}
-	}
-	if strings.TrimSpace(defaults.Handle) != "" {
-		mapping.Header.MediaID = defaults.Handle
-	}
+// ApplyTemplateHeaderMediaDefaults no longer copies Meta template header_handle into
+// send-time media_id. Those handles are for template creation only and Meta rejects
+// them as image.id (must be integer Cloud API media id or a public link).
+// Storage-backed defaults are resolved in ResolveHeaderMediaForSend.
+func ApplyTemplateHeaderMediaDefaults(mapping VariableMapping, tpl *template.Template) VariableMapping {
+	_ = tpl
 	return mapping
 }
 
@@ -113,9 +130,19 @@ func ResolveHeaderMediaForSend(
 	storage HeaderStorageDownloader,
 	uploader HeaderMediaUploader,
 ) (VariableMapping, error) {
-	mapping = ApplyTemplateHeaderMediaDefaults(mapping, tpl)
-	if headerMappingHasMedia(mapping.Header) || tpl == nil {
+	if tpl == nil {
 		return mapping, nil
+	}
+
+	if headerMappingHasSendableMedia(mapping.Header) {
+		return mapping, nil
+	}
+
+	// Drop non-sendable values (template header_handle mistakenly stored as media_id).
+	if mapping.Header != nil && strings.TrimSpace(mapping.Header.MediaID) != "" && !IsWhatsAppCloudMediaID(mapping.Header.MediaID) {
+		cleared := *mapping.Header
+		cleared.MediaID = ""
+		mapping.Header = &cleared
 	}
 
 	defaults, ok := ExtractTemplateHeaderMedia(tpl.Components)
@@ -155,5 +182,6 @@ func ResolveHeaderMediaForSend(
 		mapping.Header = &HeaderMapping{}
 	}
 	mapping.Header.MediaID = mediaID
+	mapping.Header.MediaLink = ""
 	return mapping, nil
 }

@@ -118,23 +118,41 @@ func subscribeJobCreated(ctx context.Context, nc *nats.Conn, stream string, orch
 		log.Error("jetstream unavailable", "error", err)
 		return
 	}
-	_, err = js.AddConsumer(stream, &nats.ConsumerConfig{
-		Durable:       "broadcast-orchestrator",
-		FilterSubject: sharedevents.SubjectBroadcastJobCreated,
-		AckPolicy:     nats.AckExplicitPolicy,
-	})
-	if err != nil && err != nats.ErrConsumerNameAlreadyInUse {
-		log.Warn("add consumer", "error", err)
-	}
-	_, err = js.Subscribe(sharedevents.SubjectBroadcastJobCreated, func(msg *nats.Msg) {
-		if err := orch.HandleNATSMessage(ctx, msg.Subject, msg.Data); err != nil {
-			log.Error("job created handler failed", "error", err)
-			_ = msg.Nak()
-			return
-		}
-		_ = msg.Ack()
-	}, nats.Bind(stream, "broadcast-orchestrator"))
+	// Must use PullSubscribe: AddConsumer without DeliverSubject creates a pull consumer,
+	// and js.Subscribe(... Bind) fails with "must use pull subscribe to bind to pull based consumer".
+	sub, err := js.PullSubscribe(
+		sharedevents.SubjectBroadcastJobCreated,
+		"broadcast-orchestrator",
+		nats.BindStream(stream),
+		nats.ManualAck(),
+	)
 	if err != nil {
 		log.Error("subscribe job.created failed", "error", err)
+		return
+	}
+	log.Info("broadcast job.created subscriber started", "stream", stream, "consumer", "broadcast-orchestrator")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		msgs, err := sub.Fetch(10, nats.MaxWait(2*time.Second))
+		if err != nil {
+			if err == nats.ErrTimeout || err == context.Canceled || err == context.DeadlineExceeded {
+				continue
+			}
+			log.Error("job.created fetch failed", "error", err)
+			continue
+		}
+		for _, msg := range msgs {
+			if err := orch.HandleNATSMessage(ctx, msg.Subject, msg.Data); err != nil {
+				log.Error("job created handler failed", "error", err)
+				_ = msg.Nak()
+				continue
+			}
+			_ = msg.Ack()
+		}
 	}
 }

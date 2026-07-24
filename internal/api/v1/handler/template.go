@@ -157,3 +157,18 @@ func (h *TemplateHandler) GetSyncHistory(c *fiber.Ctx) error {
 	}
 	return response.OK(c, "ok", item)
 }
+
+func (h *TemplateHandler) Delete(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid template id")
+	}
+	if err := h.svc.Delete(c.Context(), actor.TeamID, actor.UserID, actor.Role, id); err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "template deleted", nil)
+}

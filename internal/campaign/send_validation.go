@@ -59,6 +59,7 @@ func ValidateTemplateSend(
 
 	resolve := NewVariableResolver(contact, sampleValues)
 	metaMapping := mapping.ToMetaMapping()
+	storageBackedHeader := TemplateHasStorageBackedHeaderMedia(tpl)
 
 	for index := range required.HeaderText {
 		if err := validateMappedValue("header", index, metaMapping.HeaderText, resolve); err != nil {
@@ -67,23 +68,35 @@ func ValidateTemplateSend(
 	}
 	if required.HeaderMedia {
 		ref := metaMapping.HeaderMedia
-		if strings.TrimSpace(ref.Link) == "" && strings.TrimSpace(ref.MediaID) == "" {
-			return &SendValidationError{
-				Code:    ValidationCodeMissingVariable,
-				Message: "header media reference is required",
-			}
-		}
-		if err := ref.Validate(); err != nil {
-			return &SendValidationError{
-				Code:    ValidationCodeInvalidMediaReference,
-				Message: err.Error(),
-			}
-		}
-		if ref.UsesLink() {
-			if err := validateAbsoluteURL(ref.Link); err != nil {
+		hasLink := strings.TrimSpace(ref.Link) != ""
+		hasMediaID := strings.TrimSpace(ref.MediaID) != ""
+		if !hasLink && !hasMediaID {
+			if !storageBackedHeader {
 				return &SendValidationError{
-					Code:    ValidationCodeInvalidMediaURL,
+					Code:    ValidationCodeMissingVariable,
+					Message: "header media reference is required (public image URL or Cloud API media id)",
+				}
+			}
+			// Worker uploads from storage_object_id at send time; dry-run uses a placeholder below.
+		} else {
+			if hasMediaID && !IsWhatsAppCloudMediaID(ref.MediaID) {
+				return &SendValidationError{
+					Code:    ValidationCodeInvalidMediaReference,
+					Message: "header media_id must be a WhatsApp Cloud API media id (digits only); template header_handle cannot be used for send",
+				}
+			}
+			if err := ref.Validate(); err != nil {
+				return &SendValidationError{
+					Code:    ValidationCodeInvalidMediaReference,
 					Message: err.Error(),
+				}
+			}
+			if ref.UsesLink() {
+				if err := validateAbsoluteURL(ref.Link); err != nil {
+					return &SendValidationError{
+						Code:    ValidationCodeInvalidMediaURL,
+						Message: err.Error(),
+					}
 				}
 			}
 		}
@@ -121,7 +134,14 @@ func ValidateTemplateSend(
 	}
 
 	// Dry-run render to catch builder-level gaps before Meta API call.
-	if _, err := metaclient.BuildTemplatePayload(tpl.Components, metaMapping, resolve); err != nil {
+	dryMapping := metaMapping
+	if required.HeaderMedia &&
+		strings.TrimSpace(dryMapping.HeaderMedia.Link) == "" &&
+		strings.TrimSpace(dryMapping.HeaderMedia.MediaID) == "" &&
+		storageBackedHeader {
+		dryMapping.HeaderMedia = metaclient.MediaReference{MediaID: "0"}
+	}
+	if _, err := metaclient.BuildTemplatePayload(tpl.Components, dryMapping, resolve); err != nil {
 		return &SendValidationError{
 			Code:    ValidationCodeMissingVariable,
 			Message: err.Error(),

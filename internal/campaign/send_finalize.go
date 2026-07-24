@@ -59,7 +59,7 @@ func (r *PostgresRepository) FinalizeRecipientSent(ctx context.Context, in Final
 				provider_response = COALESCE($2, provider_response),
 				sent_at = $3,
 				updated_at = NOW()
-			WHERE id = $4 AND status = $5
+			WHERE id = $4 AND status = $5::recipient_status
 		`, in.WAMID, nullableJSON(in.ProviderResponse), in.SentAt, in.RecipientID, string(in.From))
 		if err != nil {
 			return repository.MapError(err)
@@ -134,7 +134,7 @@ func (r *PostgresRepository) FinalizeRecipientFailed(ctx context.Context, in Fin
 				last_error = $2,
 				failed_at = $3,
 				updated_at = NOW()
-			WHERE id = $4 AND status = $5
+			WHERE id = $4 AND status = $5::recipient_status
 		`, in.FailureCode, in.LastError, in.FailedAt, in.RecipientID, string(in.From))
 		if err != nil {
 			return repository.MapError(err)

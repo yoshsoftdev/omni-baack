@@ -342,17 +342,20 @@ func (r *PostgresRepository) UpdateRecipientStatus(ctx context.Context, id uuid.
 }
 
 func (r *PostgresRepository) UpdateRecipientDelivery(ctx context.Context, id uuid.UUID, from, to RecipientStatus, update RecipientDeliveryUpdate) error {
+	// Cast $1/$8 to recipient_status explicitly. Comparing the same param to text
+	// literals (e.g. $1 = 'sent') while also assigning to an enum column causes
+	// PostgreSQL SQLSTATE 42P08 (inconsistent types deduced for parameter).
 	tag, err := r.q.Exec(ctx, `
-		UPDATE campaign_recipients SET status = $1, wamid = COALESCE($2, wamid),
+		UPDATE campaign_recipients SET status = $1::recipient_status, wamid = COALESCE($2, wamid),
 			last_error = COALESCE($3, last_error), failure_code = COALESCE($4, failure_code),
 			provider_response = COALESCE($5, provider_response),
 			attempt_count = CASE WHEN $6 THEN attempt_count + 1 ELSE attempt_count END,
-			sent_at = CASE WHEN $1 = 'sent' THEN NOW() ELSE sent_at END,
-			delivered_at = CASE WHEN $1 = 'delivered' THEN NOW() ELSE delivered_at END,
-			read_at = CASE WHEN $1 = 'read' THEN NOW() ELSE read_at END,
-			failed_at = CASE WHEN $1 = 'failed' THEN NOW() ELSE failed_at END,
+			sent_at = CASE WHEN $1::recipient_status = 'sent'::recipient_status THEN NOW() ELSE sent_at END,
+			delivered_at = CASE WHEN $1::recipient_status = 'delivered'::recipient_status THEN NOW() ELSE delivered_at END,
+			read_at = CASE WHEN $1::recipient_status = 'read'::recipient_status THEN NOW() ELSE read_at END,
+			failed_at = CASE WHEN $1::recipient_status = 'failed'::recipient_status THEN NOW() ELSE failed_at END,
 			updated_at = NOW()
-		WHERE id = $7 AND status = $8
+		WHERE id = $7 AND status = $8::recipient_status
 	`, string(to), update.WAMID, update.LastError, update.FailureCode, nullableJSON(update.ProviderResponse),
 		update.IncrementAttempt, id, string(from))
 	if err != nil {

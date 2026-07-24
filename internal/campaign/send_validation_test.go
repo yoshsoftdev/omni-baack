@@ -100,9 +100,25 @@ func TestValidateMediaIDAccepted(t *testing.T) {
 		Components: json.RawMessage(`[{"type":"HEADER","format":"IMAGE"}]`),
 	}
 	if err := ValidateTemplateSend(tpl, VariableMapping{
-		Header: &HeaderMapping{MediaID: "meta-handle-1"},
+		Header: &HeaderMapping{MediaID: "1234567890"},
 	}, nil, nil); err != nil {
-		t.Fatalf("expected media id to pass validation: %v", err)
+		t.Fatalf("expected numeric media id to pass validation: %v", err)
+	}
+}
+
+func TestValidateHeaderHandleRejectedAsMediaID(t *testing.T) {
+	tpl := &template.Template{
+		Components: json.RawMessage(`[{"type":"HEADER","format":"IMAGE"}]`),
+	}
+	err := ValidateTemplateSend(tpl, VariableMapping{
+		Header: &HeaderMapping{MediaID: "4::abc"},
+	}, nil, nil)
+	if err == nil {
+		t.Fatal("expected validation error for template header_handle used as media_id")
+	}
+	valErr := err.(*SendValidationError)
+	if valErr.Code != ValidationCodeInvalidMediaReference {
+		t.Fatalf("expected invalid_media_reference, got %s", valErr.Code)
 	}
 }
 

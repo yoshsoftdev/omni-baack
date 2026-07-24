@@ -1,6 +1,9 @@
 package meta
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestMediaReferenceValidateDualReference(t *testing.T) {
 	err := MediaReference{Link: "https://a.com/x.jpg", MediaID: "123"}.Validate()
@@ -10,12 +13,22 @@ func TestMediaReferenceValidateDualReference(t *testing.T) {
 }
 
 func TestMediaReferenceToMediaObjectID(t *testing.T) {
-	obj, err := MediaReference{MediaID: "meta-media-99"}.ToMediaObject()
+	obj, err := MediaReference{MediaID: "1234567890"}.ToMediaObject()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if obj.ID != "meta-media-99" || obj.Link != "" {
+	if obj.ID != "1234567890" || obj.Link != "" {
 		t.Fatalf("unexpected media object: %+v", obj)
+	}
+}
+
+func TestMediaObjectMarshalsIDAsJSONNumber(t *testing.T) {
+	raw, err := json.Marshal(MediaObject{ID: "9876543210"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `{"id":9876543210}` {
+		t.Fatalf("expected numeric id JSON, got %s", raw)
 	}
 }
 

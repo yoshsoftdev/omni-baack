@@ -9,32 +9,108 @@ import (
 	"strings"
 )
 
-type WABA struct {
-	ID                       string `json:"id"`
-	Name                     string `json:"name"`
-	TimezoneID               string `json:"timezone_id"`
-	MessageTemplateNamespace string `json:"message_template_namespace"`
-	PrimaryFundingID         string `json:"primary_funding_id"`
-	Status                   string `json:"status"`
-}
-
-type Business struct {
+type WABAOwnerBusinessInfo struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
 
+type WABA struct {
+	ID                         string                 `json:"id"`
+	Name                       string                 `json:"name"`
+	TimezoneID                 string                 `json:"timezone_id"`
+	MessageTemplateNamespace   string                 `json:"message_template_namespace"`
+	PrimaryFundingID           string                 `json:"primary_funding_id"`
+	Status                     string                 `json:"status"`
+	BusinessVerificationStatus string                 `json:"business_verification_status"`
+	OwnerBusinessInfo          *WABAOwnerBusinessInfo `json:"owner_business_info"`
+}
+
+type Business struct {
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	VerificationStatus string `json:"verification_status"`
+}
+
+// WABAHealthStatus is Meta messaging eligibility for a WABA (Tech Provider–readable).
+// Payment issues surface as entity error_code 141006.
+type WABAHealthStatus struct {
+	CanSendMessage string                 `json:"can_send_message"`
+	Entities       []WABAHealthEntity     `json:"entities"`
+}
+
+type WABAHealthEntity struct {
+	EntityType     string            `json:"entity_type"`
+	ID             string            `json:"id"`
+	CanSendMessage string            `json:"can_send_message"`
+	Errors         []WABAHealthError `json:"errors"`
+	AdditionalInfo []string          `json:"additional_info"`
+}
+
+type WABAHealthError struct {
+	ErrorCode         int    `json:"error_code"`
+	ErrorDescription  string `json:"error_description"`
+	PossibleSolution  string `json:"possible_solution"`
+}
+
+const (
+	// Meta health_status error: payment method missing/invalid on WABA.
+	HealthErrorPaymentMethod = 141006
+)
+
 func (c *Client) GetWABA(ctx context.Context, wabaID, accessToken string) (*WABA, error) {
+	// Do NOT request primary_funding_id here.
+	// That field requires the app-owning business to be a WhatsApp BSP; bundling it
+	// fails the entire GET and hides fields that system-user tokens can read
+	// (status, business_verification_status, owner_business_info).
 	endpoint := fmt.Sprintf(
-		"https://graph.facebook.com/%s/%s?fields=id,name,timezone_id,message_template_namespace,primary_funding_id,status",
+		"https://graph.facebook.com/%s/%s?fields=id,name,timezone_id,message_template_namespace,status,business_verification_status,owner_business_info{id,name}",
 		c.apiVersion,
 		wabaID,
 	)
 	return decodeGET[WABA](c, ctx, endpoint, accessToken)
 }
 
+// GetWABAPrimaryFunding fetches only primary_funding_id (BSP / billing-sensitive field).
+func (c *Client) GetWABAPrimaryFunding(ctx context.Context, wabaID, accessToken string) (string, error) {
+	endpoint := fmt.Sprintf(
+		"https://graph.facebook.com/%s/%s?fields=primary_funding_id",
+		c.apiVersion,
+		wabaID,
+	)
+	out, err := decodeGET[struct {
+		PrimaryFundingID string `json:"primary_funding_id"`
+	}](c, ctx, endpoint, accessToken)
+	if err != nil {
+		return "", err
+	}
+	if out == nil {
+		return "", nil
+	}
+	return strings.TrimSpace(out.PrimaryFundingID), nil
+}
+
+// GetWABAHealthStatus fetches messaging health (works for Tech Provider tokens).
+func (c *Client) GetWABAHealthStatus(ctx context.Context, wabaID, accessToken string) (*WABAHealthStatus, error) {
+	endpoint := fmt.Sprintf(
+		"https://graph.facebook.com/%s/%s?fields=health_status",
+		c.apiVersion,
+		wabaID,
+	)
+	out, err := decodeGET[struct {
+		HealthStatus *WABAHealthStatus `json:"health_status"`
+	}](c, ctx, endpoint, accessToken)
+	if err != nil {
+		return nil, err
+	}
+	if out == nil || out.HealthStatus == nil {
+		return nil, fmt.Errorf("meta api error: health_status missing")
+	}
+	return out.HealthStatus, nil
+}
+
 func (c *Client) GetBusiness(ctx context.Context, businessID, accessToken string) (*Business, error) {
 	endpoint := fmt.Sprintf(
-		"https://graph.facebook.com/%s/%s?fields=id,name",
+		"https://graph.facebook.com/%s/%s?fields=id,name,verification_status",
 		c.apiVersion,
 		businessID,
 	)

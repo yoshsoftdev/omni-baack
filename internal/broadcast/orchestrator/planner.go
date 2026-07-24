@@ -71,6 +71,30 @@ func (p *BatchPlanner) Plan(ctx context.Context, job *campaign.BroadcastJob) err
 	}
 
 	if len(batches) == 0 {
+		// No pending recipients (all skipped/invalid/opt-out, or empty audience).
+		// Finish the job so it does not stick in planning_batches forever.
+		now := time.Now().UTC()
+		summary := "no sendable recipients after audience resolution"
+		job.Status = campaign.JobCompleted
+		job.CompletedAt = &now
+		job.ErrorSummary = &summary
+		job.UpdatedAt = now
+		if err := p.campaigns.UpdateJob(ctx, job); err != nil {
+			return err
+		}
+		if err := p.campaigns.UpdateStatus(ctx, job.TeamID, job.CampaignID, campaign.StatusCompleted); err != nil {
+			p.log.Warn("failed to mark campaign completed after empty audience",
+				"campaign_id", job.CampaignID.String(),
+				"error", err,
+			)
+		}
+		p.log.Warn("batch planning skipped — no pending recipients",
+			"campaign_id", job.CampaignID.String(),
+			"job_id", job.ID.String(),
+			"team_id", job.TeamID.String(),
+			"channel_id", job.ChannelID.String(),
+			"reason", summary,
+		)
 		return nil
 	}
 

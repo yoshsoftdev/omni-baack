@@ -29,9 +29,38 @@ type TemplateParameter struct {
 }
 
 // MediaObject references media for template header parameters.
+// ID is stored as string but marshaled as a JSON number when numeric —
+// Meta Graph schema for template.components[].parameters[].image.id expects [integer, null].
 type MediaObject struct {
 	Link string `json:"link,omitempty"`
 	ID   string `json:"id,omitempty"`
+}
+
+func (m MediaObject) MarshalJSON() ([]byte, error) {
+	obj := make(map[string]any, 2)
+	if link := strings.TrimSpace(m.Link); link != "" {
+		obj["link"] = link
+	}
+	if id := strings.TrimSpace(m.ID); id != "" {
+		if isAllDigits(id) {
+			obj["id"] = json.Number(id)
+		} else {
+			obj["id"] = id
+		}
+	}
+	return json.Marshal(obj)
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 type TemplateComponent struct {
@@ -229,4 +258,45 @@ func (c *Client) CreateMessageTemplate(
 		return nil, fmt.Errorf("decode create template response: %w", err)
 	}
 	return &result, nil
+}
+
+// DeleteMessageTemplate deletes a WhatsApp message template from a WABA.
+// Prefer name + hsm_id so only one language variant is removed.
+func (c *Client) DeleteMessageTemplate(ctx context.Context, wabaID, accessToken, name, hsmID string) error {
+	wabaID = strings.TrimSpace(wabaID)
+	name = strings.TrimSpace(name)
+	hsmID = strings.TrimSpace(hsmID)
+	if wabaID == "" {
+		return fmt.Errorf("waba id is required")
+	}
+	if name == "" && hsmID == "" {
+		return fmt.Errorf("template name or hsm_id is required")
+	}
+
+	endpoint := fmt.Sprintf("https://graph.facebook.com/%s/%s/message_templates", c.apiVersion, wabaID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	q := req.URL.Query()
+	if name != "" {
+		q.Set("name", name)
+	}
+	if hsmID != "" {
+		q.Set("hsm_id", hsmID)
+	}
+	req.URL.RawQuery = q.Encode()
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("meta delete template: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return NewAPIError(resp.StatusCode, string(respBody))
+	}
+	return nil
 }

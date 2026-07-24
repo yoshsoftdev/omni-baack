@@ -2,6 +2,7 @@ package meta
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -39,10 +40,14 @@ type HealthService struct {
 	channels    channel.Repository
 	cipher      *cryptoutil.TokenCipher
 	syncChecker TemplateSyncChecker
+	log         *slog.Logger
 }
 
-func NewHealthService(meta MetaClient, instagram *metapkg.Client, channels channel.Repository, cipher *cryptoutil.TokenCipher, syncChecker TemplateSyncChecker) *HealthService {
-	return &HealthService{meta: meta, instagram: instagram, channels: channels, cipher: cipher, syncChecker: syncChecker}
+func NewHealthService(meta MetaClient, instagram *metapkg.Client, channels channel.Repository, cipher *cryptoutil.TokenCipher, syncChecker TemplateSyncChecker, log *slog.Logger) *HealthService {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &HealthService{meta: meta, instagram: instagram, channels: channels, cipher: cipher, syncChecker: syncChecker, log: log}
 }
 
 func (s *HealthService) CheckChannel(ctx context.Context, teamID, channelID uuid.UUID) (*HealthResult, error) {
@@ -81,9 +86,29 @@ func (s *HealthService) CheckChannel(ctx context.Context, teamID, channelID uuid
 
 	wabaID := strings.TrimSpace(*ch.WABAID)
 	phoneID := strings.TrimSpace(*ch.PhoneNumberID)
+	businessID := ""
+	if ch.BusinessID != nil {
+		businessID = strings.TrimSpace(*ch.BusinessID)
+	}
+
+	s.log.Info("channel_health_check",
+		"channel_id", channelID.String(),
+		"team_id", teamID.String(),
+		"stored_waba_id", wabaID,
+		"stored_business_id", businessID,
+		"stored_phone_number_id", phoneID,
+		"note", "health.checks.waba means GetWABA reachable — not Meta business_verification_status",
+	)
 
 	if _, err := s.meta.GetWABA(ctx, wabaID, token); err == nil {
 		result.Checks.WABA = true
+	} else {
+		s.log.Warn("channel_health_waba_failed",
+			"channel_id", channelID.String(),
+			"requested_id_kind", "waba_id",
+			"requested_id", wabaID,
+			"error", err.Error(),
+		)
 	}
 	if _, err := s.meta.GetPhoneNumber(ctx, phoneID, token); err == nil {
 		result.Checks.Phone = true
