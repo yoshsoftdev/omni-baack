@@ -30,7 +30,7 @@ func TestRecoverStaleSendingRecipientRequeued(t *testing.T) {
 	send := &recoverySendRepo{
 		mockSendRepo: mockSendRepo{
 			recipients: []campaign.Recipient{{
-				ID: uuid.New(), Status: campaign.RecipientSending, ContactID: uuid.New(), Phone: "1",
+				ID: uuid.New(), Status: campaign.RecipientSending, ContactID: uuid.New(), PhoneNumber: "1",
 			}},
 		},
 	}
@@ -52,7 +52,7 @@ func TestRecoverSkipsSentRecipient(t *testing.T) {
 	send := &recoverySendRepo{
 		mockSendRepo: mockSendRepo{
 			recipients: []campaign.Recipient{{
-				ID: uuid.New(), Status: campaign.RecipientSent, WAMID: &wamid, ContactID: uuid.New(), Phone: "1",
+				ID: uuid.New(), Status: campaign.RecipientSent, WAMID: &wamid, ContactID: uuid.New(), PhoneNumber: "1",
 			}},
 		},
 	}

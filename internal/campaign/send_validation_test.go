@@ -4,28 +4,22 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/google/uuid"
-	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 )
 
 func TestBuildTemplateComponentsBodyOrder(t *testing.T) {
-	email := "john@example.com"
-	c := &contact.Contact{
-		ID:           uuid.New(),
-		ContactName:  "John",
-		CustomerName: "John",
-		Phone:        "628123",
-		Email:        &email,
-	}
 	componentsJSON := json.RawMessage(`[{"type":"BODY","text":"Hello {{1}}, email {{2}}"}]`)
+	variables := map[string]string{
+		"body.1": "John",
+		"body.2": "john@example.com",
+	}
 
-	components, err := BuildTemplateComponents(componentsJSON, VariableMapping{
+	components, err := BuildTemplateComponentsFromSnapshot(componentsJSON, VariableMapping{
 		Body: map[string]string{
 			"2": "email",
 			"1": "name",
 		},
-	}, c, nil)
+	}, variables)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +44,7 @@ func TestValidateMissingVariableNoMetaCall(t *testing.T) {
 	tpl := &template.Template{
 		Components: json.RawMessage(`[{"type":"BODY","text":"Hello {{1}}"}]`),
 	}
-	err := ValidateTemplateSend(tpl, VariableMapping{}, &contact.Contact{CustomerName: "A", ContactName: "A"}, nil)
+	err := ValidateTemplateSend(tpl, VariableMapping{}, map[string]string{})
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -63,13 +57,28 @@ func TestValidateMissingVariableNoMetaCall(t *testing.T) {
 	}
 }
 
+func TestValidateMissingSnapshotVariableNoContactFallback(t *testing.T) {
+	tpl := &template.Template{
+		Components: json.RawMessage(`[{"type":"BODY","text":"Hello {{1}}"}]`),
+	}
+	err := ValidateTemplateSend(tpl, VariableMapping{
+		Body: map[string]string{"1": "name"},
+	}, map[string]string{})
+	if err == nil {
+		t.Fatal("expected missing snapshot variable error")
+	}
+	if !IsSendValidationError(err) {
+		t.Fatalf("expected SendValidationError, got %v", err)
+	}
+}
+
 func TestValidateInvalidMediaURL(t *testing.T) {
 	tpl := &template.Template{
 		Components: json.RawMessage(`[{"type":"HEADER","format":"IMAGE"}]`),
 	}
 	err := ValidateTemplateSend(tpl, VariableMapping{
 		Header: &HeaderMapping{MediaLink: "not-a-url"},
-	}, nil, nil)
+	}, nil)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -85,7 +94,7 @@ func TestValidateDualMediaReference(t *testing.T) {
 	}
 	err := ValidateTemplateSend(tpl, VariableMapping{
 		Header: &HeaderMapping{MediaLink: "https://cdn.example.com/a.jpg", MediaID: "123"},
-	}, nil, nil)
+	}, nil)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -101,7 +110,7 @@ func TestValidateMediaIDAccepted(t *testing.T) {
 	}
 	if err := ValidateTemplateSend(tpl, VariableMapping{
 		Header: &HeaderMapping{MediaID: "1234567890"},
-	}, nil, nil); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("expected numeric media id to pass validation: %v", err)
 	}
 }
@@ -112,7 +121,7 @@ func TestValidateHeaderHandleRejectedAsMediaID(t *testing.T) {
 	}
 	err := ValidateTemplateSend(tpl, VariableMapping{
 		Header: &HeaderMapping{MediaID: "4::abc"},
-	}, nil, nil)
+	}, nil)
 	if err == nil {
 		t.Fatal("expected validation error for template header_handle used as media_id")
 	}
@@ -126,7 +135,7 @@ func TestValidateURLButtonRequiresMapping(t *testing.T) {
 	tpl := &template.Template{
 		Components: json.RawMessage(`[{"type":"BUTTONS","buttons":[{"type":"URL","text":"Track","url":"https://example.com/{{1}}"}]}]`),
 	}
-	err := ValidateTemplateSend(tpl, VariableMapping{}, nil, nil)
+	err := ValidateTemplateSend(tpl, VariableMapping{}, nil)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -140,7 +149,7 @@ func TestValidateCopyCodeRequired(t *testing.T) {
 	tpl := &template.Template{
 		Components: json.RawMessage(`[{"type":"BUTTONS","buttons":[{"type":"COPY_CODE","text":"Copy"}]}]`),
 	}
-	err := ValidateTemplateSend(tpl, VariableMapping{}, nil, nil)
+	err := ValidateTemplateSend(tpl, VariableMapping{}, nil)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}

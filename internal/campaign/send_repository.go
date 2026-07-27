@@ -103,7 +103,17 @@ func (r *PostgresRepository) CompleteBatch(ctx context.Context, batchID uuid.UUI
 			return repository.ErrNotFound
 		}
 		_, err = q.Exec(ctx, `
-			UPDATE broadcast_jobs SET batches_completed = batches_completed + 1, updated_at = NOW()
+			UPDATE broadcast_jobs
+			SET batches_completed = batches_completed + 1,
+				status = CASE
+					WHEN batches_completed + 1 >= batches_total AND batches_total > 0 THEN 'completed'
+					ELSE status
+				END,
+				completed_at = CASE
+					WHEN batches_completed + 1 >= batches_total AND batches_total > 0 THEN NOW()
+					ELSE completed_at
+				END,
+				updated_at = NOW()
 			WHERE id = (SELECT job_id FROM broadcast_batches WHERE id = $1)
 		`, batchID)
 		return repository.MapError(err)
@@ -140,7 +150,8 @@ func (r *PostgresRepository) MarkBatchFailed(ctx context.Context, batchID uuid.U
 
 func (r *PostgresRepository) ListRecipientsByBatch(ctx context.Context, batchID uuid.UUID) ([]Recipient, error) {
 	rows, err := r.q.Query(ctx, `
-		SELECT id, campaign_id, team_id, contact_id, job_id, batch_id, phone, status,
+		SELECT id, campaign_id, team_id, contact_id, job_id, batch_id,
+			provider_profile_id, phone_number, wa_id, variables, status,
 			attempt_count, last_error, failure_code, wamid, sent_at, delivered_at, read_at, failed_at, created_at, updated_at
 		FROM campaign_recipients
 		WHERE batch_id = $1

@@ -56,14 +56,14 @@ func (s stubChannelRepo) FindByID(context.Context, uuid.UUID, uuid.UUID) (*chann
 func (s stubChannelRepo) List(context.Context, uuid.UUID, channel.ListFilter, repository.PageParams) (repository.Page[channel.Channel], error) {
 	return repository.Page[channel.Channel]{}, nil
 }
-func (s stubChannelRepo) Update(context.Context, *channel.Channel) error { return nil }
-func (s stubChannelRepo) SoftDelete(context.Context, uuid.UUID, uuid.UUID) error { return nil }
-func (s stubChannelRepo) CountByTeam(context.Context, uuid.UUID) (int64, error) { return 0, nil }
+func (s stubChannelRepo) Update(context.Context, *channel.Channel) error                { return nil }
+func (s stubChannelRepo) SoftDelete(context.Context, uuid.UUID, uuid.UUID) error        { return nil }
+func (s stubChannelRepo) CountByTeam(context.Context, uuid.UUID) (int64, error)         { return 0, nil }
 func (s stubChannelRepo) UpsertCredentials(context.Context, *channel.Credentials) error { return nil }
 func (s stubChannelRepo) FindCredentials(context.Context, uuid.UUID) (*channel.Credentials, error) {
 	return s.creds, nil
 }
-func (s stubChannelRepo) DeleteCredentials(context.Context, uuid.UUID) error { return nil }
+func (s stubChannelRepo) DeleteCredentials(context.Context, uuid.UUID) error          { return nil }
 func (s stubChannelRepo) UpsertOnboarding(context.Context, *channel.Onboarding) error { return nil }
 func (s stubChannelRepo) FindOnboarding(context.Context, uuid.UUID) (*channel.Onboarding, error) {
 	return &channel.Onboarding{Status: channel.OnboardingCompleted}, nil
@@ -87,7 +87,7 @@ func (s stubChannelRepo) FindConnectedByType(context.Context, uuid.UUID, channel
 func (s stubChannelRepo) UpdateHealthMetadata(context.Context, uuid.UUID, []byte) error { return nil }
 
 type memoryTemplateRepo struct {
-	byMeta map[string]*template.Template
+	byMeta  map[string]*template.Template
 	upserts int
 }
 
@@ -100,8 +100,30 @@ func (m *memoryTemplateRepo) key(channelID uuid.UUID, metaID string) string {
 }
 
 func (m *memoryTemplateRepo) Create(context.Context, *template.Template) error { return nil }
+func (m *memoryTemplateRepo) Save(ctx context.Context, t *template.Template) error {
+	return m.Create(ctx, t)
+}
+func (m *memoryTemplateRepo) Update(context.Context, *template.Template) error { return nil }
+func (m *memoryTemplateRepo) Delete(ctx context.Context, teamID, id uuid.UUID) error {
+	return m.SoftDelete(ctx, teamID, id)
+}
 func (m *memoryTemplateRepo) FindByID(context.Context, uuid.UUID, uuid.UUID) (*template.Template, error) {
 	return nil, repository.ErrNotFound
+}
+func (m *memoryTemplateRepo) FindByIDs(context.Context, uuid.UUID, []uuid.UUID) (map[uuid.UUID]*template.Template, error) {
+	return map[uuid.UUID]*template.Template{}, nil
+}
+func (m *memoryTemplateRepo) FindByName(_ context.Context, teamID, channelID uuid.UUID, name, language string) (*template.Template, error) {
+	for _, tmpl := range m.byMeta {
+		if tmpl.TeamID == teamID && tmpl.ChannelID == channelID && tmpl.Name == name && tmpl.Language == language {
+			cp := *tmpl
+			return &cp, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+func (m *memoryTemplateRepo) FindByMetaID(ctx context.Context, teamID, channelID uuid.UUID, metaTemplateID string) (*template.Template, error) {
+	return m.FindByMetaTemplateID(ctx, teamID, channelID, metaTemplateID)
 }
 func (m *memoryTemplateRepo) FindByMetaTemplateID(_ context.Context, teamID, channelID uuid.UUID, metaTemplateID string) (*template.Template, error) {
 	tmpl, ok := m.byMeta[m.key(channelID, metaTemplateID)]
@@ -170,6 +192,35 @@ func newTestSyncService(meta *pageMetaLister, tmplRepo *memoryTemplateRepo) *tem
 		creds: &channel.Credentials{ChannelID: channelID, AccessTokenEnc: enc},
 	}
 	return template.NewSyncService(meta, chRepo, tmplRepo, template.NewInMemorySyncRunRepository(), cipher, nil)
+}
+
+func TestMemoryRepositorySatisfiesDomainAPI(t *testing.T) {
+	var _ template.Repository = (*memoryTemplateRepo)(nil)
+
+	repo := newMemoryTemplateRepo()
+	teamID := uuid.New()
+	channelID := uuid.New()
+	tmpl := &template.Template{
+		ID:             uuid.New(),
+		TeamID:         teamID,
+		ChannelID:      channelID,
+		MetaTemplateID: "meta-1",
+		Name:           "welcome",
+		Language:       "en_US",
+		Status:         template.StatusApproved,
+	}
+	ctx := context.Background()
+	if err := repo.UpsertFromSync(ctx, tmpl); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.FindByMetaID(ctx, teamID, channelID, "meta-1")
+	if err != nil || got.Name != "welcome" {
+		t.Fatalf("FindByMetaID: %#v err=%v", got, err)
+	}
+	byName, err := repo.FindByName(ctx, teamID, channelID, "welcome", "en_US")
+	if err != nil || byName.MetaTemplateID != "meta-1" {
+		t.Fatalf("FindByName: %#v err=%v", byName, err)
+	}
 }
 
 func TestSyncServicePagination(t *testing.T) {

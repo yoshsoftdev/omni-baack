@@ -63,7 +63,7 @@ func TestStripMetaInternalExampleFieldsRemovesStorageObjectID(t *testing.T) {
 		{"type":"HEADER","format":"IMAGE","example":{"header_handle":["4::abc"],"storage_object_id":["11111111-1111-1111-1111-111111111111"]}},
 		{"type":"BODY","text":"Hi"}
 	]`)
-	out, err := stripMetaInternalExampleFields(raw)
+	out, err := ComponentsForMetaAPI(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

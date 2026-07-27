@@ -84,7 +84,7 @@ func (s *SyncService) CreateOnMeta(
 	if err != nil {
 		return nil, err
 	}
-	metaComponents, err := stripMetaInternalExampleFields(components)
+	createReq, err := ToMetaCreateRequest(name, language, category, components)
 	if err != nil {
 		return nil, serviceerrors.NewValidation("components", "failed to prepare components for Meta")
 	}
@@ -93,12 +93,7 @@ func (s *SyncService) CreateOnMeta(
 	var created *metapkg.CreateTemplateResponse
 	err = metapkg.Retry(ctx, func(retryCtx context.Context) error {
 		var retryErr error
-		created, retryErr = creator.CreateMessageTemplate(retryCtx, wabaID, token, metapkg.CreateTemplateRequest{
-			Name:       name,
-			Language:   language,
-			Category:   category,
-			Components: metaComponents,
-		})
+		created, retryErr = creator.CreateMessageTemplate(retryCtx, wabaID, token, createReq)
 		return retryErr
 	})
 	if err != nil {
@@ -111,30 +106,10 @@ func (s *SyncService) CreateOnMeta(
 		return nil, serviceerrors.NewValidation("meta", "Meta did not return a template id")
 	}
 
-	now := time.Now().UTC()
-	status := normalizeMetaStatus(created.Status)
-	cat := category
-	if strings.TrimSpace(created.Category) != "" {
-		cat = strings.ToUpper(strings.TrimSpace(created.Category))
-	}
-	preview := extractBodyPreview(components)
-	tmpl := &Template{
-		ID:             uuid.New(),
-		ChannelID:      channelID,
-		TeamID:         teamID,
-		WABAID:         wabaID,
-		MetaTemplateID: created.ID,
-		Name:           name,
-		Language:       language,
-		Category:       &cat,
-		Status:         status,
-		Preview:        preview,
-		Components:     components,
-		VariableCount:  countVariables(components),
-		LastSyncAt:     &now,
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	}
+	tmpl := MapFromMetaCreate(
+		channelID, teamID, wabaID, name, language, category,
+		components, *created, time.Now().UTC(),
+	)
 	if err := s.templates.UpsertFromSync(ctx, tmpl); err != nil {
 		return nil, serviceerrors.MapRepository(err)
 	}
@@ -209,30 +184,6 @@ func (s *SyncService) resolveStorageHeaderHandles(
 		return nil, serviceerrors.NewValidation("components", "failed to rewrite media header handles")
 	}
 	return out, nil
-}
-
-// stripMetaInternalExampleFields removes app-only keys from component examples before Meta API calls.
-func stripMetaInternalExampleFields(components json.RawMessage) (json.RawMessage, error) {
-	var items []map[string]any
-	if err := json.Unmarshal(components, &items); err != nil {
-		return nil, err
-	}
-	changed := false
-	for _, item := range items {
-		example, _ := item["example"].(map[string]any)
-		if example == nil {
-			continue
-		}
-		if _, ok := example["storage_object_id"]; ok {
-			delete(example, "storage_object_id")
-			item["example"] = example
-			changed = true
-		}
-	}
-	if !changed {
-		return components, nil
-	}
-	return json.Marshal(items)
 }
 
 func (s *SyncService) uploadStorageObjectAsHeaderHandle(
@@ -359,19 +310,7 @@ func isValidTemplateName(name string) bool {
 }
 
 func normalizeCreateLanguage(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "id"
-	}
-	// Frontend often sends short codes (id / en); Meta accepts both short and locale forms.
-	switch strings.ToLower(raw) {
-	case "id", "id_id":
-		return "id"
-	case "en", "en_us":
-		return "en_US"
-	default:
-		return normalizeMetaLanguage(raw)
-	}
+	return DefaultLanguageResolver().ForStorageFromCreate(raw)
 }
 
 func normalizeCreateCategory(raw string) (string, error) {

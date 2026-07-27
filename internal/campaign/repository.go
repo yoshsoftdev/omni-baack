@@ -2,6 +2,7 @@ package campaign
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -315,13 +316,19 @@ func (r *PostgresRepository) BulkCreateRecipients(ctx context.Context, recipient
 		}
 		batch := &pgx.Batch{}
 		for _, rec := range recipients {
+			vars := rec.Variables
+			if len(vars) == 0 {
+				vars = json.RawMessage(`{}`)
+			}
 			batch.Queue(`
 				INSERT INTO campaign_recipients (
-					id, campaign_id, team_id, contact_id, job_id, batch_id, phone, status,
-					attempt_count, created_at, updated_at
-				) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-			`, rec.ID, rec.CampaignID, rec.TeamID, rec.ContactID, rec.JobID, rec.BatchID, rec.Phone,
-				string(rec.Status), rec.AttemptCount, snapshotAt, snapshotAt)
+					id, campaign_id, team_id, contact_id, job_id, batch_id,
+					provider_profile_id, phone_number, wa_id, variables,
+					status, attempt_count, last_error, created_at, updated_at
+				) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+			`, rec.ID, rec.CampaignID, rec.TeamID, rec.ContactID, rec.JobID, rec.BatchID,
+				rec.ProviderProfileID, rec.PhoneNumber, rec.WAID, vars,
+				string(rec.Status), rec.AttemptCount, rec.LastError, snapshotAt, snapshotAt)
 		}
 		br := tx.SendBatch(ctx, batch)
 		defer br.Close()
@@ -369,7 +376,8 @@ func (r *PostgresRepository) UpdateRecipientDelivery(ctx context.Context, id uui
 
 func (r *PostgresRepository) FindRecipientByWAMID(ctx context.Context, wamid string) (*Recipient, error) {
 	return scanRecipient(r.q.QueryRow(ctx, `
-		SELECT id, campaign_id, team_id, contact_id, job_id, batch_id, phone, status,
+		SELECT id, campaign_id, team_id, contact_id, job_id, batch_id,
+			provider_profile_id, phone_number, wa_id, variables, status,
 			attempt_count, last_error, failure_code, wamid, sent_at, delivered_at, read_at, failed_at, created_at, updated_at
 		FROM campaign_recipients WHERE wamid = $1 LIMIT 1
 	`, wamid))
@@ -377,7 +385,8 @@ func (r *PostgresRepository) FindRecipientByWAMID(ctx context.Context, wamid str
 
 func (r *PostgresRepository) FindRecipientByWAMIDForTeam(ctx context.Context, teamID uuid.UUID, wamid string) (*Recipient, error) {
 	return scanRecipient(r.q.QueryRow(ctx, `
-		SELECT id, campaign_id, team_id, contact_id, job_id, batch_id, phone, status,
+		SELECT id, campaign_id, team_id, contact_id, job_id, batch_id,
+			provider_profile_id, phone_number, wa_id, variables, status,
 			attempt_count, last_error, failure_code, wamid, sent_at, delivered_at, read_at, failed_at, created_at, updated_at
 		FROM campaign_recipients WHERE wamid = $1 AND team_id = $2 LIMIT 1
 	`, wamid, teamID))
@@ -385,10 +394,12 @@ func (r *PostgresRepository) FindRecipientByWAMIDForTeam(ctx context.Context, te
 
 func (r *PostgresRepository) CountNonTerminalRecipients(ctx context.Context, campaignID uuid.UUID) (int, error) {
 	var count int
+	// Campaign send completion: sent/delivered are terminal for lifecycle (do not wait for read).
+	// Delivery/read counters may still update after the campaign is marked completed.
 	err := r.q.QueryRow(ctx, `
 		SELECT COUNT(*)::int FROM campaign_recipients
 		WHERE campaign_id = $1
-		  AND status NOT IN ('read', 'failed', 'cancelled', 'skipped')
+		  AND status NOT IN ('sent', 'delivered', 'read', 'failed', 'cancelled', 'skipped')
 	`, campaignID).Scan(&count)
 	if err != nil {
 		return 0, repository.MapError(err)
@@ -575,7 +586,8 @@ func scanRecipient(row pgx.Row) (*Recipient, error) {
 	var rec Recipient
 	var status string
 	err := row.Scan(
-		&rec.ID, &rec.CampaignID, &rec.TeamID, &rec.ContactID, &rec.JobID, &rec.BatchID, &rec.Phone, &status,
+		&rec.ID, &rec.CampaignID, &rec.TeamID, &rec.ContactID, &rec.JobID, &rec.BatchID,
+		&rec.ProviderProfileID, &rec.PhoneNumber, &rec.WAID, &rec.Variables, &status,
 		&rec.AttemptCount, &rec.LastError, &rec.FailureCode, &rec.WAMID, &rec.SentAt, &rec.DeliveredAt,
 		&rec.ReadAt, &rec.FailedAt, &rec.CreatedAt, &rec.UpdatedAt,
 	)
@@ -586,5 +598,8 @@ func scanRecipient(row pgx.Row) (*Recipient, error) {
 		return nil, fmt.Errorf("scan recipient: %w", err)
 	}
 	rec.Status = RecipientStatus(status)
+	if len(rec.Variables) == 0 {
+		rec.Variables = json.RawMessage(`{}`)
+	}
 	return &rec, nil
 }

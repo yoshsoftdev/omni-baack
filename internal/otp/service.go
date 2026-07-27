@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/device"
-	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
+	"github.com/omnichannel/omni-chan-v2/internal/template/builder"
 	"github.com/omnichannel/omni-chan-v2/pkg/phone"
 )
 
@@ -21,11 +21,12 @@ var (
 	ErrCodeInvalid        = errors.New("code must contain digits only")
 )
 
+// TemplateMessenger sends a pre-built template payload (from TemplateBuilder).
 type TemplateMessenger interface {
 	SendTemplateMessage(
 		ctx context.Context,
 		phoneNumberID, accessToken, to, templateName, language string,
-		components []metaclient.TemplateComponent,
+		components []builder.SendComponent,
 	) (string, error)
 }
 
@@ -108,14 +109,18 @@ func (s *Service) Send(ctx context.Context, input SendInput) (*SendResponse, err
 		UpdatedAt: now,
 	}
 
-	components := metaclient.BuildKodeOTPComponents(code)
+	// Template components + language via Template Domain (not pkg/meta builders).
+	components, buildErr := builder.BuildAuthenticationOTP(code)
+	if buildErr != nil {
+		return nil, buildErr
+	}
 	wamid, sendErr := s.meta.SendTemplateMessage(
 		ctx,
 		*dev.PhoneNumberID,
 		*dev.AccessToken,
 		phone.ToMetaRecipient(phoneE164),
-		metaclient.OTPTemplateName,
-		metaclient.OTPTemplateLanguage,
+		builder.AuthenticationOTPName,
+		builder.AuthenticationOTPSendLanguage(),
 		components,
 	)
 

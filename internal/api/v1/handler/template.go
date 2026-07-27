@@ -50,6 +50,8 @@ func (h *TemplateHandler) List(c *fiber.Ctx) error {
 		Search:    strings.TrimSpace(c.Query("search")),
 		Status:    status,
 		ChannelID: channelID,
+		Language:  strings.TrimSpace(c.Query("language")),
+		Category:  strings.TrimSpace(c.Query("category")),
 	}, params)
 	if err != nil {
 		return mapError(c, err)

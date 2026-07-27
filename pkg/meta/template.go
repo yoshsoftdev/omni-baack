@@ -71,11 +71,12 @@ type TemplateComponent struct {
 }
 
 const (
-	OTPTemplateName     = "kode_otp"
-	OTPTemplateLanguage = "id"
+	OTPTemplateName = "kode_otp"
 )
 
 // BuildKodeOTPComponents builds Meta template components for the kode_otp authentication template.
+// Prefer internal/template/builder.BuildAuthenticationOTP from application code — this is the Meta DTO edge helper.
+// Send language MUST come from template.ToMetaSendLanguage / LanguageResolver — never hardcode Meta language.code here.
 func BuildKodeOTPComponents(code string) []TemplateComponent {
 	param := TemplateParameter{Type: "text", Text: code}
 	return []TemplateComponent{

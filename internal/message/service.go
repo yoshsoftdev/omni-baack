@@ -9,6 +9,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
+	"github.com/omnichannel/omni-chan-v2/internal/template"
 	"github.com/omnichannel/omni-chan-v2/internal/user"
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
@@ -51,6 +52,23 @@ func NewService(
 		rbac:          rbacSvc,
 		outbound:      outbound,
 	}
+}
+
+// Templates returns the wired TemplateResolver (nil when outbound templates are not configured).
+func (s *Service) Templates() TemplateResolver {
+	if s == nil || s.outbound == nil {
+		return nil
+	}
+	return s.outbound.Templates
+}
+
+// MetaSendLanguage maps a stored template language to Meta language.code via LanguageResolver.
+// Inbox outbound MUST use this (or Templates().MetaSendLanguage) — never hardcode en/en_US/id/en_EN.
+func (s *Service) MetaSendLanguage(stored string) string {
+	if tr := s.Templates(); tr != nil {
+		return tr.MetaSendLanguage(stored)
+	}
+	return template.ToMetaSendLanguage(stored)
 }
 
 type CreateInput struct {

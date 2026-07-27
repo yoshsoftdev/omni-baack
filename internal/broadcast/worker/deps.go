@@ -6,7 +6,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
-	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 )
 
@@ -25,11 +24,6 @@ type TemplateStore interface {
 type ChannelStore interface {
 	FindByID(ctx context.Context, teamID, id uuid.UUID) (*channel.Channel, error)
 	FindCredentials(ctx context.Context, channelID uuid.UUID) (*channel.Credentials, error)
-}
-
-// ContactStore loads contacts for variable rendering.
-type ContactStore interface {
-	FindByID(ctx context.Context, teamID, id uuid.UUID) (*contact.Contact, error)
 }
 
 // CampaignCancelChecker reports whether a campaign cancel flag is set.

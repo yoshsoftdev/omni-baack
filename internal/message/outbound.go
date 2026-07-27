@@ -2,32 +2,25 @@ package message
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	camrecipient "github.com/omnichannel/omni-chan-v2/internal/campaign/recipient"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
+	"github.com/omnichannel/omni-chan-v2/internal/media"
+	"github.com/omnichannel/omni-chan-v2/internal/outbound"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/storageclient"
-	"github.com/omnichannel/omni-chan-v2/pkg/meta"
+	"github.com/omnichannel/omni-chan-v2/internal/template"
+	"github.com/omnichannel/omni-chan-v2/internal/template/builder"
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
-
-// MetaMessenger sends WhatsApp and Instagram messages via Meta APIs.
-type MetaMessenger interface {
-	SendTextMessage(ctx context.Context, phoneNumberID, accessToken, to, body string) (string, error)
-	SendTextMessageWithContext(ctx context.Context, phoneNumberID, accessToken, to, body, replyToWAMID string) (string, error)
-	UploadMedia(ctx context.Context, phoneNumberID, accessToken, mimeType, filename string, body io.Reader, size int64) (string, error)
-	SendMediaMessage(ctx context.Context, phoneNumberID, accessToken, to, messageType, mediaID, caption, filename string) (string, error)
-	SendMediaMessageWithContext(ctx context.Context, phoneNumberID, accessToken, to, messageType, mediaID, caption, filename, replyToWAMID string) (string, error)
-	DeleteMessage(ctx context.Context, phoneNumberID, accessToken, wamid string) error
-	SendInstagramTextMessage(ctx context.Context, igUserID, accessToken, recipientScopedID, body, replyToMID string) (string, error)
-	SendInstagramMediaMessage(ctx context.Context, igUserID, accessToken, recipientScopedID, contentType, mediaURL, caption, replyToMID string) (string, error)
-}
 
 // StorageDownloader fetches uploaded objects from storage-service.
 type StorageDownloader interface {
@@ -46,7 +39,8 @@ type ChannelStore interface {
 	FindCredentials(ctx context.Context, channelID uuid.UUID) (*channel.Credentials, error)
 }
 
-// ContactStore loads contact phone numbers for outbound delivery.
+// ContactStore loads Instagram addressing helpers for outbound delivery.
+// WhatsApp phone MUST NOT be read from Contact — use WhatsAppAddressResolver.
 type ContactStore interface {
 	FindByID(ctx context.Context, teamID, id uuid.UUID) (*contact.Contact, error)
 	ResolveInstagramScopedID(ctx context.Context, teamID, contactID uuid.UUID) (string, error)
@@ -57,14 +51,39 @@ type TokenDecryptor interface {
 	Decrypt(ciphertext []byte) (string, error)
 }
 
+// WhatsAppAddressResolver resolves WhatsApp send identity from Canonical Provider.
+// Same contract as Campaign — never Contact.Phone.
+type WhatsAppAddressResolver interface {
+	Resolve(ctx context.Context, teamID, contactID uuid.UUID) (*camrecipient.WhatsAppRecipient, error)
+}
+
+// TemplateResolver loads domain Templates and builds send components via Template Domain.
+// Inbox/message MUST use this — never pkg/meta.BuildTemplatePayload or SQL on templates.
+type TemplateResolver interface {
+	GetByID(ctx context.Context, teamID, templateID uuid.UUID) (*template.Template, error)
+	GetByName(ctx context.Context, teamID, channelID uuid.UUID, name, language string) (*template.Template, error)
+	Build(tmpl *template.Template, vars builder.Variables) ([]builder.SendComponent, error)
+	MetaSendLanguage(stored string) string
+}
+
 // OutboundDeps wires channel delivery for agent replies.
+// Pipeline: WhatsAppAddresses → Templates/Builder → Media → Channel → Meta.
 type OutboundDeps struct {
 	Channels  ChannelStore
 	Contacts  ContactStore
-	Meta      MetaMessenger
 	Cipher    TokenDecryptor
 	Storage   StorageDownloader
 	MediaURLs MediaURLIssuer
+	// WhatsApp is Channel.Send for WhatsApp Cloud (hides Meta APIs).
+	WhatsApp outbound.Channel
+	// Instagram is Channel.Send for Instagram Messaging (hides Meta APIs).
+	Instagram outbound.Channel
+	// Media is the shared WhatsApp Media Manager (same as Broadcast). Required for WA attachments.
+	Media media.Manager
+	// Templates is TemplateRepository + TemplateBuilder (same domain as Campaign). Optional until Meta template send.
+	Templates TemplateResolver
+	// WhatsAppAddresses resolves WA phone from Canonical Provider (same as Campaign).
+	WhatsAppAddresses WhatsAppAddressResolver
 }
 
 type SendInput struct {
@@ -73,6 +92,9 @@ type SendInput struct {
 	ReplyToWAMID     string
 	ReplyToMessageID *uuid.UUID
 	ClientMessageID  *uuid.UUID
+	// ProviderMediaID is an optional pre-resolved WhatsApp Cloud media id (compatibility).
+	// When set with a WhatsApp attachment send, EnsureMedia may be skipped.
+	ProviderMediaID string
 }
 
 // SendReply persists an agent reply and delivers it through the connected channel when configured.
@@ -124,20 +146,20 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 		if s.outbound == nil || s.outbound.Storage == nil {
 			return nil, serviceerrors.NewValidation("storage_object_id", "storage service is unavailable")
 		}
-		meta, metaErr := s.outbound.Storage.GetMetadata(ctx, teamID, *input.StorageObjectID)
+		objectMeta, metaErr := s.outbound.Storage.GetMetadata(ctx, teamID, *input.StorageObjectID)
 		if metaErr != nil {
 			return nil, serviceerrors.NewValidation("storage_object_id", "invalid storage object")
 		}
-		validatedType, validateErr := ValidateAttachmentForChannel(meta.MimeType, meta.SizeBytes, channelHint)
+		validatedType, validateErr := ValidateAttachmentForChannel(objectMeta.MimeType, objectMeta.SizeBytes, channelHint)
 		if validateErr != nil {
 			return nil, serviceerrors.NewValidation("attachment", validateErr.Error())
 		}
 		contentType = validatedType
 		attachment = &Attachment{
-			StorageObjectID: meta.ID,
-			MimeType:        meta.MimeType,
-			SizeBytes:       meta.SizeBytes,
-			Filename:        filenameFromObject(meta),
+			StorageObjectID: objectMeta.ID,
+			MimeType:        objectMeta.MimeType,
+			SizeBytes:       objectMeta.SizeBytes,
+			Filename:        filenameFromObject(objectMeta),
 		}
 		if content == "" {
 			content = attachment.Filename
@@ -150,16 +172,9 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 	replyToMID := s.resolveOutboundReplyMID(ctx, teamID, conversationID, input)
 
 	if s.outbound != nil &&
-		s.outbound.Meta != nil &&
-		s.outbound.Contacts != nil &&
 		s.outbound.Channels != nil &&
 		s.outbound.Cipher != nil &&
 		conv.ChannelID != nil {
-		contactEntity, contactErr := s.outbound.Contacts.FindByID(ctx, teamID, conv.ContactID)
-		if contactErr != nil {
-			return nil, serviceerrors.MapRepository(contactErr)
-		}
-
 		ch, channelErr := s.outbound.Channels.FindByID(ctx, teamID, *conv.ChannelID)
 		if channelErr != nil {
 			return nil, serviceerrors.MapRepository(channelErr)
@@ -181,10 +196,19 @@ func (s *Service) SendMessage(ctx context.Context, teamID, userID uuid.UUID, act
 		deliveryContent := content
 		switch channelType {
 		case conversation.ChannelInstagram:
+			if s.outbound.Instagram == nil {
+				return nil, serviceerrors.NewValidation("channel", "instagram outbound channel is not configured")
+			}
+			if s.outbound.Contacts == nil {
+				return nil, serviceerrors.NewValidation("contact", "contact store is not configured")
+			}
 			deliveryContent, deliveryNotice = s.prepareInstagramReplyDelivery(ctx, teamID, conversationID, content, contentType, input)
-			recipient, wamid, err = s.deliverInstagram(ctx, teamID, ch, contactEntity, token, deliveryContent, contentType, attachment, "")
+			recipient, wamid, err = s.deliverInstagram(ctx, teamID, ch, conv.ContactID, token, deliveryContent, contentType, attachment, "")
 		default:
-			recipient, wamid, err = s.deliverWhatsApp(ctx, teamID, ch, contactEntity, token, content, contentType, attachment, replyToMID)
+			if s.outbound.WhatsApp == nil {
+				return nil, serviceerrors.NewValidation("channel", "whatsapp outbound channel is not configured")
+			}
+			recipient, wamid, err = s.deliverWhatsApp(ctx, teamID, ch, conv.ContactID, token, content, contentType, attachment, replyToMID, input.ProviderMediaID)
 		}
 		if err != nil {
 			return nil, err
@@ -230,53 +254,66 @@ func (s *Service) deliverWhatsApp(
 	ctx context.Context,
 	teamID uuid.UUID,
 	ch *channel.Channel,
-	contactEntity *contact.Contact,
+	contactID uuid.UUID,
 	token, content string,
 	contentType ContentType,
 	attachment *Attachment,
 	replyToWAMID string,
+	existingProviderMediaID string,
 ) (*string, *string, error) {
-	phone := strings.TrimSpace(contactEntity.Phone)
+	if s.outbound == nil || s.outbound.WhatsAppAddresses == nil {
+		return nil, nil, serviceerrors.NewValidation("contact", "whatsapp address resolver is not configured")
+	}
+	waRec, resolveErr := s.outbound.WhatsAppAddresses.Resolve(ctx, teamID, contactID)
+	if resolveErr != nil {
+		if errors.Is(resolveErr, camrecipient.ErrNoWhatsAppProvider) {
+			return nil, nil, serviceerrors.NewValidation("contact", "whatsapp provider is required")
+		}
+		return nil, nil, serviceerrors.MapRepository(resolveErr)
+	}
+	phone := ""
+	if waRec != nil {
+		phone = strings.TrimSpace(waRec.PhoneNumber)
+	}
 	if phone == "" {
-		return nil, nil, serviceerrors.NewValidation("contact", "phone is required")
+		return nil, nil, serviceerrors.NewValidation("contact", "whatsapp provider is required")
 	}
 	if ch.PhoneNumberID == nil || strings.TrimSpace(*ch.PhoneNumberID) == "" {
 		return nil, nil, serviceerrors.NewValidation("channel", "whatsapp channel is not connected")
 	}
+	if s.outbound.WhatsApp == nil {
+		return nil, nil, serviceerrors.NewValidation("channel", "whatsapp outbound channel is not configured")
+	}
+
+	creds := outbound.Credentials{
+		AccessToken:   token,
+		PhoneNumberID: strings.TrimSpace(*ch.PhoneNumberID),
+	}
+	replyToWAMID = strings.TrimSpace(replyToWAMID)
 
 	var sendErr error
 	var wamidValue string
-	replyToWAMID = strings.TrimSpace(replyToWAMID)
 	if attachment != nil {
-		reader, _, downloadErr := s.outbound.Storage.Download(ctx, teamID, attachment.StorageObjectID)
-		if downloadErr != nil {
-			return nil, nil, serviceerrors.NewValidation("attachment", "unable to download storage object")
-		}
-		defer reader.Close()
-		mediaID, uploadErr := s.outbound.Meta.UploadMedia(ctx, *ch.PhoneNumberID, token, attachment.MimeType, attachment.Filename, reader, attachment.SizeBytes)
-		if uploadErr != nil {
-			return nil, nil, serviceerrors.NewValidation("whatsapp", uploadErr.Error())
-		}
-		wamidValue, sendErr = s.outbound.Meta.SendMediaMessageWithContext(
-			ctx,
-			*ch.PhoneNumberID,
-			token,
-			phone,
-			WhatsAppMessageType(contentType),
-			mediaID,
-			content,
-			attachment.Filename,
-			replyToWAMID,
+		mediaID, mediaErr := s.resolveWhatsAppAttachmentMediaID(
+			ctx, teamID, creds.PhoneNumberID, token, attachment, existingProviderMediaID,
 		)
+		if mediaErr != nil {
+			return nil, nil, mediaErr
+		}
+		wamidValue, sendErr = s.outbound.WhatsApp.SendMedia(ctx, creds, outbound.MediaMessage{
+			To:                phone,
+			Type:              WhatsAppMessageType(contentType),
+			ProviderMediaID:   mediaID,
+			Caption:           content,
+			Filename:          attachment.Filename,
+			ReplyToProviderID: replyToWAMID,
+		})
 	} else {
-		wamidValue, sendErr = s.outbound.Meta.SendTextMessageWithContext(
-			ctx,
-			*ch.PhoneNumberID,
-			token,
-			phone,
-			content,
-			replyToWAMID,
-		)
+		wamidValue, sendErr = s.outbound.WhatsApp.SendText(ctx, creds, outbound.TextMessage{
+			To:                phone,
+			Body:              content,
+			ReplyToProviderID: replyToWAMID,
+		})
 	}
 	if sendErr != nil {
 		return nil, nil, serviceerrors.NewValidation("whatsapp", sendErr.Error())
@@ -286,25 +323,71 @@ func (s *Service) deliverWhatsApp(
 	return &recipient, &wamidValue, nil
 }
 
+// resolveWhatsAppAttachmentMediaID obtains a Cloud API media id via MediaManager.EnsureMedia.
+// Compatibility: an already-valid provider media id skips EnsureMedia (no re-upload).
+func (s *Service) resolveWhatsAppAttachmentMediaID(
+	ctx context.Context,
+	teamID uuid.UUID,
+	phoneNumberID, accessToken string,
+	attachment *Attachment,
+	existingProviderMediaID string,
+) (string, error) {
+	if id := strings.TrimSpace(existingProviderMediaID); id != "" && isWhatsAppCloudMediaID(id) {
+		return id, nil
+	}
+	if s.outbound == nil || s.outbound.Media == nil {
+		return "", serviceerrors.NewValidation("media", "media manager is not configured for WhatsApp attachments")
+	}
+	if attachment == nil || attachment.StorageObjectID == uuid.Nil {
+		return "", serviceerrors.NewValidation("attachment", "storage_object_id is required")
+	}
+
+	ref, err := s.outbound.Media.EnsureMedia(ctx, media.EnsureInput{
+		TeamID:        teamID,
+		AssetID:       attachment.StorageObjectID,
+		PhoneNumberID: strings.TrimSpace(phoneNumberID),
+		AccessToken:   strings.TrimSpace(accessToken),
+	})
+	if err != nil {
+		return "", serviceerrors.NewValidation("whatsapp", err.Error())
+	}
+	if ref == nil || strings.TrimSpace(ref.ProviderMediaID) == "" {
+		return "", serviceerrors.NewValidation("whatsapp", "media manager returned empty provider media id")
+	}
+	return strings.TrimSpace(ref.ProviderMediaID), nil
+}
+
+func isWhatsAppCloudMediaID(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Service) deliverInstagram(
 	ctx context.Context,
 	teamID uuid.UUID,
 	ch *channel.Channel,
-	contactEntity *contact.Contact,
+	contactID uuid.UUID,
 	token, content string,
 	contentType ContentType,
 	attachment *Attachment,
 	replyToMID string,
 ) (*string, *string, error) {
-	scopedID, ok := contact.ParseInstagramScopedID(contactEntity.Phone)
-	if !ok && s.outbound != nil && s.outbound.Contacts != nil {
-		resolvedID, resolveErr := s.outbound.Contacts.ResolveInstagramScopedID(ctx, contactEntity.TeamID, contactEntity.ID)
-		if resolveErr == nil {
-			scopedID = strings.TrimSpace(resolvedID)
-			ok = contact.IsValidInstagramScopedID(scopedID)
-		}
+	if s.outbound == nil || s.outbound.Contacts == nil {
+		return nil, nil, serviceerrors.NewValidation("contact", "contact store is not configured")
 	}
-	if !ok || !contact.IsValidInstagramScopedID(scopedID) {
+	// Prefer Canonical Provider / linked IGSID — never rely on Contact.Phone as primary.
+	scopedID, resolveErr := s.outbound.Contacts.ResolveInstagramScopedID(ctx, teamID, contactID)
+	scopedID = strings.TrimSpace(scopedID)
+	ok := resolveErr == nil && contact.IsValidInstagramScopedID(scopedID)
+	if !ok {
 		return nil, nil, serviceerrors.NewValidation("contact", "instagram recipient id is required (linked Instagram profile IGSID)")
 	}
 	igUserID := ""
@@ -314,14 +397,19 @@ func (s *Service) deliverInstagram(
 	if igUserID == "" {
 		return nil, nil, serviceerrors.NewValidation("channel", "instagram channel is not connected")
 	}
+	if s.outbound.Instagram == nil {
+		return nil, nil, serviceerrors.NewValidation("channel", "instagram outbound channel is not configured")
+	}
+
+	creds := outbound.Credentials{
+		AccessToken: token,
+		IGUserID:    igUserID,
+	}
 	replyToMID = strings.TrimSpace(replyToMID)
 	sendFn := func(replyTarget string) (string, error) {
 		if attachment != nil {
-			if s.outbound == nil || s.outbound.MediaURLs == nil {
+			if s.outbound.MediaURLs == nil {
 				return "", serviceerrors.NewValidation("attachment", "media proxy is not configured")
-			}
-			if mimeErr := meta.ValidateInstagramOutboundMIME(attachment.MimeType); mimeErr != nil {
-				return "", serviceerrors.NewValidation("attachment", mimeErr.Error())
 			}
 			mediaURL, urlErr := s.outbound.MediaURLs.Issue(teamID, attachment.StorageObjectID)
 			if urlErr != nil {
@@ -331,25 +419,27 @@ func (s *Service) deliverInstagram(
 			if caption == "" || strings.EqualFold(caption, strings.TrimSpace(attachment.Filename)) {
 				caption = ""
 			}
-			return s.outbound.Meta.SendInstagramMediaMessage(
-				ctx,
-				igUserID,
-				token,
-				scopedID,
-				WhatsAppMessageType(contentType),
-				mediaURL,
-				caption,
-				replyTarget,
-			)
+			return s.outbound.Instagram.SendMedia(ctx, creds, outbound.MediaMessage{
+				To:                scopedID,
+				Type:              WhatsAppMessageType(contentType),
+				MediaURL:          mediaURL,
+				Caption:           caption,
+				ReplyToProviderID: replyTarget,
+				MIMEType:          attachment.MimeType,
+			})
 		}
-		return s.outbound.Meta.SendInstagramTextMessage(ctx, igUserID, token, scopedID, content, replyTarget)
+		return s.outbound.Instagram.SendText(ctx, creds, outbound.TextMessage{
+			To:                scopedID,
+			Body:              content,
+			ReplyToProviderID: replyTarget,
+		})
 	}
 	mid, sendErr := sendFn(replyToMID)
 	if sendErr != nil {
 		return nil, nil, serviceerrors.NewValidation("instagram", sendErr.Error())
 	}
 
-	recipient := contactEntity.Phone
+	recipient := "ig:" + scopedID
 	return &recipient, &mid, nil
 }
 
@@ -413,11 +503,11 @@ func (s *Service) createOutbound(ctx context.Context, teamID, userID uuid.UUID, 
 	return m, nil
 }
 
-func filenameFromObject(meta *storageclient.StoredObject) string {
-	if meta == nil {
+func filenameFromObject(objectMeta *storageclient.StoredObject) string {
+	if objectMeta == nil {
 		return "attachment"
 	}
-	parts := strings.Split(meta.ObjectKey, "/")
+	parts := strings.Split(objectMeta.ObjectKey, "/")
 	if len(parts) == 0 {
 		return "attachment"
 	}
@@ -440,7 +530,7 @@ func (s *Service) revokeOnProvider(ctx context.Context, teamID uuid.UUID, m *Mes
 	if m == nil || m.ChannelID == nil || m.WAMID == nil || strings.TrimSpace(*m.WAMID) == "" {
 		return nil
 	}
-	if s.outbound == nil || s.outbound.Meta == nil || s.outbound.Channels == nil || s.outbound.Cipher == nil {
+	if s.outbound == nil || s.outbound.WhatsApp == nil || s.outbound.Channels == nil || s.outbound.Cipher == nil {
 		return nil
 	}
 	ch, err := s.outbound.Channels.FindByID(ctx, teamID, *m.ChannelID)
@@ -453,13 +543,16 @@ func (s *Service) revokeOnProvider(ctx context.Context, teamID uuid.UUID, m *Mes
 	if ch.PhoneNumberID == nil || strings.TrimSpace(*ch.PhoneNumberID) == "" {
 		return nil
 	}
-	creds, err := s.outbound.Channels.FindCredentials(ctx, *m.ChannelID)
+	credsRow, err := s.outbound.Channels.FindCredentials(ctx, *m.ChannelID)
 	if err != nil {
 		return nil
 	}
-	token, err := s.outbound.Cipher.Decrypt(creds.AccessTokenEnc)
+	token, err := s.outbound.Cipher.Decrypt(credsRow.AccessTokenEnc)
 	if err != nil {
 		return nil
 	}
-	return s.outbound.Meta.DeleteMessage(ctx, *ch.PhoneNumberID, token, *m.WAMID)
+	return s.outbound.WhatsApp.DeleteMessage(ctx, outbound.Credentials{
+		AccessToken:   token,
+		PhoneNumberID: strings.TrimSpace(*ch.PhoneNumberID),
+	}, *m.WAMID)
 }

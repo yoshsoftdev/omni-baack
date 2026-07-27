@@ -27,6 +27,7 @@ type Service struct {
 	rbac        *rbac.Service
 	cancelFlags CancelFlagStore
 	payment     CampaignPaymentChecker
+	snapshots   *recipientSnapshotDeps
 }
 
 type CampaignPaymentChecker interface {
@@ -151,9 +152,6 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 	}
 
 	audiences := buildAudiences(campaignID, input.Audiences, now)
-	sourceSummary, _ := json.Marshal(map[string]any{
-		"audiences": audiences,
-	})
 
 	initialStatus := StatusDraft
 	if input.SendMode == SendLater {
@@ -179,23 +177,52 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 		UpdatedAt:       now,
 	}
 
-	job := &BroadcastJob{
-		ID:         jobID,
-		CampaignID: campaignID,
-		TeamID:     teamID,
-		ChannelID:  input.ChannelID,
-		Status:     JobPending,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+	recipients, eligible, skippedOptOut, skippedInvalid, err := s.buildRecipientSnapshots(
+		ctx,
+		teamID,
+		campaignID,
+		jobID,
+		audiences,
+		variableMapping,
+		input.SampleValues,
+		now,
+	)
+	if err != nil {
+		return nil, err
 	}
 
+	c.TotalContacts = eligible
+
+	job := &BroadcastJob{
+		ID:              jobID,
+		CampaignID:      campaignID,
+		TeamID:          teamID,
+		ChannelID:       input.ChannelID,
+		Status:          JobPending,
+		TotalRecipients: eligible + skippedOptOut + skippedInvalid,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+
+	sourceSummary, _ := json.Marshal(map[string]any{
+		"audiences":       audiences,
+		"resolved_count":  eligible,
+		"skipped_opt_out": skippedOptOut,
+		"skipped_invalid": skippedInvalid,
+		"snapshot_at":     now,
+		"frozen_at":       "create",
+	})
+
 	snap := &AudienceSnapshot{
-		ID:            snapID,
-		CampaignID:    campaignID,
-		JobID:         jobID,
-		SnapshotAt:    now,
-		SourceSummary: sourceSummary,
-		CreatedAt:     now,
+		ID:             snapID,
+		CampaignID:     campaignID,
+		JobID:          jobID,
+		SnapshotAt:     now,
+		SourceSummary:  sourceSummary,
+		ResolvedCount:  eligible,
+		SkippedOptOut:  skippedOptOut,
+		SkippedInvalid: skippedInvalid,
+		CreatedAt:      now,
 	}
 
 	if err := s.tx.Run(ctx, func(ctx context.Context, repos Repository) error {
@@ -205,7 +232,10 @@ func (s *Service) Create(ctx context.Context, teamID, userID uuid.UUID, actorRol
 		if err := repos.CreateJob(ctx, job); err != nil {
 			return err
 		}
-		return repos.CreateAudienceSnapshot(ctx, snap)
+		if err := repos.CreateAudienceSnapshot(ctx, snap); err != nil {
+			return err
+		}
+		return repos.BulkCreateRecipients(ctx, recipients, now)
 	}); err != nil {
 		return nil, serviceerrors.MapRepository(err)
 	}

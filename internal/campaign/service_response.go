@@ -22,6 +22,9 @@ func (s *Service) ListResponses(
 	if err != nil {
 		return repository.Page[CampaignResponse]{}, err
 	}
+	if err := s.attachTemplateEnrichment(ctx, teamID, pageResult.Items, enrichment); err != nil {
+		return repository.Page[CampaignResponse]{}, err
+	}
 	items := make([]CampaignResponse, 0, len(pageResult.Items))
 	for _, c := range pageResult.Items {
 		items = append(items, NewCampaignResponse(c, enrichment[c.ID]))
@@ -41,6 +44,45 @@ func (s *Service) GetResponse(ctx context.Context, teamID, userID uuid.UUID, act
 	if err != nil {
 		return nil, err
 	}
+	if err := s.attachTemplateEnrichment(ctx, teamID, []Campaign{*c}, enrichment); err != nil {
+		return nil, err
+	}
 	resp := NewCampaignResponse(*c, enrichment[c.ID])
 	return &resp, nil
+}
+
+// attachTemplateEnrichment fills template name/language via TemplateRepository only.
+func (s *Service) attachTemplateEnrichment(
+	ctx context.Context,
+	teamID uuid.UUID,
+	campaigns []Campaign,
+	enrichment map[uuid.UUID]ListEnrichment,
+) error {
+	if s.templates == nil || len(campaigns) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(campaigns))
+	seen := map[uuid.UUID]struct{}{}
+	for _, c := range campaigns {
+		if _, ok := seen[c.TemplateID]; ok {
+			continue
+		}
+		seen[c.TemplateID] = struct{}{}
+		ids = append(ids, c.TemplateID)
+	}
+	templates, err := s.templates.FindByIDs(ctx, teamID, ids)
+	if err != nil {
+		return err
+	}
+	for _, c := range campaigns {
+		tmpl, ok := templates[c.TemplateID]
+		if !ok || tmpl == nil {
+			continue
+		}
+		item := enrichment[c.ID]
+		item.TemplateName = tmpl.Name
+		item.TemplateLanguage = tmpl.Language
+		enrichment[c.ID] = item
+	}
+	return nil
 }

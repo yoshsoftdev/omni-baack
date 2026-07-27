@@ -39,14 +39,14 @@ type resumableMediaUploader interface {
 
 // SyncService pulls templates from Meta with pagination, retry, drift detection, and audit trail.
 type SyncService struct {
-	meta     MetaTemplatePageLister
-	channels channel.Repository
+	meta      MetaTemplatePageLister
+	channels  channel.Repository
 	templates Repository
-	syncRuns SyncRunRepository
-	cipher   *cryptoutil.TokenCipher
-	log      *slog.Logger
-	appID    string
-	storage  headerMediaDownloader
+	syncRuns  SyncRunRepository
+	cipher    *cryptoutil.TokenCipher
+	log       *slog.Logger
+	appID     string
+	storage   headerMediaDownloader
 }
 
 func NewSyncService(
@@ -83,12 +83,12 @@ func (s *SyncService) WithStorage(storage headerMediaDownloader) *SyncService {
 }
 
 type SyncResult struct {
-	SyncRunID uuid.UUID `json:"sync_run_id"`
-	Created   int       `json:"created"`
-	Updated   int       `json:"updated"`
-	Removed   int64     `json:"removed"`
-	Synced    int       `json:"synced"`
-	ErrorCount int      `json:"error_count,omitempty"`
+	SyncRunID  uuid.UUID `json:"sync_run_id"`
+	Created    int       `json:"created"`
+	Updated    int       `json:"updated"`
+	Removed    int64     `json:"removed"`
+	Synced     int       `json:"synced"`
+	ErrorCount int       `json:"error_count,omitempty"`
 }
 
 func (s *SyncService) SyncChannel(ctx context.Context, teamID, channelID uuid.UUID) (*SyncResult, error) {
@@ -195,14 +195,17 @@ func (s *SyncService) executeSync(ctx context.Context, teamID, channelID uuid.UU
 	for _, mt := range metaTemplates {
 		keepIDs = append(keepIDs, mt.ID)
 		now := time.Now().UTC()
+		// Meta DTO → domain only via mapper boundary (Phase 3).
 		incoming := MapFromMeta(channelID, teamID, wabaID, mt, now)
 
 		existing, findErr := s.templates.FindByMetaTemplateID(ctx, teamID, channelID, mt.ID)
 		if findErr == nil {
+			incoming = MergeSyncedTemplate(existing, incoming)
 			if templateDriftChanged(existing, incoming) {
 				result.Updated++
 			}
 		} else {
+			incoming = MergeSyncedTemplate(nil, incoming)
 			result.Created++
 		}
 

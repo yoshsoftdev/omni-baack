@@ -19,20 +19,12 @@ func (r *PostgresRepository) LoadListEnrichment(
 	}
 
 	campaignIDs := make([]uuid.UUID, 0, len(campaigns))
-	templateIDs := make([]uuid.UUID, 0, len(campaigns))
-	seenTemplates := map[uuid.UUID]struct{}{}
 	for _, c := range campaigns {
 		campaignIDs = append(campaignIDs, c.ID)
-		if _, ok := seenTemplates[c.TemplateID]; !ok {
-			seenTemplates[c.TemplateID] = struct{}{}
-			templateIDs = append(templateIDs, c.TemplateID)
-		}
 	}
 
-	templates, err := r.loadTemplateMeta(ctx, teamID, templateIDs)
-	if err != nil {
-		return nil, err
-	}
+	// Template name/language are filled by Campaign Service via template.Repository
+	// (no direct SQL against templates outside the template package).
 	sources, err := r.loadAudienceSources(ctx, campaignIDs)
 	if err != nil {
 		return nil, err
@@ -46,10 +38,6 @@ func (r *PostgresRepository) LoadListEnrichment(
 		item := ListEnrichment{
 			Sources: sources[c.ID],
 		}
-		if meta, ok := templates[c.TemplateID]; ok {
-			item.TemplateName = meta.Name
-			item.TemplateLanguage = meta.Language
-		}
 		if snap, ok := snapshots[c.ID]; ok {
 			item.SnapshotAt = snap.SnapshotAt
 			item.SnapshotResolved = snap.ResolvedCount
@@ -59,35 +47,6 @@ func (r *PostgresRepository) LoadListEnrichment(
 	}
 
 	return out, nil
-}
-
-type templateMeta struct {
-	Name     string
-	Language string
-}
-
-func (r *PostgresRepository) loadTemplateMeta(ctx context.Context, teamID uuid.UUID, templateIDs []uuid.UUID) (map[uuid.UUID]templateMeta, error) {
-	out := make(map[uuid.UUID]templateMeta, len(templateIDs))
-	if len(templateIDs) == 0 {
-		return out, nil
-	}
-	rows, err := r.q.Query(ctx, `
-		SELECT id, name, language FROM templates
-		WHERE team_id = $1 AND id = ANY($2) AND deleted_at IS NULL
-	`, teamID, templateIDs)
-	if err != nil {
-		return out, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id uuid.UUID
-		var meta templateMeta
-		if err := rows.Scan(&id, &meta.Name, &meta.Language); err != nil {
-			return out, err
-		}
-		out[id] = meta
-	}
-	return out, rows.Err()
 }
 
 func (r *PostgresRepository) loadAudienceSources(ctx context.Context, campaignIDs []uuid.UUID) (map[uuid.UUID][]AudienceSourceView, error) {

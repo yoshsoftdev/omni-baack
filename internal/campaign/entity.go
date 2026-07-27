@@ -145,25 +145,32 @@ const (
 	RecipientSkipped   RecipientStatus = "skipped"
 )
 
+// Recipient is a frozen campaign send row.
+// Snapshot identity fields (ProviderProfileID, PhoneNumber, WAID, Variables) are
+// immutable after insert. Only delivery/status fields may change at runtime.
+// ProviderProfileID is audit/tracing only — workers must not resolve via Provider.
 type Recipient struct {
-	ID           uuid.UUID
-	CampaignID   uuid.UUID
-	TeamID       uuid.UUID
-	ContactID    uuid.UUID
-	JobID        *uuid.UUID
-	BatchID      *uuid.UUID
-	Phone        string
-	Status       RecipientStatus
-	AttemptCount int
-	LastError    *string
-	FailureCode  *string
-	WAMID        *string
-	SentAt       *time.Time
-	DeliveredAt  *time.Time
-	ReadAt       *time.Time
-	FailedAt     *time.Time
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID                uuid.UUID
+	CampaignID        uuid.UUID
+	TeamID            uuid.UUID
+	ContactID         uuid.UUID
+	JobID             *uuid.UUID
+	BatchID           *uuid.UUID
+	ProviderProfileID *uuid.UUID
+	PhoneNumber       string
+	WAID              string
+	Variables         json.RawMessage
+	Status            RecipientStatus
+	AttemptCount      int
+	LastError         *string
+	FailureCode       *string
+	WAMID             *string
+	SentAt            *time.Time
+	DeliveredAt       *time.Time
+	ReadAt            *time.Time
+	FailedAt          *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type AudienceSnapshot struct {

@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/device"
-	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
+	"github.com/omnichannel/omni-chan-v2/internal/template/builder"
 )
 
 type mockOTPRepo struct {
@@ -38,14 +38,14 @@ type mockMetaClient struct {
 		to           string
 		templateName string
 		language     string
-		components   []metaclient.TemplateComponent
+		components   []builder.SendComponent
 	}
 }
 
 func (m *mockMetaClient) SendTemplateMessage(
 	_ context.Context,
 	_, _, to, templateName, language string,
-	components []metaclient.TemplateComponent,
+	components []builder.SendComponent,
 ) (string, error) {
 	m.last.to = to
 	m.last.templateName = templateName
@@ -90,8 +90,11 @@ func TestService_Send_Success(t *testing.T) {
 	if meta.last.to != "628123456789" {
 		t.Fatalf("meta to = %q", meta.last.to)
 	}
-	if meta.last.templateName != metaclient.OTPTemplateName {
+	if meta.last.templateName != builder.AuthenticationOTPName {
 		t.Fatalf("template = %q", meta.last.templateName)
+	}
+	if meta.last.language != builder.AuthenticationOTPSendLanguage() {
+		t.Fatalf("language = %q", meta.last.language)
 	}
 	if len(meta.last.components) != 2 {
 		t.Fatalf("components = %d", len(meta.last.components))

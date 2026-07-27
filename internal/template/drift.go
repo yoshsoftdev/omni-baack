@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 )
 
-// templateDriftChanged reports whether Meta template data differs from the stored copy.
+// templateDriftChanged reports whether Meta-visible template data differs after merge.
+// Callers must run MergeSyncedTemplate before comparing so internal keys do not cause false drift.
 func templateDriftChanged(existing, incoming *Template) bool {
 	if existing == nil {
 		return false

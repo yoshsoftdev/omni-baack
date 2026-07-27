@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
-	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 	"github.com/omnichannel/omni-chan-v2/pkg/cryptoutil"
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
@@ -199,12 +198,6 @@ func (m *mockChannelRepo) FindCredentials(context.Context, uuid.UUID) (*channel.
 	return &channel.Credentials{AccessTokenEnc: m.token}, nil
 }
 
-type mockContactRepo struct{}
-
-func (m *mockContactRepo) FindByID(context.Context, uuid.UUID, uuid.UUID) (*contact.Contact, error) {
-	return &contact.Contact{ContactName: "Test", CustomerName: "Test"}, nil
-}
-
 type mockFinalizer struct {
 	campRepo *mockCampaignRepo
 }
@@ -255,7 +248,11 @@ func newTestProcessor(t *testing.T, meta *mockMeta, send *mockSendRepo) (*BatchP
 	cfg.WorkerID = "test-worker"
 	cfg.RetryDelayFn = func(int) time.Duration { return time.Millisecond }
 	cfg.RateLimitBackoff = time.Millisecond
-	return NewBatchProcessor(cfg, send, campRepo, &mockTemplateRepo{tpl: tpl}, &mockChannelRepo{ch: ch, token: encryptToken(t, cipher)}, &mockContactRepo{}, sender, &mockFinalizer{campRepo: campRepo}, nil, NewMemoryRateLimiter(1000), metrics, nil), metrics
+	return NewBatchProcessor(cfg, send, campRepo, &mockTemplateRepo{tpl: tpl}, &mockChannelRepo{ch: ch, token: encryptToken(t, cipher)}, sender, &mockFinalizer{campRepo: campRepo}, nil, NewMemoryRateLimiter(1000), metrics, nil), metrics
+}
+
+func testSnapshotVars() json.RawMessage {
+	return json.RawMessage(`{"body.1":"Test"}`)
 }
 
 func testCipher(t *testing.T) *cryptoutil.TokenCipher {
@@ -283,7 +280,7 @@ func TestSendOneRecipientStoresWAMID(t *testing.T) {
 	send := &mockSendRepo{
 		batch: campaign.BroadcastBatch{ID: batchID, Status: campaign.BatchQueued, JobID: uuid.New(), CampaignID: uuid.New()},
 		recipients: []campaign.Recipient{{
-			ID: recID, Status: campaign.RecipientQueued, ContactID: uuid.New(), Phone: "15551234567",
+			ID: recID, Status: campaign.RecipientQueued, ContactID: uuid.New(), Variables: testSnapshotVars(), PhoneNumber: "15551234567",
 		}},
 	}
 	p, _ := newTestProcessor(t, meta, send)
@@ -317,7 +314,7 @@ func TestRetry500SucceedsSecondAttempt(t *testing.T) {
 	send := &mockSendRepo{
 		batch: campaign.BroadcastBatch{ID: batchID, Status: campaign.BatchQueued, CampaignID: uuid.New()},
 		recipients: []campaign.Recipient{{
-			ID: uuid.New(), Status: campaign.RecipientQueued, ContactID: uuid.New(), Phone: "15551234567",
+			ID: uuid.New(), Status: campaign.RecipientQueued, ContactID: uuid.New(), Variables: testSnapshotVars(), PhoneNumber: "15551234567",
 		}},
 	}
 	p, _ := newTestProcessor(t, meta, send)
@@ -342,7 +339,7 @@ func TestPermanentFailureInvalidPhone(t *testing.T) {
 	send := &mockSendRepo{
 		batch: campaign.BroadcastBatch{ID: batchID, Status: campaign.BatchQueued, CampaignID: uuid.New()},
 		recipients: []campaign.Recipient{{
-			ID: uuid.New(), Status: campaign.RecipientQueued, ContactID: uuid.New(), Phone: "bad",
+			ID: uuid.New(), Status: campaign.RecipientQueued, ContactID: uuid.New(), Variables: testSnapshotVars(), PhoneNumber: "bad",
 		}},
 	}
 	p, _ := newTestProcessor(t, meta, send)
@@ -367,7 +364,7 @@ func TestIdempotencyDuplicateBatchEvent(t *testing.T) {
 	send := &mockSendRepo{
 		batch: campaign.BroadcastBatch{ID: batchID, Status: campaign.BatchCompleted, CampaignID: uuid.New()},
 		recipients: []campaign.Recipient{{
-			ID: uuid.New(), Status: campaign.RecipientSent, ContactID: uuid.New(), Phone: "15551234567",
+			ID: uuid.New(), Status: campaign.RecipientSent, ContactID: uuid.New(), Variables: testSnapshotVars(), PhoneNumber: "15551234567",
 			WAMID: strPtr("wamid.once"),
 		}},
 	}
@@ -393,7 +390,7 @@ func TestRateLimit429DelaysAndRetries(t *testing.T) {
 	send := &mockSendRepo{
 		batch: campaign.BroadcastBatch{ID: batchID, Status: campaign.BatchQueued, CampaignID: uuid.New()},
 		recipients: []campaign.Recipient{{
-			ID: uuid.New(), Status: campaign.RecipientQueued, ContactID: uuid.New(), Phone: "15551234567",
+			ID: uuid.New(), Status: campaign.RecipientQueued, ContactID: uuid.New(), Variables: testSnapshotVars(), PhoneNumber: "15551234567",
 		}},
 	}
 	p, metrics := newTestProcessor(t, meta, send)
@@ -419,8 +416,8 @@ func TestWorkerRestartBatchContinues(t *testing.T) {
 	send := &mockSendRepo{
 		batch: campaign.BroadcastBatch{ID: batchID, Status: campaign.BatchProcessing, CampaignID: uuid.New()},
 		recipients: []campaign.Recipient{
-			{ID: uuid.New(), Status: campaign.RecipientSent, ContactID: uuid.New(), Phone: "1", WAMID: &wamid},
-			{ID: uuid.New(), Status: campaign.RecipientQueued, ContactID: uuid.New(), Phone: "2"},
+			{ID: uuid.New(), Status: campaign.RecipientSent, ContactID: uuid.New(), Variables: testSnapshotVars(), PhoneNumber: "1", WAMID: &wamid},
+			{ID: uuid.New(), Status: campaign.RecipientQueued, ContactID: uuid.New(), Variables: testSnapshotVars(), PhoneNumber: "2"},
 		},
 	}
 	p, _ := newTestProcessor(t, meta, send)
@@ -453,7 +450,7 @@ func TestValidationFailureNoMetaCall(t *testing.T) {
 	send := &mockSendRepo{
 		batch: campaign.BroadcastBatch{ID: batchID, Status: campaign.BatchQueued, CampaignID: uuid.New()},
 		recipients: []campaign.Recipient{{
-			ID: uuid.New(), Status: campaign.RecipientQueued, ContactID: uuid.New(), Phone: "15551234567",
+			ID: uuid.New(), Status: campaign.RecipientQueued, ContactID: uuid.New(), Variables: testSnapshotVars(), PhoneNumber: "15551234567",
 		}},
 	}
 
@@ -476,7 +473,7 @@ func TestValidationFailureNoMetaCall(t *testing.T) {
 	sender := NewSender(meta, &mockChannelRepo{ch: ch, token: encryptToken(t, cipher)}, cipher, metrics, nil)
 	cfg := DefaultConfig()
 	cfg.RetryDelayFn = func(int) time.Duration { return time.Millisecond }
-	processor := NewBatchProcessor(cfg, send, campRepo, &mockTemplateRepo{tpl: tpl}, &mockChannelRepo{ch: ch, token: encryptToken(t, cipher)}, &mockContactRepo{}, sender, &mockFinalizer{campRepo: campRepo}, nil, NewMemoryRateLimiter(1000), metrics, nil)
+	processor := NewBatchProcessor(cfg, send, campRepo, &mockTemplateRepo{tpl: tpl}, &mockChannelRepo{ch: ch, token: encryptToken(t, cipher)}, sender, &mockFinalizer{campRepo: campRepo}, nil, NewMemoryRateLimiter(1000), metrics, nil)
 
 	payload := sharedevents.BatchSendPayload{
 		BatchID: batchID.String(), JobID: uuid.New().String(), CampaignID: send.batch.CampaignID.String(),

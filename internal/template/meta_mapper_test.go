@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	metapkg "github.com/omnichannel/omni-chan-v2/pkg/meta"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
+	metapkg "github.com/omnichannel/omni-chan-v2/pkg/meta"
 )
 
 func TestMapFromMetaNormalizesStatusAndLanguage(t *testing.T) {
@@ -27,8 +27,17 @@ func TestMapFromMetaNormalizesStatusAndLanguage(t *testing.T) {
 	if tmpl.Status != template.StatusApproved {
 		t.Fatalf("status = %s", tmpl.Status)
 	}
-	if tmpl.Language != "en_EN" {
+	if tmpl.Language != "en_US" {
 		t.Fatalf("language = %s", tmpl.Language)
+	}
+	if tmpl.NormalizedLanguage != "en_US" {
+		t.Fatalf("normalized_language = %s", tmpl.NormalizedLanguage)
+	}
+	if tmpl.WorkspaceID() != teamID {
+		t.Fatalf("workspace = %s", tmpl.WorkspaceID())
+	}
+	if string(tmpl.Metadata.Normalize()) != "{}" {
+		t.Fatalf("metadata from Meta sync must start empty, got %s", tmpl.Metadata)
 	}
 	if tmpl.VariableCount != 1 {
 		t.Fatalf("variable count = %d", tmpl.VariableCount)

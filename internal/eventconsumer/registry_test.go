@@ -67,16 +67,28 @@ func (f *fakeChannelRepo) UpdateHealthMetadata(context.Context, uuid.UUID, []byt
 
 type fakeContactRepo struct {
 	byPhone map[string]*contact.Contact
+	byID    map[uuid.UUID]*contact.Contact
 	created int
 }
 
 func (f *fakeContactRepo) Create(_ context.Context, c *contact.Contact) error {
 	f.created++
+	if f.byPhone == nil {
+		f.byPhone = map[string]*contact.Contact{}
+	}
+	if f.byID == nil {
+		f.byID = map[uuid.UUID]*contact.Contact{}
+	}
 	f.byPhone[c.Phone] = c
+	f.byID[c.ID] = c
 	return nil
 }
-func (f *fakeContactRepo) FindByID(context.Context, uuid.UUID, uuid.UUID) (*contact.Contact, error) {
-	return nil, repository.ErrNotFound
+func (f *fakeContactRepo) FindByID(_ context.Context, teamID, id uuid.UUID) (*contact.Contact, error) {
+	c, ok := f.byID[id]
+	if !ok || c.TeamID != teamID {
+		return nil, repository.ErrNotFound
+	}
+	return c, nil
 }
 func (f *fakeContactRepo) FindByPhone(_ context.Context, _ uuid.UUID, phone string) (*contact.Contact, error) {
 	c, ok := f.byPhone[phone]

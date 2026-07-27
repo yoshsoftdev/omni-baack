@@ -15,20 +15,26 @@ import (
 	sharedevents "github.com/omnichannel/omni-chan-v2/shared/events"
 )
 
+// CampaignLifecycle finalizes campaign status when all recipients are terminal.
+type CampaignLifecycle interface {
+	Check(ctx context.Context, teamID, campaignID uuid.UUID, at time.Time) (bool, error)
+}
+
 // BatchProcessor executes send work for a broadcast batch.
 type BatchProcessor struct {
-	cfg        Config
-	sends      campaign.SendRepository
-	campaigns  CampaignStore
-	templates  TemplateStore
-	channels   ChannelStore
-	contacts   ContactStore
-	sender     *Sender
-	finalizer      SendFinalizer
-	cancelChecker  CampaignCancelChecker
-	limiter        RateLimiter
-	metrics    *Metrics
-	log        *slog.Logger
+	cfg           Config
+	sends         campaign.SendRepository
+	campaigns     CampaignStore
+	templates     TemplateStore
+	channels      ChannelStore
+	sender        *Sender
+	finalizer     SendFinalizer
+	cancelChecker CampaignCancelChecker
+	lifecycle     CampaignLifecycle
+	inbox         InboxRecorder
+	limiter       RateLimiter
+	metrics       *Metrics
+	log           *slog.Logger
 }
 
 func NewBatchProcessor(
@@ -37,7 +43,6 @@ func NewBatchProcessor(
 	campaigns CampaignStore,
 	templates TemplateStore,
 	channels ChannelStore,
-	contacts ContactStore,
 	sender *Sender,
 	finalizer SendFinalizer,
 	cancelChecker CampaignCancelChecker,
@@ -55,19 +60,36 @@ func NewBatchProcessor(
 		metrics = NewMetrics()
 	}
 	return &BatchProcessor{
-		cfg:        cfg.Normalize(),
-		sends:      sends,
-		campaigns:  campaigns,
-		templates:  templates,
-		channels:   channels,
-		contacts:   contacts,
+		cfg:           cfg.Normalize(),
+		sends:         sends,
+		campaigns:     campaigns,
+		templates:     templates,
+		channels:      channels,
 		sender:        sender,
 		finalizer:     finalizer,
 		cancelChecker: cancelChecker,
 		limiter:       limiter,
-		metrics:    metrics,
-		log:        log,
+		metrics:       metrics,
+		log:           log,
 	}
+}
+
+// WithLifecycle wires campaign completion checks after batches finish.
+func (p *BatchProcessor) WithLifecycle(lifecycle CampaignLifecycle) *BatchProcessor {
+	if p == nil {
+		return nil
+	}
+	p.lifecycle = lifecycle
+	return p
+}
+
+// WithInboxRecorder mirrors successful Meta sends into Inbox conversation history.
+func (p *BatchProcessor) WithInboxRecorder(recorder InboxRecorder) *BatchProcessor {
+	if p == nil {
+		return nil
+	}
+	p.inbox = recorder
+	return p
 }
 
 func (p *BatchProcessor) HandleBatchSend(ctx context.Context, payload sharedevents.BatchSendPayload) error {
@@ -186,6 +208,15 @@ func (p *BatchProcessor) HandleBatchSend(ctx context.Context, payload sharedeven
 		return err
 	}
 	p.metrics.IncWorkerBatchesCompleted()
+	if p.lifecycle != nil {
+		if _, checkErr := p.lifecycle.Check(ctx, teamID, campaignID, time.Now().UTC()); checkErr != nil {
+			p.log.Warn("campaign completion check failed",
+				"campaign_id", campaignID.String(),
+				"team_id", teamID.String(),
+				"error", checkErr.Error(),
+			)
+		}
+	}
 	return nil
 }
 
@@ -208,11 +239,6 @@ func (p *BatchProcessor) processRecipient(
 		"phone_number_id", phoneNumberID,
 	)
 
-	ct, err := p.contacts.FindByID(ctx, camp.TeamID, rec.ContactID)
-	if err != nil && !errors.Is(err, repository.ErrNotFound) {
-		return err
-	}
-
 	if err := p.campaigns.UpdateRecipientDelivery(ctx, rec.ID, campaign.RecipientQueued, campaign.RecipientSending, campaign.RecipientDeliveryUpdate{}); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil
@@ -232,7 +258,6 @@ func (p *BatchProcessor) processRecipient(
 			Template:  tpl,
 			Channel:   ch,
 			Recipient: rec,
-			Contact:   ct,
 		})
 		if sendErr == nil {
 			wamid := result.WAMID
@@ -267,6 +292,7 @@ func (p *BatchProcessor) processRecipient(
 			}
 			rec.Status = campaign.RecipientSent
 			rec.WAMID = &wamid
+			p.mirrorToInbox(ctx, camp, tpl, ch, rec, wamid, result.ProviderResponse, now, log)
 			log.Info("recipient sent")
 			return nil
 		}
@@ -403,6 +429,42 @@ func (p *BatchProcessor) markFailed(
 	}
 	_ = p.sends.IncrementBatchRecipientFailed(ctx, batch.ID)
 	return nil
+}
+
+func (p *BatchProcessor) mirrorToInbox(
+	ctx context.Context,
+	camp *campaign.Campaign,
+	tpl *template.Template,
+	ch *channel.Channel,
+	rec *campaign.Recipient,
+	wamid string,
+	providerResponse json.RawMessage,
+	sentAt time.Time,
+	log *slog.Logger,
+) {
+	if p.inbox == nil {
+		return
+	}
+	variables, err := campaign.ParseRecipientVariables(rec.Variables)
+	if err != nil {
+		log.Warn("inbox mirror skipped: invalid recipient variables", "error", err)
+		return
+	}
+	if err := p.inbox.RecordCampaignSend(ctx, CampaignInboxRecordInput{
+		TeamID:           camp.TeamID,
+		ChannelID:        ch.ID,
+		ContactID:        rec.ContactID,
+		CampaignName:     camp.Name,
+		Template:         tpl,
+		RecipientPhone:   rec.PhoneNumber,
+		Variables:        variables,
+		WAMID:            wamid,
+		ProviderResponse: providerResponse,
+		SentAt:           sentAt,
+	}); err != nil {
+		// Campaign send already succeeded at Meta; do not fail the recipient.
+		log.Warn("inbox mirror failed", "error", err, "wamid", wamid)
+	}
 }
 
 func skipRecipient(rec *campaign.Recipient) bool {

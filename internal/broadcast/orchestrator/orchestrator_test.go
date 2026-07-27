@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/broadcast/orchestrator"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign"
-	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 	sharedevents "github.com/omnichannel/omni-chan-v2/shared/events"
 )
@@ -326,51 +325,6 @@ type noopPublisher struct{}
 
 func (noopPublisher) PublishJSON(context.Context, string, any) error { return nil }
 
-type memContacts struct {
-	byID map[uuid.UUID]contact.Contact
-}
-
-func (m *memContacts) FindByID(_ context.Context, _ uuid.UUID, id uuid.UUID) (*contact.Contact, error) {
-	c, ok := m.byID[id]
-	if !ok {
-		return nil, repository.ErrNotFound
-	}
-	return &c, nil
-}
-
-func (m *memContacts) ListByIDs(_ context.Context, _ uuid.UUID, ids []uuid.UUID) ([]contact.Contact, error) {
-	var out []contact.Contact
-	for _, id := range ids {
-		if c, ok := m.byID[id]; ok {
-			out = append(out, c)
-		}
-	}
-	return out, nil
-}
-
-func (m *memContacts) Create(context.Context, *contact.Contact) error { return nil }
-func (m *memContacts) FindByPhone(context.Context, uuid.UUID, string) (*contact.Contact, error) {
-	return nil, repository.ErrNotFound
-}
-func (m *memContacts) List(context.Context, uuid.UUID, contact.ListFilter, repository.PageParams) (repository.Page[contact.Contact], error) {
-	return repository.Page[contact.Contact]{}, nil
-}
-func (m *memContacts) Update(context.Context, *contact.Contact) error { return nil }
-func (m *memContacts) SoftDelete(context.Context, uuid.UUID, uuid.UUID) error { return nil }
-func (m *memContacts) CountByTeam(context.Context, uuid.UUID) (int64, error) { return 0, nil }
-
-type memSegments struct{}
-
-func (memSegments) ListMemberContactIDs(context.Context, uuid.UUID, repository.PageParams) ([]uuid.UUID, int64, error) {
-	return nil, 0, nil
-}
-
-type memTags struct{}
-
-func (memTags) ListContactIDsByTag(context.Context, uuid.UUID, uuid.UUID) ([]uuid.UUID, error) {
-	return nil, nil
-}
-
 func TestSchedulerPicksOnce(t *testing.T) {
 	store := newMemStore()
 	cid := uuid.New()
@@ -400,7 +354,33 @@ func TestSchedulerPicksOnce(t *testing.T) {
 	}
 }
 
-func TestAudienceResolverDeduplicates(t *testing.T) {
+func TestAudienceResolverAcceptsExistingSnapshots(t *testing.T) {
+	store := newMemStore()
+	jobID := uuid.New()
+	cid := uuid.New()
+	tid := uuid.New()
+	ch := uuid.New()
+	store.jobs[jobID] = &campaign.BroadcastJob{ID: jobID, CampaignID: cid, TeamID: tid, ChannelID: ch, Status: campaign.JobPending}
+	store.campaigns[cid] = &campaign.Campaign{ID: cid, TeamID: tid, ChannelID: ch, TotalContacts: 1}
+	jid := jobID
+	store.recipients = []campaign.Recipient{{
+		ID: uuid.New(), CampaignID: cid, TeamID: tid, JobID: &jid,
+		PhoneNumber: "628123456789", Status: campaign.RecipientPending,
+	}}
+
+	resolver := orchestrator.NewAudienceResolver(store, &orchestrator.Metrics{}, nil)
+	if err := resolver.Resolve(context.Background(), store.jobs[jobID]); err != nil {
+		t.Fatal(err)
+	}
+	if store.jobs[jobID].Status != campaign.JobPlanningBatches {
+		t.Fatalf("expected planning_batches, got %s", store.jobs[jobID].Status)
+	}
+	if store.jobs[jobID].TotalRecipients != 1 {
+		t.Fatalf("expected total recipients 1, got %d", store.jobs[jobID].TotalRecipients)
+	}
+}
+
+func TestAudienceResolverRequiresSnapshots(t *testing.T) {
 	store := newMemStore()
 	jobID := uuid.New()
 	cid := uuid.New()
@@ -408,24 +388,10 @@ func TestAudienceResolverDeduplicates(t *testing.T) {
 	ch := uuid.New()
 	store.jobs[jobID] = &campaign.BroadcastJob{ID: jobID, CampaignID: cid, TeamID: tid, ChannelID: ch, Status: campaign.JobPending}
 	store.campaigns[cid] = &campaign.Campaign{ID: cid, TeamID: tid, ChannelID: ch}
-	contactID := uuid.New()
-	store.audiences = []campaign.Audience{
-		{SourceType: campaign.AudienceContact, SourceID: contactID},
-		{SourceType: campaign.AudienceContact, SourceID: contactID},
-	}
-	contacts := &memContacts{byID: map[uuid.UUID]contact.Contact{
-		contactID: {ID: contactID, TeamID: tid, Phone: "+628123456789", MarketingStatus: contact.MarketingSubscribed},
-	}}
 
-	resolver := orchestrator.NewAudienceResolver(store, contacts, memSegments{}, memTags{}, &orchestrator.Metrics{}, nil, 1000)
-	if err := resolver.Resolve(context.Background(), store.jobs[jobID]); err != nil {
-		t.Fatal(err)
-	}
-	if len(store.recipients) != 1 {
-		t.Fatalf("expected 1 recipient after dedupe, got %d", len(store.recipients))
-	}
-	if store.snapshots != 1 {
-		t.Fatal("expected snapshot")
+	resolver := orchestrator.NewAudienceResolver(store, &orchestrator.Metrics{}, nil)
+	if err := resolver.Resolve(context.Background(), store.jobs[jobID]); err == nil {
+		t.Fatal("expected error when no recipient snapshots exist")
 	}
 }
 

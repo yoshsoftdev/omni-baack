@@ -3,13 +3,12 @@ package campaign
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"path"
+	"log/slog"
 	"strings"
 	"unicode"
 
 	"github.com/google/uuid"
-	"github.com/omnichannel/omni-chan-v2/internal/storageclient"
+	"github.com/omnichannel/omni-chan-v2/internal/media"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 )
 
@@ -17,16 +16,6 @@ import (
 type TemplateHeaderMedia struct {
 	Handle          string
 	StorageObjectID string
-}
-
-// HeaderMediaUploader uploads binary media to Meta for template sends.
-type HeaderMediaUploader interface {
-	UploadMedia(ctx context.Context, phoneNumberID, accessToken, mimeType, filename string, body io.Reader, size int64) (string, error)
-}
-
-// HeaderStorageDownloader fetches media previously uploaded to storage-service.
-type HeaderStorageDownloader interface {
-	Download(ctx context.Context, teamID, objectID uuid.UUID) (io.ReadCloser, *storageclient.StoredObject, error)
 }
 
 // ExtractTemplateHeaderMedia reads default media metadata from template components.
@@ -77,14 +66,28 @@ func ExtractTemplateHeaderMedia(components json.RawMessage) (TemplateHeaderMedia
 	return TemplateHeaderMedia{}, false
 }
 
-func headerMappingHasSendableMedia(header *HeaderMapping) bool {
-	if header == nil {
-		return false
+// ExtractTemplateHeaderMediaFromTemplate prefers component storage_object_id, then metadata JSONB.
+func ExtractTemplateHeaderMediaFromTemplate(tpl *template.Template) (TemplateHeaderMedia, bool) {
+	if tpl == nil {
+		return TemplateHeaderMedia{}, false
 	}
-	if strings.TrimSpace(header.MediaLink) != "" {
-		return true
+	out, ok := ExtractTemplateHeaderMedia(tpl.Components)
+	if ok && strings.TrimSpace(out.StorageObjectID) != "" {
+		return out, true
 	}
-	return IsWhatsAppCloudMediaID(header.MediaID)
+	if ids := tpl.Metadata.StorageObjectIDs(); len(ids) > 0 {
+		out.StorageObjectID = strings.TrimSpace(ids[0])
+		return out, out.StorageObjectID != "" || out.Handle != ""
+	}
+	return out, ok
+}
+
+func headerMappingHasMediaLink(header *HeaderMapping) bool {
+	return header != nil && strings.TrimSpace(header.MediaLink) != ""
+}
+
+func headerMappingHasCloudMediaID(header *HeaderMapping) bool {
+	return header != nil && IsWhatsAppCloudMediaID(header.MediaID)
 }
 
 // IsWhatsAppCloudMediaID reports whether id is a Cloud API media id (digits only).
@@ -102,40 +105,58 @@ func IsWhatsAppCloudMediaID(id string) bool {
 	return true
 }
 
-// TemplateHasStorageBackedHeaderMedia reports whether send can upload media from storage.
+// TemplateHasStorageBackedHeaderMedia reports whether send can resolve media via Media Manager.
 func TemplateHasStorageBackedHeaderMedia(tpl *template.Template) bool {
 	if tpl == nil {
 		return false
 	}
-	defaults, ok := ExtractTemplateHeaderMedia(tpl.Components)
+	defaults, ok := ExtractTemplateHeaderMediaFromTemplate(tpl)
 	return ok && strings.TrimSpace(defaults.StorageObjectID) != ""
 }
 
 // ApplyTemplateHeaderMediaDefaults no longer copies Meta template header_handle into
 // send-time media_id. Those handles are for template creation only and Meta rejects
 // them as image.id (must be integer Cloud API media id or a public link).
-// Storage-backed defaults are resolved in ResolveHeaderMediaForSend.
+// Storage-backed defaults are resolved in ResolveHeaderMediaForSend via EnsureMedia.
 func ApplyTemplateHeaderMediaDefaults(mapping VariableMapping, tpl *template.Template) VariableMapping {
 	_ = tpl
 	return mapping
 }
 
-// ResolveHeaderMediaForSend uploads storage-backed header media when needed.
+// ResolveHeaderMediaInput carries credentials and Media Manager for header resolution.
+type ResolveHeaderMediaInput struct {
+	TeamID        uuid.UUID
+	PhoneNumberID string
+	AccessToken   string
+	Manager       media.Manager
+	Metrics       media.Metrics
+	Log           *slog.Logger
+	ForceRefresh  bool
+}
+
+// ResolveHeaderMediaForSend is a thin adapter from campaign send mapping → Media Manager.
+// Priority:
+//  1. storage_object_id → EnsureMedia (primary)
+//  2. existing Cloud media_id on mapping
+//  3. media_link (deprecated compatibility path)
+//
+// Worker must not upload to Meta; all WhatsApp Cloud uploads go through EnsureMedia.
 func ResolveHeaderMediaForSend(
 	ctx context.Context,
 	mapping VariableMapping,
 	tpl *template.Template,
-	teamID uuid.UUID,
-	phoneNumberID, accessToken string,
-	storage HeaderStorageDownloader,
-	uploader HeaderMediaUploader,
+	in ResolveHeaderMediaInput,
 ) (VariableMapping, error) {
 	if tpl == nil {
 		return mapping, nil
 	}
-
-	if headerMappingHasSendableMedia(mapping.Header) {
-		return mapping, nil
+	log := in.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	metrics := in.Metrics
+	if metrics == nil {
+		metrics = media.NoopMetrics{}
 	}
 
 	// Drop non-sendable values (template header_handle mistakenly stored as media_id).
@@ -145,43 +166,57 @@ func ResolveHeaderMediaForSend(
 		mapping.Header = &cleared
 	}
 
-	defaults, ok := ExtractTemplateHeaderMedia(tpl.Components)
-	if !ok || strings.TrimSpace(defaults.StorageObjectID) == "" {
+	defaults, ok := ExtractTemplateHeaderMediaFromTemplate(tpl)
+	storageObjectID := ""
+	if ok {
+		storageObjectID = strings.TrimSpace(defaults.StorageObjectID)
+	}
+
+	// Primary path: storage-backed asset via Media Manager.EnsureMedia.
+	if storageObjectID != "" && in.Manager != nil {
+		assetID, err := uuid.Parse(storageObjectID)
+		if err != nil {
+			log.Warn("template storage_object_id is not a UUID; skipping EnsureMedia",
+				"storage_object_id", storageObjectID,
+			)
+		} else {
+			ref, err := in.Manager.EnsureMedia(ctx, media.EnsureInput{
+				TeamID:        in.TeamID,
+				AssetID:       assetID,
+				PhoneNumberID: strings.TrimSpace(in.PhoneNumberID),
+				AccessToken:   strings.TrimSpace(in.AccessToken),
+				ForceRefresh:  in.ForceRefresh,
+			})
+			if err != nil {
+				return mapping, err
+			}
+			if mapping.Header == nil {
+				mapping.Header = &HeaderMapping{}
+			}
+			mapping.Header.MediaID = ref.ProviderMediaID
+			mapping.Header.MediaLink = ""
+			log.Info("header media resolved via EnsureMedia",
+				"asset_id", assetID.String(),
+				"source", string(ref.Source),
+				"provider_media_id", ref.ProviderMediaID,
+			)
+			return mapping, nil
+		}
+	}
+
+	// Already have a Cloud media id on the campaign mapping.
+	if headerMappingHasCloudMediaID(mapping.Header) {
 		return mapping, nil
 	}
-	if storage == nil || uploader == nil {
+
+	// Secondary compatibility path: public media_link (deprecated).
+	if headerMappingHasMediaLink(mapping.Header) {
+		metrics.IncDeprecatedLink()
+		log.Warn("using deprecated media_link for template header; prefer storage_object_id → EnsureMedia",
+			"media_link", strings.TrimSpace(mapping.Header.MediaLink),
+		)
 		return mapping, nil
 	}
 
-	objectID, err := uuid.Parse(strings.TrimSpace(defaults.StorageObjectID))
-	if err != nil {
-		return mapping, nil
-	}
-
-	reader, meta, err := storage.Download(ctx, teamID, objectID)
-	if err != nil {
-		return mapping, err
-	}
-	defer reader.Close()
-
-	mimeType := strings.TrimSpace(meta.MimeType)
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-	fileName := path.Base(strings.TrimSpace(meta.ObjectKey))
-	if fileName == "" || fileName == "." || fileName == "/" {
-		fileName = "template-header"
-	}
-
-	mediaID, err := uploader.UploadMedia(ctx, phoneNumberID, accessToken, mimeType, fileName, reader, meta.SizeBytes)
-	if err != nil {
-		return mapping, err
-	}
-
-	if mapping.Header == nil {
-		mapping.Header = &HeaderMapping{}
-	}
-	mapping.Header.MediaID = mediaID
-	mapping.Header.MediaLink = ""
 	return mapping, nil
 }

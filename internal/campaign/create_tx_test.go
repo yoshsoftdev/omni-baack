@@ -7,7 +7,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/omnichannel/omni-chan-v2/internal/campaign/recipient"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
+	"github.com/omnichannel/omni-chan-v2/internal/contact"
+	"github.com/omnichannel/omni-chan-v2/internal/provider"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/segment"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
@@ -30,6 +33,7 @@ type spyCampaignRepo struct {
 	createCalls     int
 	jobCalls        int
 	snapCalls       int
+	recipientCalls  int
 	softDeleteCalls int
 	snapErr         error
 }
@@ -78,6 +82,10 @@ func (s *spyCampaignRepo) ListBatchesByJob(context.Context, uuid.UUID) ([]Broadc
 	return nil, nil
 }
 func (s *spyCampaignRepo) BulkCreateRecipients(context.Context, []Recipient, time.Time) error {
+	s.recipientCalls++
+	return nil
+}
+func (s *spyCampaignRepo) UpdateCampaignTotalContacts(context.Context, uuid.UUID, int) error {
 	return nil
 }
 func (s *spyCampaignRepo) UpdateRecipientStatus(context.Context, uuid.UUID, RecipientStatus, RecipientStatus, *string, *string) error {
@@ -130,9 +138,6 @@ func (s *spyCampaignRepo) CountRecipientsByJob(context.Context, uuid.UUID) (int,
 }
 func (s *spyCampaignRepo) CountBatchesByJob(context.Context, uuid.UUID) (int, error) {
 	return 0, nil
-}
-func (s *spyCampaignRepo) UpdateCampaignTotalContacts(context.Context, uuid.UUID, int) error {
-	return nil
 }
 func (s *spyCampaignRepo) PlanBatchesForJob(context.Context, uuid.UUID, int) ([]BroadcastBatch, error) {
 	return nil, nil
@@ -297,7 +302,33 @@ func (m *createTestTemplateRepo) FindByID(_ context.Context, teamID, id uuid.UUI
 	}, nil
 }
 
+func (m *createTestTemplateRepo) FindByIDs(_ context.Context, teamID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]*template.Template, error) {
+	out := make(map[uuid.UUID]*template.Template, len(ids))
+	for _, id := range ids {
+		tmpl, err := m.FindByID(context.Background(), teamID, id)
+		if err == nil {
+			out[id] = tmpl
+		}
+	}
+	return out, nil
+}
+
+func (m *createTestTemplateRepo) FindByName(context.Context, uuid.UUID, uuid.UUID, string, string) (*template.Template, error) {
+	return nil, repository.ErrNotFound
+}
+
+func (m *createTestTemplateRepo) FindByMetaID(ctx context.Context, teamID, channelID uuid.UUID, metaTemplateID string) (*template.Template, error) {
+	return m.FindByMetaTemplateID(ctx, teamID, channelID, metaTemplateID)
+}
+
 func (m *createTestTemplateRepo) Create(context.Context, *template.Template) error { return nil }
+func (m *createTestTemplateRepo) Save(ctx context.Context, t *template.Template) error {
+	return m.Create(ctx, t)
+}
+func (m *createTestTemplateRepo) Update(context.Context, *template.Template) error { return nil }
+func (m *createTestTemplateRepo) Delete(ctx context.Context, teamID, id uuid.UUID) error {
+	return m.SoftDelete(ctx, teamID, id)
+}
 func (m *createTestTemplateRepo) List(context.Context, uuid.UUID, template.ListFilter, repository.PageParams) (repository.Page[template.Template], error) {
 	return repository.Page[template.Template]{}, nil
 }
@@ -370,16 +401,87 @@ func testCampaignRBAC(t *testing.T) *rbac.Service {
 	return svc
 }
 
-func validCreateInput(teamID, channelID, templateID uuid.UUID) CreateInput {
+func validCreateInput(teamID, channelID, templateID, contactID uuid.UUID) CreateInput {
 	return CreateInput{
 		Name:       "Summer Promo",
 		ChannelID:  channelID,
 		TemplateID: templateID,
 		Audiences: []AudienceInput{
-			{SourceType: AudienceTag, SourceID: uuid.New()},
+			{SourceType: AudienceContact, SourceID: contactID},
 		},
 		SendMode: SendNow,
 	}
+}
+
+type createTestContactLookup struct {
+	contacts map[uuid.UUID]contact.Contact
+}
+
+func (m *createTestContactLookup) FindByID(_ context.Context, _, id uuid.UUID) (*contact.Contact, error) {
+	c, ok := m.contacts[id]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	cp := c
+	return &cp, nil
+}
+
+func (m *createTestContactLookup) ListByIDs(_ context.Context, _ uuid.UUID, ids []uuid.UUID) ([]contact.Contact, error) {
+	out := make([]contact.Contact, 0, len(ids))
+	for _, id := range ids {
+		if c, ok := m.contacts[id]; ok {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+type createTestTagLookup struct{}
+
+func (createTestTagLookup) ListContactIDsByTag(context.Context, uuid.UUID, uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
+
+type createTestProviderDir struct {
+	byContact map[uuid.UUID][]provider.Profile
+}
+
+func (m *createTestProviderDir) ListByContact(_ context.Context, _, contactID uuid.UUID) ([]provider.Profile, error) {
+	return m.byContact[contactID], nil
+}
+
+func (m *createTestProviderDir) ListByContactIDs(_ context.Context, _ uuid.UUID, contactIDs []uuid.UUID) (map[uuid.UUID][]provider.Profile, error) {
+	out := make(map[uuid.UUID][]provider.Profile, len(contactIDs))
+	for _, id := range contactIDs {
+		if profiles, ok := m.byContact[id]; ok {
+			out[id] = profiles
+		}
+	}
+	return out, nil
+}
+
+func withCreateSnapshotting(contactID uuid.UUID) ServiceOption {
+	profileID := uuid.New()
+	contacts := &createTestContactLookup{contacts: map[uuid.UUID]contact.Contact{
+		contactID: {
+			ID:              contactID,
+			CustomerName:    "Ada",
+			ContactName:     "Ada",
+			MarketingStatus: contact.MarketingSubscribed,
+		},
+	}}
+	providers := &createTestProviderDir{byContact: map[uuid.UUID][]provider.Profile{
+		contactID: {{
+			ID:             profileID,
+			ContactID:      contactID,
+			Provider:       provider.WhatsApp,
+			ProviderUserID: "628123456789",
+			Phone:          "628123456789",
+			Status:         provider.StatusActive,
+		}},
+	}}
+	builder := recipient.NewRecipientSnapshotBuilder(recipient.NewWhatsAppRecipientResolver(providers))
+	return WithRecipientSnapshotting(builder, contacts, createTestTagLookup{})
 }
 
 func TestService_Create_UsesSingleTransaction(t *testing.T) {
@@ -387,6 +489,7 @@ func TestService_Create_UsesSingleTransaction(t *testing.T) {
 	userID := uuid.New()
 	channelID := uuid.New()
 	templateID := uuid.New()
+	contactID := uuid.New()
 
 	repo := &spyCampaignRepo{}
 	txMgr := &trackingTxManager{repo: repo}
@@ -399,9 +502,10 @@ func TestService_Create_UsesSingleTransaction(t *testing.T) {
 		&createTestTemplateRepo{teamID: teamID, channelID: channelID, templateID: templateID},
 		createTestSegmentRepo{},
 		testCampaignRBAC(t),
+		withCreateSnapshotting(contactID),
 	)
 
-	result, err := svc.Create(context.Background(), teamID, userID, "owner", validCreateInput(teamID, channelID, templateID))
+	result, err := svc.Create(context.Background(), teamID, userID, "owner", validCreateInput(teamID, channelID, templateID, contactID))
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -411,11 +515,15 @@ func TestService_Create_UsesSingleTransaction(t *testing.T) {
 	if txMgr.runCount != 1 {
 		t.Fatalf("tx.Run count = %d, want 1", txMgr.runCount)
 	}
-	if repo.createCalls != 1 || repo.jobCalls != 1 || repo.snapCalls != 1 {
-		t.Fatalf("repo calls create=%d job=%d snap=%d, want 1 each", repo.createCalls, repo.jobCalls, repo.snapCalls)
+	if repo.createCalls != 1 || repo.jobCalls != 1 || repo.snapCalls != 1 || repo.recipientCalls != 1 {
+		t.Fatalf("repo calls create=%d job=%d snap=%d recipients=%d, want 1 each",
+			repo.createCalls, repo.jobCalls, repo.snapCalls, repo.recipientCalls)
 	}
 	if repo.softDeleteCalls != 0 {
 		t.Fatalf("SoftDelete calls = %d, want 0", repo.softDeleteCalls)
+	}
+	if result.Snapshot.ResolvedCount != 1 {
+		t.Fatalf("resolved_count = %d, want 1", result.Snapshot.ResolvedCount)
 	}
 }
 
@@ -424,6 +532,7 @@ func TestService_Create_SnapshotFailure_NoSoftDelete(t *testing.T) {
 	userID := uuid.New()
 	channelID := uuid.New()
 	templateID := uuid.New()
+	contactID := uuid.New()
 
 	repo := &spyCampaignRepo{snapErr: errors.New("snapshot insert failed")}
 	txMgr := &trackingTxManager{repo: repo}
@@ -436,9 +545,10 @@ func TestService_Create_SnapshotFailure_NoSoftDelete(t *testing.T) {
 		&createTestTemplateRepo{teamID: teamID, channelID: channelID, templateID: templateID},
 		createTestSegmentRepo{},
 		testCampaignRBAC(t),
+		withCreateSnapshotting(contactID),
 	)
 
-	_, err := svc.Create(context.Background(), teamID, userID, "owner", validCreateInput(teamID, channelID, templateID))
+	_, err := svc.Create(context.Background(), teamID, userID, "owner", validCreateInput(teamID, channelID, templateID, contactID))
 	if err == nil {
 		t.Fatal("expected error from snapshot failure")
 	}
@@ -447,5 +557,39 @@ func TestService_Create_SnapshotFailure_NoSoftDelete(t *testing.T) {
 	}
 	if repo.createCalls != 1 || repo.jobCalls != 1 || repo.snapCalls != 1 {
 		t.Fatalf("repo calls create=%d job=%d snap=%d, want 1 each", repo.createCalls, repo.jobCalls, repo.snapCalls)
+	}
+}
+
+func TestService_Create_RejectsWhenNoWhatsAppProvider(t *testing.T) {
+	teamID := uuid.New()
+	userID := uuid.New()
+	channelID := uuid.New()
+	templateID := uuid.New()
+	contactID := uuid.New()
+
+	repo := &spyCampaignRepo{}
+	txMgr := &trackingTxManager{repo: repo}
+	contacts := &createTestContactLookup{contacts: map[uuid.UUID]contact.Contact{
+		contactID: {ID: contactID, MarketingStatus: contact.MarketingSubscribed},
+	}}
+	builder := recipient.NewRecipientSnapshotBuilder(recipient.NewWhatsAppRecipientResolver(&createTestProviderDir{}))
+
+	svc := NewService(
+		repo,
+		txMgr,
+		&createTestTeamRepo{member: &team.Member{TeamID: teamID, UserID: userID}},
+		&createTestChannelRepo{teamID: teamID, channelID: channelID},
+		&createTestTemplateRepo{teamID: teamID, channelID: channelID, templateID: templateID},
+		createTestSegmentRepo{},
+		testCampaignRBAC(t),
+		WithRecipientSnapshotting(builder, contacts, createTestTagLookup{}),
+	)
+
+	_, err := svc.Create(context.Background(), teamID, userID, "owner", validCreateInput(teamID, channelID, templateID, contactID))
+	if err == nil {
+		t.Fatal("expected validation error when no WhatsApp provider")
+	}
+	if repo.createCalls != 0 {
+		t.Fatalf("create should not run when snapshotting fails, got %d", repo.createCalls)
 	}
 }

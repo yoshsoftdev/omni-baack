@@ -32,7 +32,7 @@ func (c *LegacyConsumer) Handle(ctx context.Context, envelope sharedevents.Envel
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return fmt.Errorf("decode whatsapp message: %w", err)
 		}
-		return c.messages.HandleMetaInbound(ctx, metaclient.InboundMessage{
+		return c.messages.HandleMetaInbound(ctx, message.LegacyInboundMessage{
 			PhoneNumberID: payload.PhoneNumberID,
 			From:          payload.From,
 			WAMID:         payload.WAMID,

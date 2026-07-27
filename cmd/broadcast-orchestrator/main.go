@@ -13,9 +13,6 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/broadcast/orchestrator"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
-	"github.com/omnichannel/omni-chan-v2/internal/contact"
-	"github.com/omnichannel/omni-chan-v2/internal/segment"
-	"github.com/omnichannel/omni-chan-v2/internal/tag"
 	"github.com/omnichannel/omni-chan-v2/pkg/database"
 	"github.com/omnichannel/omni-chan-v2/pkg/logger"
 	"github.com/omnichannel/omni-chan-v2/pkg/migrate"
@@ -58,9 +55,6 @@ func main() {
 	orchCfg = orchCfg.Normalize()
 
 	campaignRepo := campaign.NewRepository(db)
-	contactRepo := contact.NewRepository(db)
-	segmentRepo := segment.NewRepository(db)
-	tagRepo := tag.NewRepository(db)
 	metrics := &orchestrator.Metrics{}
 
 	natsCfg := sharedconfig.NATS{
@@ -86,7 +80,7 @@ func main() {
 
 	outboxRelay := orchestrator.NewOutboxRelay(campaignRepo, publisher, slogLog)
 	scheduler := orchestrator.NewScheduler(campaignRepo, campaignRepo, metrics, slogLog)
-	audience := orchestrator.NewAudienceResolver(campaignRepo, contactRepo, segmentRepo, tagRepo, metrics, slogLog, orchCfg.AudienceChunkSize)
+	audience := orchestrator.NewAudienceResolver(campaignRepo, metrics, slogLog)
 	planner := orchestrator.NewBatchPlanner(campaignRepo, publisher, campaignRepo, metrics, orchCfg.BatchSize, slogLog)
 	pipeline := orchestrator.NewPipeline(campaignRepo, audience, planner, slogLog)
 	recovery := orchestrator.NewRecovery(campaignRepo, publisher, campaignRepo, metrics, orchCfg.BatchLease, slogLog)

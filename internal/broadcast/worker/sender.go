@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
-	"github.com/omnichannel/omni-chan-v2/internal/contact"
+	"github.com/omnichannel/omni-chan-v2/internal/media"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 	"github.com/omnichannel/omni-chan-v2/pkg/cryptoutil"
 	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
@@ -26,12 +27,12 @@ type MetaSender interface {
 }
 
 // SendInput carries everything required to send one template message.
+// Recipient.Variables is the sole source for template variable rendering.
 type SendInput struct {
 	Campaign  *campaign.Campaign
 	Template  *template.Template
 	Channel   *channel.Channel
 	Recipient *campaign.Recipient
-	Contact   *contact.Contact
 }
 
 // SendResult is a successful Meta send response.
@@ -40,15 +41,16 @@ type SendResult struct {
 	ProviderResponse json.RawMessage
 }
 
-// Sender renders variables and calls Meta Cloud API.
+// Sender renders snapshot variables and calls Meta Cloud API.
+// Header media is resolved only via Media Manager.EnsureMedia (no direct UploadMedia).
 type Sender struct {
-	meta          MetaSender
-	channels      ChannelStore
-	cipher        *cryptoutil.TokenCipher
-	metrics       *Metrics
-	log           *slog.Logger
-	storage       campaign.HeaderStorageDownloader
-	mediaUploader campaign.HeaderMediaUploader
+	meta         MetaSender
+	channels     ChannelStore
+	cipher       *cryptoutil.TokenCipher
+	metrics      *Metrics
+	log          *slog.Logger
+	mediaManager media.Manager
+	mediaMetrics media.Metrics
 }
 
 func NewSender(meta MetaSender, channels ChannelStore, cipher *cryptoutil.TokenCipher, metrics *Metrics, log *slog.Logger) *Sender {
@@ -58,19 +60,25 @@ func NewSender(meta MetaSender, channels ChannelStore, cipher *cryptoutil.TokenC
 	return &Sender{meta: meta, channels: channels, cipher: cipher, metrics: metrics, log: log}
 }
 
-// WithHeaderMediaResolver configures storage-backed header media resolution for template sends.
-func (s *Sender) WithHeaderMediaResolver(
-	storage campaign.HeaderStorageDownloader,
-	uploader campaign.HeaderMediaUploader,
-) *Sender {
-	s.storage = storage
-	s.mediaUploader = uploader
+// WithMediaManager configures Media Manager for template header resolution.
+func (s *Sender) WithMediaManager(manager media.Manager, mediaMetrics media.Metrics) *Sender {
+	s.mediaManager = manager
+	if mediaMetrics == nil {
+		mediaMetrics = media.NoopMetrics{}
+	}
+	s.mediaMetrics = mediaMetrics
 	return s
 }
 
 func (s *Sender) Send(ctx context.Context, in SendInput) (*SendResult, error) {
 	if in.Channel.PhoneNumberID == nil || *in.Channel.PhoneNumberID == "" {
 		return nil, fmt.Errorf("channel missing phone_number_id")
+	}
+	if in.Recipient == nil {
+		return nil, fmt.Errorf("recipient is required")
+	}
+	if strings.TrimSpace(in.Recipient.PhoneNumber) == "" {
+		return nil, fmt.Errorf("recipient phone_number snapshot is required")
 	}
 
 	log := s.log.With(
@@ -88,11 +96,13 @@ func (s *Sender) Send(ctx context.Context, in SendInput) (*SendResult, error) {
 		}
 		return nil, err
 	}
-	samples := campaign.ParseSampleValues(in.Campaign.SampleValues)
 
-	contactEntity := in.Contact
-	if contactEntity == nil {
-		contactEntity = &contact.Contact{ContactName: "", CustomerName: "", Phone: in.Recipient.Phone}
+	variables, err := campaign.ParseRecipientVariables(in.Recipient.Variables)
+	if err != nil {
+		if s.metrics != nil {
+			s.metrics.IncTemplateRenderFailed(in.Channel.ID)
+		}
+		return nil, err
 	}
 
 	creds, err := s.channels.FindCredentials(ctx, in.Channel.ID)
@@ -104,16 +114,14 @@ func (s *Sender) Send(ctx context.Context, in SendInput) (*SendResult, error) {
 		return nil, fmt.Errorf("decrypt channel token: %w", err)
 	}
 
-	mapping, err = campaign.ResolveHeaderMediaForSend(
-		ctx,
-		mapping,
-		in.Template,
-		in.Campaign.TeamID,
-		*in.Channel.PhoneNumberID,
-		token,
-		s.storage,
-		s.mediaUploader,
-	)
+	mapping, err = campaign.ResolveHeaderMediaForSend(ctx, mapping, in.Template, campaign.ResolveHeaderMediaInput{
+		TeamID:        in.Campaign.TeamID,
+		PhoneNumberID: *in.Channel.PhoneNumberID,
+		AccessToken:   token,
+		Manager:       s.mediaManager,
+		Metrics:       s.mediaMetrics,
+		Log:           log,
+	})
 	if err != nil {
 		if s.metrics != nil {
 			s.metrics.IncTemplateRenderFailed(in.Channel.ID)
@@ -121,7 +129,7 @@ func (s *Sender) Send(ctx context.Context, in SendInput) (*SendResult, error) {
 		return nil, err
 	}
 
-	components, err := campaign.RenderValidatedTemplate(in.Template, mapping, contactEntity, samples)
+	components, err := campaign.RenderValidatedTemplate(in.Template, mapping, variables)
 	if err != nil {
 		if campaign.IsSendValidationError(err) {
 			if s.metrics != nil {
@@ -145,9 +153,9 @@ func (s *Sender) Send(ctx context.Context, in SendInput) (*SendResult, error) {
 		ctx,
 		*in.Channel.PhoneNumberID,
 		token,
-		in.Recipient.Phone,
+		in.Recipient.PhoneNumber,
 		in.Template.Name,
-		in.Template.Language,
+		template.ToMetaSendLanguage(in.Template.Language),
 		components,
 	)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/auth"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign/delivery"
+	camrecipient "github.com/omnichannel/omni-chan-v2/internal/campaign/recipient"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
 	"github.com/omnichannel/omni-chan-v2/internal/channelmgmt"
 	"github.com/omnichannel/omni-chan-v2/internal/channelsync"
@@ -28,13 +30,15 @@ import (
 	eventconsumeridempotency "github.com/omnichannel/omni-chan-v2/internal/eventconsumer/idempotency"
 	"github.com/omnichannel/omni-chan-v2/internal/inbox"
 	"github.com/omnichannel/omni-chan-v2/internal/instagram"
+	mediamanager "github.com/omnichannel/omni-chan-v2/internal/media"
 	"github.com/omnichannel/omni-chan-v2/internal/message"
 	metasvc "github.com/omnichannel/omni-chan-v2/internal/meta"
 	"github.com/omnichannel/omni-chan-v2/internal/onboarding"
 	"github.com/omnichannel/omni-chan-v2/internal/operations"
+	"github.com/omnichannel/omni-chan-v2/internal/outbound"
 	"github.com/omnichannel/omni-chan-v2/internal/provider"
-	"github.com/omnichannel/omni-chan-v2/internal/quota"
 	"github.com/omnichannel/omni-chan-v2/internal/quickreply"
+	"github.com/omnichannel/omni-chan-v2/internal/quota"
 	"github.com/omnichannel/omni-chan-v2/internal/rbac"
 	"github.com/omnichannel/omni-chan-v2/internal/report"
 	"github.com/omnichannel/omni-chan-v2/internal/segment"
@@ -42,6 +46,7 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/tag"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
+	templateresolver "github.com/omnichannel/omni-chan-v2/internal/template/resolver"
 	"github.com/omnichannel/omni-chan-v2/internal/user"
 	wsserver "github.com/omnichannel/omni-chan-v2/internal/websocket"
 	"github.com/omnichannel/omni-chan-v2/internal/websocket/hub"
@@ -172,6 +177,7 @@ func main() {
 	providerService := provider.NewService(providerRepo, teamRepo, rbacService)
 	contactService.SetProviderRepository(providerRepo)
 	contactService.SetLinkRepository(contactLinkRepo)
+	waRecipientResolver := camrecipient.NewWhatsAppRecipientResolver(providerRepo)
 
 	conversationRepo := conversation.NewRepository(db)
 	conversationService := conversation.NewService(conversationRepo, contactRepo, teamRepo, rbacService)
@@ -208,13 +214,39 @@ func main() {
 		cfg.MediaProxy.PublicWebhookBaseURL,
 		cfg.MediaProxy.TokenTTL,
 	)
+
+	// Shared WhatsApp Media Manager (same factory as broadcast-worker).
+	var inboxMediaManager mediamanager.Manager
+	if strings.TrimSpace(cfg.StorageService.URL) != "" {
+		mediaMetrics := &mediamanager.MemoryMetrics{}
+		mediaMgr, mediaErr := mediamanager.NewWhatsAppMediaManagerFromMeta(
+			mediamanager.NewPostgresAssetRepository(db),
+			mediamanager.NewPostgresProviderMediaCacheRepository(db),
+			mediamanager.NewStorageClientObjectStore(storageClient),
+			metaClient,
+			mediamanager.WithMediaMetrics(mediaMetrics),
+			mediamanager.WithMediaLogger(log.Logger),
+		)
+		if mediaErr != nil {
+			log.Error("media manager init failed", "error", mediaErr)
+			os.Exit(1)
+		}
+		inboxMediaManager = mediaMgr
+	} else {
+		log.Warn("storage service URL empty; WhatsApp attachment EnsureMedia disabled")
+	}
+
 	messageService := message.NewService(messageRepo, attachmentRepo, conversationRepo, teamRepo, userRepo, rbacService, &message.OutboundDeps{
-		Channels:  channelRepo,
-		Contacts:  contactRepo,
-		Meta:      metaClient,
-		Cipher:    tokenCipher,
-		Storage:   storageClient,
-		MediaURLs: mediaURLService,
+		Channels:          channelRepo,
+		Contacts:          contactRepo,
+		Cipher:            tokenCipher,
+		Storage:           storageClient,
+		MediaURLs:         mediaURLService,
+		WhatsApp:          outbound.NewWhatsAppChannel(metaClient),
+		Instagram:         outbound.NewInstagramChannel(metaClient),
+		Media:             inboxMediaManager,
+		Templates:         templateresolver.New(templateRepo),
+		WhatsAppAddresses: waRecipientResolver,
 	})
 	messageService.SetStatusPublisher(func(ctx context.Context, msg *message.Message, status message.Status) error {
 		payload, err := json.Marshal(map[string]any{
@@ -253,10 +285,13 @@ func main() {
 
 	campaignTx := uow.NewCampaignRunner(db)
 	cancelFlags := broadcastcancel.NewStore(rdb.Client, broadcastcancel.DefaultTTL)
+	waResolver := waRecipientResolver
+	recipientSnapshots := camrecipient.NewRecipientSnapshotBuilder(waResolver)
 	campaignService := campaign.NewService(
 		campaignRepo, campaignTx, teamRepo, channelRepo, templateRepo, segmentRepo, rbacService,
 		campaign.WithCancelFlags(cancelFlags),
 		campaign.WithPaymentChecker(paymentService),
+		campaign.WithRecipientSnapshotting(recipientSnapshots, contactRepo, tagRepo),
 	)
 
 	operationsRepo := operations.NewRepository(db)

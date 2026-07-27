@@ -20,6 +20,7 @@ type Service struct {
 	teams     team.Repository
 	rbac      *rbac.Service
 	sync      *SyncService
+	query     *QueryService
 }
 
 func NewService(
@@ -35,6 +36,7 @@ func NewService(
 		teams:     teams,
 		rbac:      rbacSvc,
 		sync:      syncSvc,
+		query:     NewQueryService(templates),
 	}
 }
 
@@ -77,7 +79,7 @@ func (s *Service) List(ctx context.Context, teamID, userID uuid.UUID, actorRole 
 	if err := s.ensureMember(ctx, teamID, userID); err != nil {
 		return repository.Page[Template]{}, err
 	}
-	result, err := s.templates.List(ctx, teamID, filter, page)
+	result, err := s.query.Search(ctx, teamID, filter, page)
 	if err != nil {
 		return repository.Page[Template]{}, serviceerrors.MapRepository(err)
 	}
