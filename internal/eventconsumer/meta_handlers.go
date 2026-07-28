@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/omnichannel/omni-chan-v2/internal/automation"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
@@ -47,7 +48,13 @@ type MessageHandler struct {
 	storage           StorageUploader
 	idempotency       idempotency.Store
 	metrics           *Metrics
+	forwarder         InboundMessageForwarder
 	log               *slog.Logger
+}
+
+// InboundMessageForwarder pushes received messages to customer apps.
+type InboundMessageForwarder interface {
+	ForwardInbound(ctx context.Context, input automation.ForwardInboundInput)
 }
 
 type MetaMediaClient interface {
@@ -81,6 +88,7 @@ func NewMessageHandler(
 	storage StorageUploader,
 	store idempotency.Store,
 	metrics *Metrics,
+	forwarder InboundMessageForwarder,
 	log *slog.Logger,
 ) *MessageHandler {
 	if log == nil {
@@ -99,6 +107,7 @@ func NewMessageHandler(
 		storage:          storage,
 		idempotency:      store,
 		metrics:          metrics,
+		forwarder:        forwarder,
 		log:              log,
 	}
 }
@@ -272,6 +281,16 @@ func (h *MessageHandler) processInstagram(ctx context.Context, event sharedevent
 		"contact", contactEntity.ContactName,
 		"has_attachment", attachment != nil,
 	)
+	if msgCreated && h.forwarder != nil {
+		h.forwarder.ForwardInbound(ctx, automation.ForwardInboundInput{
+			TeamID:         tenant.TeamID,
+			ChannelID:      tenant.ChannelID,
+			ChannelType:    "instagram",
+			ConversationID: conv.ID,
+			Contact:        contactEntity,
+			Message:        msg,
+		})
+	}
 	return nil
 }
 
@@ -547,6 +566,16 @@ func (h *MessageHandler) process(ctx context.Context, event sharedevents.Canonic
 		"message_id", msg.ID.String(),
 		"event_type", event.Type,
 	)
+	if msgCreated && h.forwarder != nil {
+		h.forwarder.ForwardInbound(ctx, automation.ForwardInboundInput{
+			TeamID:         tenant.TeamID,
+			ChannelID:      tenant.ChannelID,
+			ChannelType:    "whatsapp",
+			ConversationID: conv.ID,
+			Contact:        contactEntity,
+			Message:        msg,
+		})
+	}
 	return nil
 }
 

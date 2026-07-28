@@ -14,14 +14,19 @@ func DefaultLanguageResolver() LanguageResolver {
 }
 
 // ForStorageFromMeta maps a Meta list/sync language into the stored domain form.
-// Prefer Meta's real locale; never invent invalid regions (e.g. en → en_EN).
+// Preserve Meta's real locale: en and en_US are distinct send codes (#132001 if swapped).
+// Only rewrite known legacy artifacts (en_EN).
 func (LanguageResolver) ForStorageFromMeta(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "en_US"
 	}
 	switch canonicalizeLocaleKey(raw) {
-	case "en", "en_us", "en_en":
+	case "en_en":
+		return "en_US"
+	case "en":
+		return "en"
+	case "en_us":
 		return "en_US"
 	case "id", "id_id":
 		return "id"
@@ -39,7 +44,11 @@ func (LanguageResolver) ForStorageFromCreate(raw string) string {
 	switch canonicalizeLocaleKey(raw) {
 	case "id", "id_id":
 		return "id"
-	case "en", "en_us", "en_en":
+	case "en_en":
+		return "en_US"
+	case "en":
+		return "en"
+	case "en_us":
 		return "en_US"
 	default:
 		return normalizeLocaleCase(raw)
@@ -47,13 +56,18 @@ func (LanguageResolver) ForStorageFromCreate(raw string) string {
 }
 
 // ForMetaSend returns the language.code value for Meta Cloud send APIs.
+// Must match the template's Meta language exactly — do not coerce en ↔ en_US.
 func (LanguageResolver) ForMetaSend(stored string) string {
 	stored = strings.TrimSpace(stored)
 	if stored == "" {
 		return "en_US"
 	}
 	switch canonicalizeLocaleKey(stored) {
-	case "en", "en_us", "en_en":
+	case "en_en":
+		return "en_US"
+	case "en":
+		return "en"
+	case "en_us":
 		return "en_US"
 	case "id", "id_id":
 		return "id"
@@ -77,12 +91,27 @@ func (r LanguageResolver) MatchesFilter(stored, filter string) bool {
 	if filter == "" || strings.EqualFold(filter, "all") {
 		return true
 	}
-	return r.NormalizeForFilter(stored) == r.NormalizeForFilter(filter)
+	a := r.NormalizeForFilter(stored)
+	b := r.NormalizeForFilter(filter)
+	if a == b {
+		return true
+	}
+	// UI "English" filter matches both Meta codes en and en_US.
+	return isEnglishLocale(a) && isEnglishLocale(b)
 }
 
 // NormalizedStorageKey is the value stored in templates.normalized_language.
 func (r LanguageResolver) NormalizedStorageKey(stored string) string {
 	return r.ForStorageFromMeta(stored)
+}
+
+func isEnglishLocale(normalized string) bool {
+	switch canonicalizeLocaleKey(normalized) {
+	case "en", "en_us":
+		return true
+	default:
+		return false
+	}
 }
 
 func canonicalizeLocaleKey(raw string) string {

@@ -50,6 +50,7 @@ func ValidateTemplateSend(
 	}
 
 	mapping = ApplyTemplateHeaderMediaDefaults(mapping, tpl)
+	mapping, variables = ApplyTemplateButtonDefaults(tpl, mapping, variables)
 
 	required, err := builder.RequiredFrom(tpl)
 	if err != nil {
@@ -192,6 +193,7 @@ func RenderValidatedTemplate(
 	variables map[string]string,
 ) ([]builder.SendComponent, error) {
 	mapping = ApplyTemplateHeaderMediaDefaults(mapping, tpl)
+	mapping, variables = ApplyTemplateButtonDefaults(tpl, mapping, variables)
 	if err := ValidateTemplateSend(tpl, mapping, variables); err != nil {
 		return nil, err
 	}

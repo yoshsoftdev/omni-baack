@@ -15,6 +15,7 @@ import (
 	v1 "github.com/omnichannel/omni-chan-v2/internal/api/v1"
 	"github.com/omnichannel/omni-chan-v2/internal/api/v1/handler"
 	"github.com/omnichannel/omni-chan-v2/internal/auth"
+	"github.com/omnichannel/omni-chan-v2/internal/automation"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign/delivery"
 	camrecipient "github.com/omnichannel/omni-chan-v2/internal/campaign/recipient"
@@ -283,6 +284,19 @@ func main() {
 
 	templateService := template.NewService(templateRepo, channelRepo, teamRepo, rbacService, metaSyncService)
 
+	automationRepo := automation.NewRepository(db)
+	automationInvoker := automation.NewInvoker(
+		automationRepo,
+		templateRepo,
+		channelRepo,
+		contactRepo,
+		conversationRepo,
+		messageRepo,
+		tokenCipher,
+		metaClient,
+	)
+	automationService := automation.NewService(automationRepo, teamRepo, templateRepo, channelRepo, rbacService, automationInvoker)
+
 	campaignTx := uow.NewCampaignRunner(db)
 	cancelFlags := broadcastcancel.NewStore(rdb.Client, broadcastcancel.DefaultTTL)
 	waResolver := waRecipientResolver
@@ -308,7 +322,7 @@ func main() {
 	go deliveryReconciler.StartDaily(ctx)
 
 	if cfg.NATS.Enabled {
-		startEventConsumer(ctx, cfg, channelRepo, contactService, conversationService, messageService, templateRepo, onboardingService, channelSyncService, inboxSync, campaignRepo, reportRepo, tokenCipher, metaClient, storageClient, rdb, log)
+		startEventConsumer(ctx, cfg, channelRepo, contactService, conversationService, messageService, templateRepo, onboardingService, channelSyncService, inboxSync, campaignRepo, reportRepo, automationService.Forwarder(), tokenCipher, metaClient, storageClient, rdb, log)
 	}
 
 	app := api.NewRouter(api.Deps{
@@ -329,6 +343,7 @@ func main() {
 			Segment:              handler.NewSegmentHandler(segmentService),
 			Tag:                  handler.NewTagHandler(tagService),
 			QuickReply:           handler.NewQuickReplyHandler(quickReplyService),
+			Automation:           handler.NewAutomationHandler(automationService, cfg.NATS.InternalToken),
 			Campaign:             handler.NewCampaignHandler(campaignService),
 			Operations:           handler.NewOperationsHandler(operationsService),
 			Report:               handler.NewReportHandler(reportService),
@@ -377,6 +392,7 @@ func startEventConsumer(
 	inboxSync *inbox.SyncService,
 	campaignRepo campaign.Repository,
 	reportRepo report.Repository,
+	messageForwarder eventconsumer.InboundMessageForwarder,
 	tokenCipher *cryptoutil.TokenCipher,
 	metaClient *metaclient.Client,
 	storageClient *storageclient.Client,
@@ -437,6 +453,7 @@ func startEventConsumer(
 		ChannelSync:      channelSyncService,
 		Inbox:            inboxSync,
 		Delivery:         deliveryTracker,
+		Forwarder:        messageForwarder,
 		Idempotency:      idempStore,
 		DLQ:              metaSub,
 		Logger:           slogLog,

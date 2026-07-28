@@ -15,6 +15,11 @@ func Register(router fiber.Router, deps Deps) {
 		router.Get("/internal/media/:token", deps.MediaProxy.Serve)
 	}
 
+	// Internal-only Automation invoke — public ingress is webhook-service only.
+	if deps.Automation != nil {
+		router.Post("/internal/automation/endpoints/:id", deps.Automation.InvokeInternal)
+	}
+
 	if deps.Webhook != nil {
 		router.Get("/webhook/meta", deps.Webhook.VerifyMeta)
 	}
@@ -181,6 +186,40 @@ func Register(router fiber.Router, deps Deps) {
 		quickReplies.Get("/:id", deps.QuickReply.Get)
 		quickReplies.Patch("/:id", deps.QuickReply.Update)
 		quickReplies.Delete("/:id", deps.QuickReply.Delete)
+	}
+
+	if deps.Automation != nil {
+		auto := protected.Group("/automation")
+		auto.Get("/summary", deps.Automation.Summary)
+
+		endpoints := auto.Group("/endpoints")
+		endpoints.Get("/", deps.Automation.ListEndpoints)
+		endpoints.Post("/", deps.Automation.CreateEndpoint)
+		endpoints.Get("/:id", deps.Automation.GetEndpoint)
+		endpoints.Patch("/:id", deps.Automation.UpdateEndpoint)
+		endpoints.Post("/:id/disable", deps.Automation.DisableEndpoint)
+		endpoints.Post("/:id/enable", deps.Automation.EnableEndpoint)
+		endpoints.Post("/:id/duplicate", deps.Automation.DuplicateEndpoint)
+		endpoints.Delete("/:id", deps.Automation.DeleteEndpoint)
+		endpoints.Get("/:id/analytics", deps.Automation.Analytics)
+		endpoints.Post("/:id/test", deps.Automation.TestInvoke)
+
+		keys := auto.Group("/keys")
+		keys.Get("/", deps.Automation.ListAPIKeys)
+		keys.Post("/", deps.Automation.CreateAPIKey)
+		keys.Post("/:id/rotate", deps.Automation.RotateAPIKey)
+		keys.Post("/:id/disable", deps.Automation.DisableAPIKey)
+		keys.Post("/:id/enable", deps.Automation.EnableAPIKey)
+		keys.Delete("/:id", deps.Automation.DeleteAPIKey)
+
+		webhooks := auto.Group("/webhooks")
+		webhooks.Get("/", deps.Automation.ListForwardWebhooks)
+		webhooks.Post("/", deps.Automation.CreateForwardWebhook)
+		webhooks.Patch("/:id", deps.Automation.UpdateForwardWebhook)
+		webhooks.Post("/:id/enable", deps.Automation.EnableForwardWebhook)
+		webhooks.Post("/:id/disable", deps.Automation.DisableForwardWebhook)
+		webhooks.Delete("/:id", deps.Automation.DeleteForwardWebhook)
+		webhooks.Get("/:id/deliveries", deps.Automation.ListForwardDeliveries)
 	}
 
 	if deps.Campaign != nil {

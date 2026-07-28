@@ -21,6 +21,7 @@ type Deps struct {
 	Segment              *handler.SegmentHandler
 	Tag                  *handler.TagHandler
 	QuickReply           *handler.QuickReplyHandler
+	Automation           *handler.AutomationHandler
 	Campaign             *handler.CampaignHandler
 	Operations           *handler.OperationsHandler
 	Report               *handler.ReportHandler

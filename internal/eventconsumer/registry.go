@@ -43,6 +43,7 @@ type Deps struct {
 	ChannelSync   *channelsync.Service
 	Inbox         Syncer
 	Delivery      CampaignDelivery
+	Forwarder     InboundMessageForwarder
 	Idempotency   idempotency.Store
 	DLQ           ConsumerDLQ
 	Logger        *slog.Logger
@@ -62,7 +63,7 @@ func NewRegistry(deps Deps) *Registry {
 
 	return &Registry{
 		legacy:    NewLegacyConsumer(deps.Messages, deps.Onboarding, deps.ChannelSync, log),
-		messages:  NewMessageHandler(tenantResolver, deps.Channels, deps.Contacts, deps.Conversations, deps.Messages, deps.Inbox, deps.MetaMedia, deps.InstagramProfile, deps.TokenCipher, deps.Storage, store, metrics, log),
+		messages:  NewMessageHandler(tenantResolver, deps.Channels, deps.Contacts, deps.Conversations, deps.Messages, deps.Inbox, deps.MetaMedia, deps.InstagramProfile, deps.TokenCipher, deps.Storage, store, metrics, deps.Forwarder, log),
 		statuses:  NewStatusHandler(tenantResolver, deps.Messages, deps.Delivery, store, metrics, log),
 		templates: NewTemplateHandler(tenantResolver, deps.Channels, deps.Templates, store, metrics, log),
 		channels:  NewChannelHandler(tenantResolver, deps.Channels, deps.ChannelSync, store, metrics, log),

@@ -27,10 +27,10 @@ func TestMapFromMetaNormalizesStatusAndLanguage(t *testing.T) {
 	if tmpl.Status != template.StatusApproved {
 		t.Fatalf("status = %s", tmpl.Status)
 	}
-	if tmpl.Language != "en_US" {
+	if tmpl.Language != "en" {
 		t.Fatalf("language = %s", tmpl.Language)
 	}
-	if tmpl.NormalizedLanguage != "en_US" {
+	if tmpl.NormalizedLanguage != "en" {
 		t.Fatalf("normalized_language = %s", tmpl.NormalizedLanguage)
 	}
 	if tmpl.WorkspaceID() != teamID {

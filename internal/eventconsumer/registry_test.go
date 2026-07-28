@@ -326,6 +326,7 @@ func TestMessageHandler_NewConversationAndMessage(t *testing.T) {
 		idempotency.NewMemoryStore(time.Hour),
 		metrics,
 		nil,
+		nil,
 	)
 
 	payload, _ := json.Marshal(sharedevents.MetaMessagePayload{
@@ -380,6 +381,7 @@ func TestMessageHandler_DuplicateSkipped(t *testing.T) {
 		nil,
 		idempotency.NewMemoryStore(time.Hour),
 		&eventconsumer.Metrics{},
+		nil,
 		nil,
 	)
 

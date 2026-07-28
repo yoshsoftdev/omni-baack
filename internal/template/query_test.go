@@ -12,7 +12,7 @@ func TestNormalizeListFilter(t *testing.T) {
 	if got.Search != "welcome" {
 		t.Fatalf("search = %q", got.Search)
 	}
-	if got.Language != "en_US" {
+	if got.Language != "en" {
 		t.Fatalf("language = %q", got.Language)
 	}
 	if got.Category != "MARKETING" {

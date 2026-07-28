@@ -7,14 +7,14 @@ func TestLanguageResolverFromMeta(t *testing.T) {
 	r := DefaultLanguageResolver()
 	cases := map[string]string{
 		"":      "en_US",
-		"en":    "en_US",
-		"EN":    "en_US",
+		"en":    "en",
+		"EN":    "en",
 		"en_US": "en_US",
 		"en_EN": "en_US",
 		"id":    "id",
 		"id_ID": "id",
 		"pt_BR": "pt_BR",
-		"pt":    "pt", // bare non-en/id kept as language only (no invented region)
+		"pt":    "pt",
 	}
 	for in, want := range cases {
 		if got := r.ForStorageFromMeta(in); got != want {
@@ -29,8 +29,11 @@ func TestLanguageResolverFromCreate(t *testing.T) {
 	if got := r.ForStorageFromCreate(""); got != "id" {
 		t.Fatalf("empty create default = %s", got)
 	}
-	if got := r.ForStorageFromCreate("en"); got != "en_US" {
+	if got := r.ForStorageFromCreate("en"); got != "en" {
 		t.Fatalf("en = %s", got)
+	}
+	if got := r.ForStorageFromCreate("en_US"); got != "en_US" {
+		t.Fatalf("en_US = %s", got)
 	}
 }
 
@@ -40,7 +43,7 @@ func TestLanguageResolverForMetaSend(t *testing.T) {
 	cases := map[string]string{
 		"":      "en_US",
 		"en_EN": "en_US",
-		"en":    "en_US",
+		"en":    "en",
 		"en_US": "en_US",
 		"id_ID": "id",
 		"id":    "id",
@@ -58,6 +61,9 @@ func TestLanguageResolverMatchesFilter(t *testing.T) {
 	r := DefaultLanguageResolver()
 	if !r.MatchesFilter("en_US", "en") {
 		t.Fatal("en_US should match filter en")
+	}
+	if !r.MatchesFilter("en", "en_US") {
+		t.Fatal("en should match filter en_US")
 	}
 	if !r.MatchesFilter("id", "id_ID") {
 		t.Fatal("id should match filter id_ID")

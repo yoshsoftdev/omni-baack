@@ -37,4 +37,9 @@ const (
 	PermBillingManage       = "billing.manage"
 	PermDeviceView          = "device.view"
 	PermDeviceManage        = "device.manage"
+	PermAutomationView      = "automation.view"
+	PermAutomationCreate    = "automation.create"
+	PermAutomationUpdate    = "automation.update"
+	PermAutomationDelete    = "automation.delete"
+	PermAutomationInvoke    = "automation.invoke"
 )
