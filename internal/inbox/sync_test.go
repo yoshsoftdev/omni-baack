@@ -139,6 +139,29 @@ func TestSyncService_ReopenAndUnread(t *testing.T) {
 	}
 }
 
+func TestSyncService_ReopenClearsAssignee(t *testing.T) {
+	teamID := uuid.New()
+	convID := uuid.New()
+	assignee := uuid.New()
+	conv := &conversation.Conversation{
+		ID: convID, TeamID: teamID, Status: conversation.StatusClosed, UnreadCount: 0, AssignedTo: &assignee,
+	}
+	repo := &memConvRepo{conv: conv}
+	rt := &memRT{}
+	svc := inbox.NewSyncService(repo, nil, &memSettings{}, nil, rt)
+
+	msg := &message.Message{ID: uuid.New(), Content: "ping", ReceivedAt: time.Now().UTC()}
+	updated, err := svc.HandleInbound(context.Background(), inbox.InboundParams{
+		TeamID: teamID, Conversation: conv, Message: msg, MessageCreated: true, Preview: "ping",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.AssignedTo != nil {
+		t.Fatal("expected reopen conversation to become unassigned")
+	}
+}
+
 func TestSyncService_MarkRead(t *testing.T) {
 	teamID := uuid.New()
 	conv := &conversation.Conversation{ID: uuid.New(), TeamID: teamID, UnreadCount: 3}

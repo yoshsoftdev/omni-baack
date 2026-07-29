@@ -177,14 +177,14 @@ const (
 )
 
 type WebhookDelivery struct {
-	ID            string                `json:"id"`
-	TeamID        uuid.UUID             `json:"teamId"`
-	EndpointID    string                `json:"endpointId"`
-	ExecutionID   string                `json:"executionId"`
-	Status        WebhookDeliveryStatus `json:"status"`
-	StatusCode    int                   `json:"statusCode"`
-	ErrorMessage  *string               `json:"errorMessage,omitempty"`
-	AttemptedAt   time.Time             `json:"attemptedAt"`
+	ID           string                `json:"id"`
+	TeamID       uuid.UUID             `json:"teamId"`
+	EndpointID   string                `json:"endpointId"`
+	ExecutionID  string                `json:"executionId"`
+	Status       WebhookDeliveryStatus `json:"status"`
+	StatusCode   int                   `json:"statusCode"`
+	ErrorMessage *string               `json:"errorMessage,omitempty"`
+	AttemptedAt  time.Time             `json:"attemptedAt"`
 }
 
 type EndpointAnalytics struct {
@@ -238,38 +238,44 @@ const (
 )
 
 type ForwardWebhook struct {
-	ID         string               `json:"id"`
-	TeamID     uuid.UUID            `json:"teamId"`
-	Name       string               `json:"name"`
-	URL        string               `json:"url"`
-	Secret     string               `json:"secret,omitempty"`
-	Status     ForwardWebhookStatus `json:"status"`
-	Events     []string             `json:"events"`
-	ChannelID  *uuid.UUID           `json:"channelId,omitempty"`
-	CreatedBy  *uuid.UUID           `json:"createdBy,omitempty"`
-	CreatedAt  time.Time            `json:"createdAt"`
-	UpdatedAt  time.Time            `json:"updatedAt"`
-	DeletedAt  *time.Time           `json:"deletedAt,omitempty"`
-	LastUsedAt *time.Time           `json:"lastUsedAt,omitempty"`
+	ID                       string               `json:"id"`
+	TeamID                   uuid.UUID            `json:"teamId"`
+	Name                     string               `json:"name"`
+	URL                      string               `json:"url"`
+	Secret                   string               `json:"secret,omitempty"`
+	Status                   ForwardWebhookStatus `json:"status"`
+	Events                   []string             `json:"events"`
+	ChannelID                *uuid.UUID           `json:"channelId,omitempty"`
+	OnlyUnassigned           bool                 `json:"onlyUnassigned"`
+	AssignAutomationOnReopen bool                 `json:"assignAutomationOnReopen"`
+	CreatedBy                *uuid.UUID           `json:"createdBy,omitempty"`
+	CreatedAt                time.Time            `json:"createdAt"`
+	UpdatedAt                time.Time            `json:"updatedAt"`
+	DeletedAt                *time.Time           `json:"deletedAt,omitempty"`
+	LastUsedAt               *time.Time           `json:"lastUsedAt,omitempty"`
 }
 
 type CreateForwardWebhookInput struct {
-	Name      string
-	URL       string
-	Secret    string
-	Events    []string
-	ChannelID *uuid.UUID
+	Name                     string
+	URL                      string
+	Secret                   string
+	Events                   []string
+	ChannelID                *uuid.UUID
+	OnlyUnassigned           bool
+	AssignAutomationOnReopen bool
 }
 
 type UpdateForwardWebhookInput struct {
-	Name         *string
-	URL          *string
-	Status       *ForwardWebhookStatus
-	Events       []string
-	ChannelID    *uuid.UUID
-	ClearChannel bool
-	RotateSecret bool
-	Secret       *string
+	Name                     *string
+	URL                      *string
+	Status                   *ForwardWebhookStatus
+	Events                   []string
+	ChannelID                *uuid.UUID
+	OnlyUnassigned           *bool
+	AssignAutomationOnReopen *bool
+	ClearChannel             bool
+	RotateSecret             bool
+	Secret                   *string
 }
 
 type ForwardDeliveryStatus string
@@ -318,4 +324,9 @@ type InboundForwardMessage struct {
 	ContentType string    `json:"contentType"`
 	Content     string    `json:"content"`
 	CreatedAt   time.Time `json:"createdAt"`
+}
+
+type InboxAutomationSettings struct {
+	Enabled    bool `json:"enabled"`
+	HasWebhook bool `json:"hasWebhook"`
 }

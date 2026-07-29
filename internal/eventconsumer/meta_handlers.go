@@ -36,20 +36,20 @@ type Syncer interface {
 }
 
 type MessageHandler struct {
-	resolver          *resolver.TenantResolver
-	channels          channel.Repository
-	contacts          *contact.Service
-	conversations     *conversation.Service
-	messages          *message.Service
-	inbox             Syncer
-	metaMedia         MetaMediaClient
-	instagramProfile  InstagramProfileClient
-	tokenCipher       TokenCipher
-	storage           StorageUploader
-	idempotency       idempotency.Store
-	metrics           *Metrics
-	forwarder         InboundMessageForwarder
-	log               *slog.Logger
+	resolver         *resolver.TenantResolver
+	channels         channel.Repository
+	contacts         *contact.Service
+	conversations    *conversation.Service
+	messages         *message.Service
+	inbox            Syncer
+	metaMedia        MetaMediaClient
+	instagramProfile InstagramProfileClient
+	tokenCipher      TokenCipher
+	storage          StorageUploader
+	idempotency      idempotency.Store
+	metrics          *Metrics
+	forwarder        InboundMessageForwarder
+	log              *slog.Logger
 }
 
 // InboundMessageForwarder pushes received messages to customer apps.
@@ -217,6 +217,7 @@ func (h *MessageHandler) processInstagram(ctx context.Context, event sharedevent
 	if err != nil {
 		return err
 	}
+	wasReopened := conv.Status == conversation.StatusClosed || conv.Status == conversation.StatusResolved
 	if convCreated {
 		h.metrics.IncConversationsCreated()
 	}
@@ -252,15 +253,19 @@ func (h *MessageHandler) processInstagram(ctx context.Context, event sharedevent
 		h.metrics.IncMessagesCreated()
 	}
 	if h.inbox != nil {
-		if _, err := h.inbox.HandleInbound(ctx, inbox.InboundParams{
+		updatedConv, err := h.inbox.HandleInbound(ctx, inbox.InboundParams{
 			TeamID:              tenant.TeamID,
 			Conversation:        conv,
 			ConversationCreated: convCreated,
 			Message:             msg,
 			MessageCreated:      msgCreated,
 			Preview:             content,
-		}); err != nil {
+		})
+		if err != nil {
 			return err
+		}
+		if updatedConv != nil {
+			conv = updatedConv
 		}
 	} else if msgCreated {
 		unread := conv.UnreadCount + 1
@@ -283,12 +288,15 @@ func (h *MessageHandler) processInstagram(ctx context.Context, event sharedevent
 	)
 	if msgCreated && h.forwarder != nil {
 		h.forwarder.ForwardInbound(ctx, automation.ForwardInboundInput{
-			TeamID:         tenant.TeamID,
-			ChannelID:      tenant.ChannelID,
-			ChannelType:    "instagram",
-			ConversationID: conv.ID,
-			Contact:        contactEntity,
-			Message:        msg,
+			TeamID:             tenant.TeamID,
+			ChannelID:          tenant.ChannelID,
+			ChannelType:        "instagram",
+			ConversationID:     conv.ID,
+			ConversationStatus: conv.Status,
+			AssignedTo:         conv.AssignedTo,
+			Reopened:           wasReopened,
+			Contact:            contactEntity,
+			Message:            msg,
 		})
 	}
 	return nil
@@ -490,6 +498,7 @@ func (h *MessageHandler) process(ctx context.Context, event sharedevents.Canonic
 	if err != nil {
 		return err
 	}
+	wasReopened := conv.Status == conversation.StatusClosed || conv.Status == conversation.StatusResolved
 	if convCreated {
 		h.metrics.IncConversationsCreated()
 	}
@@ -538,15 +547,19 @@ func (h *MessageHandler) process(ctx context.Context, event sharedevents.Canonic
 		h.metrics.IncMessagesCreated()
 	}
 	if h.inbox != nil {
-		if _, err := h.inbox.HandleInbound(ctx, inbox.InboundParams{
+		updatedConv, err := h.inbox.HandleInbound(ctx, inbox.InboundParams{
 			TeamID:              tenant.TeamID,
 			Conversation:        conv,
 			ConversationCreated: convCreated,
 			Message:             msg,
 			MessageCreated:      msgCreated,
 			Preview:             content,
-		}); err != nil {
+		})
+		if err != nil {
 			return err
+		}
+		if updatedConv != nil {
+			conv = updatedConv
 		}
 	} else if msgCreated {
 		unread := conv.UnreadCount + 1
@@ -568,12 +581,15 @@ func (h *MessageHandler) process(ctx context.Context, event sharedevents.Canonic
 	)
 	if msgCreated && h.forwarder != nil {
 		h.forwarder.ForwardInbound(ctx, automation.ForwardInboundInput{
-			TeamID:         tenant.TeamID,
-			ChannelID:      tenant.ChannelID,
-			ChannelType:    "whatsapp",
-			ConversationID: conv.ID,
-			Contact:        contactEntity,
-			Message:        msg,
+			TeamID:             tenant.TeamID,
+			ChannelID:          tenant.ChannelID,
+			ChannelType:        "whatsapp",
+			ConversationID:     conv.ID,
+			ConversationStatus: conv.Status,
+			AssignedTo:         conv.AssignedTo,
+			Reopened:           wasReopened,
+			Contact:            contactEntity,
+			Message:            msg,
 		})
 	}
 	return nil

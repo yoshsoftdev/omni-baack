@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/contact"
+	"github.com/omnichannel/omni-chan-v2/internal/conversation"
 	"github.com/omnichannel/omni-chan-v2/internal/message"
 )
 
@@ -30,12 +31,15 @@ func NewForwarder(repo Repository) *Forwarder {
 }
 
 type ForwardInboundInput struct {
-	TeamID         uuid.UUID
-	ChannelID      uuid.UUID
-	ChannelType    string
-	ConversationID uuid.UUID
-	Contact        *contact.Contact
-	Message        *message.Message
+	TeamID             uuid.UUID
+	ChannelID          uuid.UUID
+	ChannelType        string
+	ConversationID     uuid.UUID
+	ConversationStatus conversation.Status
+	AssignedTo         *uuid.UUID
+	Reopened           bool
+	Contact            *contact.Contact
+	Message            *message.Message
 }
 
 // ForwardInbound delivers message.received to all matching active webhooks.
@@ -83,14 +87,28 @@ func (f *Forwarder) ForwardInbound(ctx context.Context, input ForwardInboundInpu
 
 	for i := range webhooks {
 		wh := webhooks[i]
+		if input.AssignedTo != nil {
+			// Human-assigned conversations are never forwarded to automation webhook.
+			continue
+		}
 		if !webhookSubscribes(wh.Events, EventMessageReceived) {
 			continue
 		}
 		if wh.ChannelID != nil && *wh.ChannelID != input.ChannelID {
 			continue
 		}
+		if wh.OnlyUnassigned && !eligibleForUnassignedForward(input) {
+			continue
+		}
 		f.deliver(ctx, &wh, body, input)
 	}
+}
+
+func eligibleForUnassignedForward(input ForwardInboundInput) bool {
+	if input.AssignedTo != nil {
+		return false
+	}
+	return input.ConversationStatus == "" || input.ConversationStatus == conversation.StatusOpen
 }
 
 func webhookSubscribes(events []string, event string) bool {

@@ -53,22 +53,30 @@ type createAPIKeyRequest struct {
 }
 
 type createForwardWebhookRequest struct {
-	Name      string  `json:"name"`
-	URL       string  `json:"url"`
-	Secret    string  `json:"secret"`
-	Events    []string `json:"events"`
-	ChannelID *string `json:"channelId"`
+	Name                     string   `json:"name"`
+	URL                      string   `json:"url"`
+	Secret                   string   `json:"secret"`
+	Events                   []string `json:"events"`
+	ChannelID                *string  `json:"channelId"`
+	OnlyUnassigned           bool     `json:"onlyUnassigned"`
+	AssignAutomationOnReopen bool     `json:"assignAutomationOnReopen"`
 }
 
 type updateForwardWebhookRequest struct {
-	Name         *string  `json:"name"`
-	URL          *string  `json:"url"`
-	Status       *string  `json:"status"`
-	Events       []string `json:"events"`
-	ChannelID    *string  `json:"channelId"`
-	ClearChannel bool     `json:"clearChannel"`
-	RotateSecret bool     `json:"rotateSecret"`
-	Secret       *string  `json:"secret"`
+	Name                     *string  `json:"name"`
+	URL                      *string  `json:"url"`
+	Status                   *string  `json:"status"`
+	Events                   []string `json:"events"`
+	ChannelID                *string  `json:"channelId"`
+	OnlyUnassigned           *bool    `json:"onlyUnassigned"`
+	AssignAutomationOnReopen *bool    `json:"assignAutomationOnReopen"`
+	ClearChannel             bool     `json:"clearChannel"`
+	RotateSecret             bool     `json:"rotateSecret"`
+	Secret                   *string  `json:"secret"`
+}
+
+type updateInboxAutomationSettingsRequest struct {
+	Enabled bool `json:"enabled"`
 }
 
 func (h *AutomationHandler) Summary(c *fiber.Ctx) error {
@@ -343,6 +351,34 @@ func (h *AutomationHandler) ListForwardWebhooks(c *fiber.Ctx) error {
 	return response.OK(c, "ok", items)
 }
 
+func (h *AutomationHandler) GetInboxAutomationSettings(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	settings, err := h.svc.GetInboxAutomationSettings(c.Context(), actor.TeamID, actor.UserID, actor.Role)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", settings)
+}
+
+func (h *AutomationHandler) UpdateInboxAutomationSettings(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	var req updateInboxAutomationSettingsRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	settings, err := h.svc.SetInboxAutomationSettings(c.Context(), actor.TeamID, actor.UserID, actor.Role, req.Enabled)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "automation inbox setting updated", settings)
+}
+
 func (h *AutomationHandler) CreateForwardWebhook(c *fiber.Ctx) error {
 	actor, err := requireActor(c)
 	if err != nil {
@@ -361,11 +397,13 @@ func (h *AutomationHandler) CreateForwardWebhook(c *fiber.Ctx) error {
 		channelID = &parsed
 	}
 	item, err := h.svc.CreateForwardWebhook(c.Context(), actor.TeamID, actor.UserID, actor.Role, automation.CreateForwardWebhookInput{
-		Name:      req.Name,
-		URL:       req.URL,
-		Secret:    req.Secret,
-		Events:    req.Events,
-		ChannelID: channelID,
+		Name:                     req.Name,
+		URL:                      req.URL,
+		Secret:                   req.Secret,
+		Events:                   req.Events,
+		ChannelID:                channelID,
+		OnlyUnassigned:           req.OnlyUnassigned,
+		AssignAutomationOnReopen: req.AssignAutomationOnReopen,
 	})
 	if err != nil {
 		return mapError(c, err)
@@ -384,12 +422,14 @@ func (h *AutomationHandler) UpdateForwardWebhook(c *fiber.Ctx) error {
 		return response.BadRequest(c, "invalid request body")
 	}
 	input := automation.UpdateForwardWebhookInput{
-		Name:         req.Name,
-		URL:          req.URL,
-		Events:       req.Events,
-		ClearChannel: req.ClearChannel,
-		RotateSecret: req.RotateSecret,
-		Secret:       req.Secret,
+		Name:                     req.Name,
+		URL:                      req.URL,
+		Events:                   req.Events,
+		OnlyUnassigned:           req.OnlyUnassigned,
+		AssignAutomationOnReopen: req.AssignAutomationOnReopen,
+		ClearChannel:             req.ClearChannel,
+		RotateSecret:             req.RotateSecret,
+		Secret:                   req.Secret,
 	}
 	if req.Status != nil {
 		status := automation.ForwardWebhookStatus(*req.Status)

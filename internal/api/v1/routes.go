@@ -214,6 +214,8 @@ func Register(router fiber.Router, deps Deps) {
 
 		webhooks := auto.Group("/webhooks")
 		webhooks.Get("/", deps.Automation.ListForwardWebhooks)
+		auto.Get("/settings", deps.Automation.GetInboxAutomationSettings)
+		auto.Patch("/settings", deps.Automation.UpdateInboxAutomationSettings)
 		webhooks.Post("/", deps.Automation.CreateForwardWebhook)
 		webhooks.Patch("/:id", deps.Automation.UpdateForwardWebhook)
 		webhooks.Post("/:id/enable", deps.Automation.EnableForwardWebhook)

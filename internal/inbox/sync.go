@@ -13,12 +13,12 @@ import (
 
 // InboundParams is input for synchronizing an inbound message into the inbox.
 type InboundParams struct {
-	TeamID         uuid.UUID
-	Conversation   *conversation.Conversation
+	TeamID              uuid.UUID
+	Conversation        *conversation.Conversation
 	ConversationCreated bool
-	Message        *message.Message
-	MessageCreated bool
-	Preview        string
+	Message             *message.Message
+	MessageCreated      bool
+	Preview             string
 }
 
 // OutboundParams is input for synchronizing an agent reply.
@@ -108,7 +108,12 @@ func (s *SyncService) HandleInbound(ctx context.Context, p InboundParams) (*conv
 	if err != nil {
 		return nil, err
 	}
-
+	if reopen && conv.AssignedTo != nil {
+		if err := s.conversations.UpdateAssignment(ctx, p.TeamID, conv.ID, nil); err == nil {
+			conv, _ = s.conversations.FindByID(ctx, p.TeamID, conv.ID)
+			_ = s.publishAssignment(ctx, p.TeamID, conv)
+		}
+	}
 	if reopen && s.collaboration != nil {
 		_ = s.collaboration.RecordStatusChange(ctx, conversation.StatusActivityInput{
 			TeamID:         p.TeamID,

@@ -212,7 +212,7 @@ func (s *Service) Assign(ctx context.Context, teamID, userID uuid.UUID, actorRol
 		_ = s.collaboration.RecordAssignment(ctx, AssignmentActivityInput{
 			TeamID:         teamID,
 			ConversationID: conversationID,
-			ActorID:        userID,
+			ActorID:        &userID,
 			Previous:       prev.AssignedTo,
 			Assignee:       assigneeID,
 		})

@@ -54,9 +54,13 @@ func (m *memConvRepo) List(context.Context, uuid.UUID, conversation.ListFilter, 
 func (m *memConvRepo) ListCursor(context.Context, uuid.UUID, conversation.ListFilter, *conversation.ListCursor, int) (conversation.CursorPage, error) {
 	return conversation.CursorPage{}, nil
 }
-func (m *memConvRepo) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, conversation.Status) error { return nil }
-func (m *memConvRepo) UpdateAssignment(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) error     { return nil }
-func (m *memConvRepo) UpdateUnreadCount(context.Context, uuid.UUID, uuid.UUID, int) error            { return nil }
+func (m *memConvRepo) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, conversation.Status) error {
+	return nil
+}
+func (m *memConvRepo) UpdateAssignment(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) error {
+	return nil
+}
+func (m *memConvRepo) UpdateUnreadCount(context.Context, uuid.UUID, uuid.UUID, int) error { return nil }
 func (m *memConvRepo) UpdateLastMessage(context.Context, uuid.UUID, uuid.UUID, conversation.LastMessageUpdate) error {
 	return nil
 }
@@ -86,8 +90,10 @@ func (s *stubUserRepo) FindByID(_ context.Context, id uuid.UUID) (*user.User, er
 	}
 	return nil, repository.ErrNotFound
 }
-func (s *stubUserRepo) FindByEmail(context.Context, string) (*user.User, error) { return nil, repository.ErrNotFound }
-func (s *stubUserRepo) Update(context.Context, *user.User) error                { return nil }
+func (s *stubUserRepo) FindByEmail(context.Context, string) (*user.User, error) {
+	return nil, repository.ErrNotFound
+}
+func (s *stubUserRepo) Update(context.Context, *user.User) error { return nil }
 func (s *stubUserRepo) UpdateLastActive(context.Context, uuid.UUID, time.Time) error {
 	return nil
 }
@@ -136,7 +142,7 @@ func TestCollaborationService_RecordAssignment(t *testing.T) {
 	)
 
 	if err := svc.RecordAssignment(context.Background(), conversation.AssignmentActivityInput{
-		TeamID: teamID, ConversationID: convID, ActorID: actorID, Assignee: &assigneeID,
+		TeamID: teamID, ConversationID: convID, ActorID: &actorID, Assignee: &assigneeID,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -145,6 +151,37 @@ func TestCollaborationService_RecordAssignment(t *testing.T) {
 	}
 	if len(rt.events) == 0 || rt.events[0].Type != conversation.EventAssigned {
 		t.Fatalf("events=%+v", rt.events)
+	}
+}
+
+func TestCollaborationService_AutoUnassignActivity(t *testing.T) {
+	teamID := uuid.New()
+	convID := uuid.New()
+	assigneeID := uuid.New()
+	activities := &memActivityRepo{}
+	rt := &memRT{}
+	svc := conversation.NewCollaborationService(
+		activities,
+		nil,
+		&memConvRepo{conv: &conversation.Conversation{ID: convID, TeamID: teamID}},
+		nil,
+		&stubUserRepo{users: map[uuid.UUID]*user.User{
+			assigneeID: {ID: assigneeID, Name: "Steven"},
+		}},
+		testRBAC(),
+		rt,
+	)
+
+	if err := svc.RecordAssignment(context.Background(), conversation.AssignmentActivityInput{
+		TeamID: teamID, ConversationID: convID, Previous: &assigneeID, Assignee: nil, Automatic: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(activities.items) != 1 {
+		t.Fatalf("activity=%+v", activities.items)
+	}
+	if activities.items[0].Description == "" {
+		t.Fatal("expected activity description")
 	}
 }
 

@@ -44,6 +44,9 @@ type Repository interface {
 	TouchForwardWebhookUsed(ctx context.Context, id string, at time.Time) error
 	CreateForwardDelivery(ctx context.Context, item *ForwardDelivery) error
 	ListForwardDeliveries(ctx context.Context, teamID uuid.UUID, webhookID string, page repository.PageParams) (repository.Page[ForwardDelivery], error)
+	GetInboxAutomationEnabled(ctx context.Context, teamID uuid.UUID) (bool, error)
+	SetInboxAutomationEnabled(ctx context.Context, teamID uuid.UUID, enabled bool) error
+	HasRegisteredForwardWebhook(ctx context.Context, teamID uuid.UUID) (bool, error)
 
 	GetSummary(ctx context.Context, teamID uuid.UUID) (*Summary, error)
 	GetEndpointStats(ctx context.Context, endpointID string) (EndpointStats, error)
@@ -310,15 +313,15 @@ func (r *PostgresRepository) CreateForwardWebhook(ctx context.Context, item *For
 	}
 	_, err = r.db.Pool.Exec(ctx, `
 		INSERT INTO automation_forward_webhooks (
-			id, team_id, name, url, secret, status, events, channel_id, created_by, created_at, updated_at, last_used_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-	`, item.ID, item.TeamID, item.Name, item.URL, item.Secret, item.Status, events, item.ChannelID,
+			id, team_id, name, url, secret, status, events, channel_id, only_unassigned, assign_automation_on_reopen, created_by, created_at, updated_at, last_used_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+	`, item.ID, item.TeamID, item.Name, item.URL, item.Secret, item.Status, events, item.ChannelID, item.OnlyUnassigned, item.AssignAutomationOnReopen,
 		item.CreatedBy, item.CreatedAt, item.UpdatedAt, item.LastUsedAt)
 	return repository.MapError(err)
 }
 
 const forwardWebhookSelect = `
-	SELECT id, team_id, name, url, secret, status, events, channel_id, created_by, created_at, updated_at, deleted_at, last_used_at
+	SELECT id, team_id, name, url, secret, status, events, channel_id, only_unassigned, assign_automation_on_reopen, created_by, created_at, updated_at, deleted_at, last_used_at
 	FROM automation_forward_webhooks
 `
 
@@ -375,9 +378,9 @@ func (r *PostgresRepository) UpdateForwardWebhook(ctx context.Context, item *For
 	}
 	_, err = r.db.Pool.Exec(ctx, `
 		UPDATE automation_forward_webhooks
-		SET name = $3, url = $4, secret = $5, status = $6, events = $7, channel_id = $8, updated_at = $9
+		SET name = $3, url = $4, secret = $5, status = $6, events = $7, channel_id = $8, only_unassigned = $9, assign_automation_on_reopen = $10, updated_at = $11
 		WHERE id = $1 AND team_id = $2 AND deleted_at IS NULL
-	`, item.ID, item.TeamID, item.Name, item.URL, item.Secret, item.Status, events, item.ChannelID, item.UpdatedAt)
+	`, item.ID, item.TeamID, item.Name, item.URL, item.Secret, item.Status, events, item.ChannelID, item.OnlyUnassigned, item.AssignAutomationOnReopen, item.UpdatedAt)
 	return repository.MapError(err)
 }
 
@@ -449,11 +452,47 @@ func (r *PostgresRepository) ListForwardDeliveries(ctx context.Context, teamID u
 	}, rows.Err()
 }
 
+func (r *PostgresRepository) GetInboxAutomationEnabled(ctx context.Context, teamID uuid.UUID) (bool, error) {
+	var enabled bool
+	err := r.db.Pool.QueryRow(ctx, `
+		SELECT enabled FROM automation_team_settings WHERE team_id = $1
+	`, teamID).Scan(&enabled)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return enabled, nil
+}
+
+func (r *PostgresRepository) SetInboxAutomationEnabled(ctx context.Context, teamID uuid.UUID, enabled bool) error {
+	_, err := r.db.Pool.Exec(ctx, `
+		INSERT INTO automation_team_settings (team_id, enabled, updated_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (team_id)
+		DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = NOW()
+	`, teamID, enabled)
+	return repository.MapError(err)
+}
+
+func (r *PostgresRepository) HasRegisteredForwardWebhook(ctx context.Context, teamID uuid.UUID) (bool, error) {
+	var count int64
+	if err := r.db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM automation_forward_webhooks
+		WHERE team_id = $1 AND deleted_at IS NULL
+	`, teamID).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func scanForwardWebhook(row pgx.Row) (*ForwardWebhook, error) {
 	var item ForwardWebhook
 	var events rawScopes
 	err := row.Scan(
-		&item.ID, &item.TeamID, &item.Name, &item.URL, &item.Secret, &item.Status, &events, &item.ChannelID,
+		&item.ID, &item.TeamID, &item.Name, &item.URL, &item.Secret, &item.Status, &events, &item.ChannelID, &item.OnlyUnassigned, &item.AssignAutomationOnReopen,
 		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.DeletedAt, &item.LastUsedAt,
 	)
 	if err != nil {
@@ -467,7 +506,7 @@ func scanForwardWebhookRow(rows pgx.Rows) (*ForwardWebhook, error) {
 	var item ForwardWebhook
 	var events rawScopes
 	err := rows.Scan(
-		&item.ID, &item.TeamID, &item.Name, &item.URL, &item.Secret, &item.Status, &events, &item.ChannelID,
+		&item.ID, &item.TeamID, &item.Name, &item.URL, &item.Secret, &item.Status, &events, &item.ChannelID, &item.OnlyUnassigned, &item.AssignAutomationOnReopen,
 		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.DeletedAt, &item.LastUsedAt,
 	)
 	if err != nil {

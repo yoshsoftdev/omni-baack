@@ -170,13 +170,14 @@ func (s *CollaborationService) DeleteNote(ctx context.Context, teamID, userID uu
 type AssignmentActivityInput struct {
 	TeamID         uuid.UUID
 	ConversationID uuid.UUID
-	ActorID        uuid.UUID
+	ActorID        *uuid.UUID
 	Previous       *uuid.UUID
 	Assignee       *uuid.UUID
+	Automatic      bool
 }
 
 func (s *CollaborationService) RecordAssignment(ctx context.Context, input AssignmentActivityInput) error {
-	actorName := s.actorName(ctx, &input.ActorID)
+	actorName := s.actorName(ctx, input.ActorID)
 	var assigneeName string
 	if input.Assignee != nil {
 		assigneeName = s.memberName(ctx, input.TeamID, *input.Assignee)
@@ -200,7 +201,11 @@ func (s *CollaborationService) RecordAssignment(ctx context.Context, input Assig
 		prevName := s.memberName(ctx, input.TeamID, *input.Previous)
 		activityType = ActivityReassigned
 		eventType = EventReassigned
-		description = fmt.Sprintf("Reassigned from %s to unassigned by %s", displayName(prevName, "agent"), displayName(actorName, "Agent"))
+		if input.Automatic {
+			description = fmt.Sprintf("Conversation unassigned automatically on reopen (was assigned to %s)", displayName(prevName, "agent"))
+		} else {
+			description = fmt.Sprintf("Reassigned from %s to unassigned by %s", displayName(prevName, "agent"), displayName(actorName, "Agent"))
+		}
 	default:
 		return nil
 	}
@@ -208,12 +213,13 @@ func (s *CollaborationService) RecordAssignment(ctx context.Context, input Assig
 	meta, _ := json.Marshal(map[string]any{
 		"assignee_id":          uuidPtrString(input.Assignee),
 		"previous_assignee_id": uuidPtrString(input.Previous),
+		"automatic":            input.Automatic,
 	})
 	activity, err := s.recordActivity(ctx, recordActivityInput{
 		TeamID:         input.TeamID,
 		ConversationID: input.ConversationID,
 		Type:           activityType,
-		ActorID:        &input.ActorID,
+		ActorID:        input.ActorID,
 		Description:    description,
 		Metadata:       meta,
 	})

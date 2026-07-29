@@ -616,17 +616,19 @@ func (s *Service) CreateForwardWebhook(ctx context.Context, teamID, userID uuid.
 	}
 	now := time.Now().UTC()
 	item := &ForwardWebhook{
-		ID:        NewForwardWebhookID(),
-		TeamID:    teamID,
-		Name:      name,
-		URL:       urlValue,
-		Secret:    secret,
-		Status:    ForwardWebhookActive,
-		Events:    events,
-		ChannelID: input.ChannelID,
-		CreatedBy: &userID,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                       NewForwardWebhookID(),
+		TeamID:                   teamID,
+		Name:                     name,
+		URL:                      urlValue,
+		Secret:                   secret,
+		Status:                   ForwardWebhookActive,
+		Events:                   events,
+		ChannelID:                input.ChannelID,
+		OnlyUnassigned:           input.OnlyUnassigned,
+		AssignAutomationOnReopen: input.AssignAutomationOnReopen,
+		CreatedBy:                &userID,
+		CreatedAt:                now,
+		UpdatedAt:                now,
 	}
 	if err := serviceerrors.MapRepository(s.repo.CreateForwardWebhook(ctx, item)); err != nil {
 		return nil, err
@@ -674,6 +676,12 @@ func (s *Service) UpdateForwardWebhook(ctx context.Context, teamID, userID uuid.
 			}
 		}
 		item.ChannelID = input.ChannelID
+	}
+	if input.OnlyUnassigned != nil {
+		item.OnlyUnassigned = *input.OnlyUnassigned
+	}
+	if input.AssignAutomationOnReopen != nil {
+		item.AssignAutomationOnReopen = *input.AssignAutomationOnReopen
 	}
 	if input.RotateSecret {
 		item.Secret = strings.ReplaceAll(uuid.New().String(), "-", "")
@@ -753,4 +761,51 @@ func normalizeForwardEvents(events []string) []string {
 		return []string{EventMessageReceived}
 	}
 	return out
+}
+
+func (s *Service) GetInboxAutomationSettings(ctx context.Context, teamID, userID uuid.UUID, role string) (*InboxAutomationSettings, error) {
+	if err := s.authorize(role, rbac.PermAutomationView); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	enabled, err := s.repo.GetInboxAutomationEnabled(ctx, teamID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	hasWebhook, err := s.repo.HasRegisteredForwardWebhook(ctx, teamID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	if !hasWebhook && enabled {
+		enabled = false
+	}
+	return &InboxAutomationSettings{
+		Enabled:    enabled,
+		HasWebhook: hasWebhook,
+	}, nil
+}
+
+func (s *Service) SetInboxAutomationSettings(ctx context.Context, teamID, userID uuid.UUID, role string, enabled bool) (*InboxAutomationSettings, error) {
+	if err := s.authorize(role, rbac.PermAutomationUpdate); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, teamID, userID); err != nil {
+		return nil, err
+	}
+	hasWebhook, err := s.repo.HasRegisteredForwardWebhook(ctx, teamID)
+	if err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	if enabled && !hasWebhook {
+		return nil, serviceerrors.NewValidation("enabled", "register webhook first")
+	}
+	if err := s.repo.SetInboxAutomationEnabled(ctx, teamID, enabled); err != nil {
+		return nil, serviceerrors.MapRepository(err)
+	}
+	return &InboxAutomationSettings{
+		Enabled:    enabled,
+		HasWebhook: hasWebhook,
+	}, nil
 }

@@ -1,6 +1,11 @@
 package automation
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/omnichannel/omni-chan-v2/internal/conversation"
+)
 
 func TestWebhookSubscribes(t *testing.T) {
 	if !webhookSubscribes(nil, EventMessageReceived) {
@@ -22,5 +27,40 @@ func TestNormalizeForwardEvents(t *testing.T) {
 	got = normalizeForwardEvents(nil)
 	if len(got) != 1 || got[0] != EventMessageReceived {
 		t.Fatalf("unexpected default %#v", got)
+	}
+}
+
+func TestEligibleForUnassignedForward(t *testing.T) {
+	if !eligibleForUnassignedForward(ForwardInboundInput{
+		ConversationStatus: conversation.StatusOpen,
+		AssignedTo:         nil,
+	}) {
+		t.Fatal("open + unassigned should be eligible")
+	}
+
+	assignee := uuid.New()
+	if eligibleForUnassignedForward(ForwardInboundInput{
+		ConversationStatus: conversation.StatusOpen,
+		AssignedTo:         &assignee,
+	}) {
+		t.Fatal("assigned conversation should not be eligible")
+	}
+
+	if eligibleForUnassignedForward(ForwardInboundInput{
+		ConversationStatus: conversation.StatusPending,
+		AssignedTo:         nil,
+	}) {
+		t.Fatal("non-open conversation should not be eligible")
+	}
+}
+
+func TestForwardAssignedConversationNeverEligible(t *testing.T) {
+	assignee := uuid.New()
+	input := ForwardInboundInput{
+		ConversationStatus: conversation.StatusOpen,
+		AssignedTo:         &assignee,
+	}
+	if eligibleForUnassignedForward(input) {
+		t.Fatal("assigned conversation should never be eligible")
 	}
 }

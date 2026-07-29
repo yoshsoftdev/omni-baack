@@ -9,18 +9,18 @@ import (
 
 // ConversationDelta is the slim WebSocket payload for list updates.
 type ConversationDelta struct {
-	ConversationID   uuid.UUID  `json:"conversation_id"`
-	LastMessage      string     `json:"last_message,omitempty"`
-	LastMessageAt    *time.Time `json:"last_message_at,omitempty"`
-	PriorityScore    int64      `json:"priority_score"`
-	WaitingSince     *time.Time `json:"waiting_since,omitempty"`
-	UnreadCount      int        `json:"unread_count"`
-	Status           string     `json:"status,omitempty"`
-	AssignedTo       *uuid.UUID `json:"assigned_to,omitempty"`
-	ContactID        uuid.UUID  `json:"contact_id,omitempty"`
-	ContactName      string     `json:"contact_name,omitempty"`
-	ContactPhone     string     `json:"contact_phone,omitempty"`
-	ChannelType      string     `json:"channel_type,omitempty"`
+	ConversationID uuid.UUID  `json:"conversation_id"`
+	LastMessage    string     `json:"last_message,omitempty"`
+	LastMessageAt  *time.Time `json:"last_message_at,omitempty"`
+	PriorityScore  int64      `json:"priority_score"`
+	WaitingSince   *time.Time `json:"waiting_since,omitempty"`
+	UnreadCount    int        `json:"unread_count"`
+	Status         string     `json:"status,omitempty"`
+	AssignedTo     *uuid.UUID `json:"assigned_to"`
+	ContactID      uuid.UUID  `json:"contact_id,omitempty"`
+	ContactName    string     `json:"contact_name,omitempty"`
+	ContactPhone   string     `json:"contact_phone,omitempty"`
+	ChannelType    string     `json:"channel_type,omitempty"`
 }
 
 // ToDelta builds a slim realtime payload from a conversation.

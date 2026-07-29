@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS automation_team_settings (
+    team_id UUID PRIMARY KEY REFERENCES teams(id) ON DELETE CASCADE,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

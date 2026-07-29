@@ -58,6 +58,20 @@ func (s *Service) TouchInbound(ctx context.Context, teamID, conversationID uuid.
 	if len(preview) > 200 {
 		preview = preview[:200]
 	}
+	conv, err := s.conversations.FindByID(ctx, teamID, conversationID)
+	if err != nil {
+		return err
+	}
+	if conv.Status == StatusClosed || conv.Status == StatusResolved {
+		if err := s.conversations.UpdateStatus(ctx, teamID, conversationID, StatusOpen); err != nil {
+			return err
+		}
+		if conv.AssignedTo != nil {
+			if err := s.conversations.UpdateAssignment(ctx, teamID, conversationID, nil); err != nil {
+				return err
+			}
+		}
+	}
 	now := time.Now().UTC()
 	if err := s.conversations.UpdateLastMessage(ctx, teamID, conversationID, LastMessageUpdate{
 		Preview: preview,

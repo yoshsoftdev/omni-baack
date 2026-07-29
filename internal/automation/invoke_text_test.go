@@ -36,9 +36,9 @@ func (s *invokeRepoStub) FindEndpointByIDGlobal(_ context.Context, id string) (*
 func (s *invokeRepoStub) ListEndpoints(context.Context, uuid.UUID, EndpointListFilter, repository.PageParams) (repository.Page[Endpoint], error) {
 	return repository.Page[Endpoint]{}, nil
 }
-func (s *invokeRepoStub) UpdateEndpoint(context.Context, *Endpoint) error { return nil }
+func (s *invokeRepoStub) UpdateEndpoint(context.Context, *Endpoint) error             { return nil }
 func (s *invokeRepoStub) SoftDeleteEndpoint(context.Context, uuid.UUID, string) error { return nil }
-func (s *invokeRepoStub) TouchEndpointUsed(context.Context, string, time.Time) error { return nil }
+func (s *invokeRepoStub) TouchEndpointUsed(context.Context, string, time.Time) error  { return nil }
 func (s *invokeRepoStub) SlugExists(context.Context, uuid.UUID, string, string) (bool, error) {
 	return false, nil
 }
@@ -52,12 +52,12 @@ func (s *invokeRepoStub) FindAPIKeyByHash(_ context.Context, hash string) (*APIK
 	}
 	return nil, repository.ErrNotFound
 }
-func (s *invokeRepoStub) ListAPIKeys(context.Context, uuid.UUID) ([]APIKey, error) { return nil, nil }
-func (s *invokeRepoStub) UpdateAPIKey(context.Context, *APIKey) error { return nil }
-func (s *invokeRepoStub) SoftDeleteAPIKey(context.Context, uuid.UUID, string) error { return nil }
-func (s *invokeRepoStub) TouchAPIKeyUsed(context.Context, string, time.Time) error { return nil }
+func (s *invokeRepoStub) ListAPIKeys(context.Context, uuid.UUID) ([]APIKey, error)     { return nil, nil }
+func (s *invokeRepoStub) UpdateAPIKey(context.Context, *APIKey) error                  { return nil }
+func (s *invokeRepoStub) SoftDeleteAPIKey(context.Context, uuid.UUID, string) error    { return nil }
+func (s *invokeRepoStub) TouchAPIKeyUsed(context.Context, string, time.Time) error     { return nil }
 func (s *invokeRepoStub) CountActiveAPIKeys(context.Context, uuid.UUID) (int64, error) { return 0, nil }
-func (s *invokeRepoStub) CreateExecution(context.Context, *Execution) error { return nil }
+func (s *invokeRepoStub) CreateExecution(context.Context, *Execution) error            { return nil }
 func (s *invokeRepoStub) CreateWebhookDelivery(context.Context, *WebhookDelivery) error {
 	return nil
 }
@@ -75,13 +75,26 @@ func (s *invokeRepoStub) UpdateForwardWebhook(context.Context, *ForwardWebhook) 
 func (s *invokeRepoStub) SoftDeleteForwardWebhook(context.Context, uuid.UUID, string) error {
 	return nil
 }
-func (s *invokeRepoStub) TouchForwardWebhookUsed(context.Context, string, time.Time) error { return nil }
+func (s *invokeRepoStub) TouchForwardWebhookUsed(context.Context, string, time.Time) error {
+	return nil
+}
 func (s *invokeRepoStub) CreateForwardDelivery(context.Context, *ForwardDelivery) error { return nil }
 func (s *invokeRepoStub) ListForwardDeliveries(context.Context, uuid.UUID, string, repository.PageParams) (repository.Page[ForwardDelivery], error) {
 	return repository.Page[ForwardDelivery]{}, nil
 }
+func (s *invokeRepoStub) GetInboxAutomationEnabled(context.Context, uuid.UUID) (bool, error) {
+	return false, nil
+}
+func (s *invokeRepoStub) SetInboxAutomationEnabled(context.Context, uuid.UUID, bool) error {
+	return nil
+}
+func (s *invokeRepoStub) HasRegisteredForwardWebhook(context.Context, uuid.UUID) (bool, error) {
+	return false, nil
+}
 func (s *invokeRepoStub) GetSummary(context.Context, uuid.UUID) (*Summary, error) { return nil, nil }
-func (s *invokeRepoStub) GetEndpointStats(context.Context, string) (EndpointStats, error) { return EndpointStats{}, nil }
+func (s *invokeRepoStub) GetEndpointStats(context.Context, string) (EndpointStats, error) {
+	return EndpointStats{}, nil
+}
 func (s *invokeRepoStub) GetEndpointAnalytics(context.Context, uuid.UUID, string) (*EndpointAnalytics, error) {
 	return nil, nil
 }
@@ -112,7 +125,9 @@ func (s *invokeConversationsStub) FindByContactChannel(context.Context, uuid.UUI
 	return s.conversation, nil
 }
 
-func (s *invokeConversationsStub) Create(context.Context, *conversation.Conversation) error { return nil }
+func (s *invokeConversationsStub) Create(context.Context, *conversation.Conversation) error {
+	return nil
+}
 func (s *invokeConversationsStub) UpdateLastMessage(context.Context, uuid.UUID, uuid.UUID, conversation.LastMessageUpdate) error {
 	return nil
 }
@@ -212,9 +227,9 @@ func TestInvokePublicSendTextHappyPath(t *testing.T) {
 		},
 		&invokeContactsStub{contact: &contact.Contact{ID: contactID, TeamID: teamID}},
 		&invokeConversationsStub{conversation: &conversation.Conversation{
-			ID:      convID,
-			TeamID:  teamID,
-			Status:  conversation.StatusOpen,
+			ID:        convID,
+			TeamID:    teamID,
+			Status:    conversation.StatusOpen,
 			ChannelID: &channelID,
 		}},
 		&invokeMessagesStub{items: []message.Message{
