@@ -7,15 +7,15 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/conversation"
 	"github.com/omnichannel/omni-chan-v2/internal/inbox"
-	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
 )
 
 type InboxHandler struct {
-	list *inbox.ListService
+	list            *inbox.ListService
+	windowRecontact *inbox.WindowRecontactService
 }
 
-func NewInboxHandler(list *inbox.ListService) *InboxHandler {
-	return &InboxHandler{list: list}
+func NewInboxHandler(list *inbox.ListService, windowRecontact *inbox.WindowRecontactService) *InboxHandler {
+	return &InboxHandler{list: list, windowRecontact: windowRecontact}
 }
 
 func (h *InboxHandler) List(c *fiber.Ctx) error {
@@ -58,18 +58,68 @@ func (h *InboxHandler) List(c *fiber.Ctx) error {
 			Search:      strings.TrimSpace(c.Query("search")),
 			View:        view,
 		},
-		Cursor: strings.TrimSpace(c.Query("cursor")),
 		Limit:  limit,
+		Cursor: strings.TrimSpace(c.Query("cursor")),
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "invalid cursor") {
-			return response.BadRequest(c, "invalid cursor")
-		}
-		if serviceerrors.IsValidation(err) {
-			return response.BadRequest(c, err.Error())
-		}
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", result)
+}
+
+type updateWindowRecontactRequest struct {
+	Enabled    *bool   `json:"enabled"`
+	Text       *string `json:"text"`
+	AfterHours *int    `json:"after_hours"`
+}
+
+func (h *InboxHandler) GetWindowRecontactSettings(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	if h.windowRecontact == nil {
+		return response.OK(c, "ok", inbox.DefaultWindowRecontactSettings())
+	}
+	settings, err := h.windowRecontact.GetSettings(c.Context(), actor.TeamID, actor.UserID, actor.Role)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", settings)
+}
+
+func (h *InboxHandler) UpdateWindowRecontactSettings(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	if h.windowRecontact == nil {
+		return response.BadRequest(c, "window recontact is not configured")
+	}
+
+	current, err := h.windowRecontact.GetSettings(c.Context(), actor.TeamID, actor.UserID, actor.Role)
+	if err != nil {
 		return mapError(c, err)
 	}
 
-	return response.OK(c, "ok", result)
+	var req updateWindowRecontactRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	next := current
+	if req.Enabled != nil {
+		next.Enabled = *req.Enabled
+	}
+	if req.Text != nil {
+		next.Text = *req.Text
+	}
+	if req.AfterHours != nil {
+		next.AfterHours = *req.AfterHours
+	}
+
+	updated, err := h.windowRecontact.UpdateSettings(c.Context(), actor.TeamID, actor.UserID, actor.Role, next)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "window recontact settings updated", updated)
 }

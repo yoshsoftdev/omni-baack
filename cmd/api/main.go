@@ -264,6 +264,15 @@ func main() {
 			Data: payload,
 		})
 	})
+	windowRecontactService := inbox.NewWindowRecontactService(
+		inboxSettingsRepo,
+		teamRepo,
+		rbacService,
+		messageService,
+		conversationRepo,
+		inboxSync,
+		log.Logger,
+	)
 	onboardingService := onboarding.NewService(deviceRepo, contactRepo, conversationRepo, messageRepo, teamRepo, metaClient)
 
 	channelSyncService := channelsync.NewService(
@@ -320,6 +329,7 @@ func main() {
 	deliveryMetrics := &delivery.Metrics{}
 	deliveryReconciler := delivery.NewReconciler(campaignRepo, deliveryMetrics, log.Logger, 30*24*time.Hour)
 	go deliveryReconciler.StartDaily(ctx)
+	go windowRecontactService.Start(ctx)
 
 	if cfg.NATS.Enabled {
 		startEventConsumer(ctx, cfg, channelRepo, contactService, conversationService, messageService, templateRepo, onboardingService, channelSyncService, inboxSync, campaignRepo, reportRepo, automationService.Forwarder(), tokenCipher, metaClient, storageClient, rdb, log)
@@ -349,7 +359,7 @@ func main() {
 			Report:               handler.NewReportHandler(reportService),
 			Conversation:         handler.NewConversationHandler(conversationService, collaborationService),
 			ConversationPresence: handler.NewConversationPresenceHandler(collisionService, conversationService, userRepo),
-			Inbox:                handler.NewInboxHandler(inboxListService),
+			Inbox:                handler.NewInboxHandler(inboxListService, windowRecontactService),
 			Message:              handler.NewMessageHandler(messageService, conversationService, inboxSync),
 			MediaProxy:           handler.NewMediaProxyHandler(mediaTokenIssuer, storageClient, cfg.NATS.InternalToken),
 			StorageServiceURL:    cfg.StorageService.URL,

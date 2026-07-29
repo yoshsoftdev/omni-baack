@@ -277,6 +277,9 @@ func Register(router fiber.Router, deps Deps) {
 
 	if deps.Inbox != nil {
 		protected.Get("/inbox", deps.Inbox.List)
+		inboxSettings := protected.Group("/inbox/settings")
+		inboxSettings.Get("/window-recontact", deps.Inbox.GetWindowRecontactSettings)
+		inboxSettings.Patch("/window-recontact", deps.Inbox.UpdateWindowRecontactSettings)
 	}
 
 	if deps.Workspace != nil {
