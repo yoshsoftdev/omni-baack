@@ -142,6 +142,7 @@ func TestContactLinksAreBidirectionalAndPreserveOwnership(t *testing.T) {
 			ID:          contactAID,
 			TeamID:      teamID,
 			ContactName: "Contact A",
+			Phone:       "+628111111111",
 			Providers: []provider.Profile{{
 				ID:              profileAID,
 				ContactID:       contactAID,
@@ -152,6 +153,7 @@ func TestContactLinksAreBidirectionalAndPreserveOwnership(t *testing.T) {
 			ID:          contactBID,
 			TeamID:      teamID,
 			ContactName: "Contact B",
+			Phone:       "+628222222222",
 		},
 		crossTeamContactID: {
 			ID:          crossTeamContactID,
@@ -205,6 +207,12 @@ func TestContactLinksAreBidirectionalAndPreserveOwnership(t *testing.T) {
 	profile := contacts[contactAID].Providers[0]
 	if profile.ContactID != contactAID || profile.ConversationIDs[0] != conversationAID {
 		t.Fatal("linking contacts changed provider or conversation ownership")
+	}
+	if contacts[contactAID].Phone != "+628111111111" || contacts[contactBID].Phone != "+628222222222" {
+		t.Fatal("linking contacts must not mutate contact CRM fields")
+	}
+	if contacts[contactAID].ContactName != "Contact A" || contacts[contactBID].ContactName != "Contact B" {
+		t.Fatal("linking contacts must not mutate contact names")
 	}
 
 	if _, err := service.LinkContact(

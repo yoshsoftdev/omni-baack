@@ -131,3 +131,39 @@ func TestSubscribeInstagramApp(t *testing.T) {
 		t.Fatalf("query = %s", gotQuery)
 	}
 }
+
+func TestGetInstagramConversationParticipant(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/17841474159701018/conversations") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if r.URL.Query().Get("user_id") != "1750921879279189" {
+			http.Error(w, "bad user", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{
+				"participants": map[string]any{
+					"data": []map[string]string{
+						{"id": "17841474159701018", "username": "visibel.ai"},
+						{"id": "1750921879279189", "username": "syaamrizal"},
+					},
+				},
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient("v21.0")
+	client.SetBaseURL(srv.URL)
+	got, err := client.GetInstagramConversationParticipant(
+		context.Background(), "17841474159701018", "1750921879279189", "good-token",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Username != "syaamrizal" || got.ID != "1750921879279189" {
+		t.Fatalf("got %#v", got)
+	}
+}

@@ -89,8 +89,7 @@ func (m *memoryRepository) Link(_ context.Context, teamID, profileID, targetCont
 		return nil, err
 	}
 	previous := item.ContactID
-	item.ContactID = targetContactID
-	m.profiles[profileID] = item
+	// Relationship-only: ownership must not move.
 	m.activities = append(m.activities, Activity{Type: ActivityLinked, ActorID: &actorID})
 	return &LinkResult{Profile: item, PreviousContactID: previous}, nil
 }
@@ -146,8 +145,15 @@ func TestProviderProfileLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("link profile: %v", err)
 	}
-	if linked.PreviousContactID != sourceContactID || linked.Profile.ContactID != targetContactID {
-		t.Fatalf("link changed unexpected ownership: %#v", linked)
+	if linked.PreviousContactID != sourceContactID {
+		t.Fatalf("unexpected previous contact: %#v", linked)
+	}
+	if linked.Profile.ContactID != sourceContactID {
+		t.Fatalf("link must not move provider ownership: %#v", linked)
+	}
+	stored, err := repo.FindByID(ctx, teamID, created.ID)
+	if err != nil || stored.ContactID != sourceContactID {
+		t.Fatalf("stored profile ownership changed: %#v err=%v", stored, err)
 	}
 
 	source, err := service.SetSourceOfTruth(ctx, teamID, actorID, "owner", created.ID)
@@ -159,7 +165,7 @@ func TestProviderProfileLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unlink profile: %v", err)
 	}
-	if unlinked.NewContactID == targetContactID || unlinked.Profile.ContactID != unlinked.NewContactID {
+	if unlinked.NewContactID == sourceContactID || unlinked.Profile.ContactID != unlinked.NewContactID {
 		t.Fatalf("unlink did not create standalone ownership: %#v", unlinked)
 	}
 }
@@ -206,11 +212,29 @@ func TestCanonicalProviderMigrationAndCompatibilityContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	repositorySource := string(conversationRepository)
-	if !strings.Contains(repositorySource, "COALESCE(pp.contact_id, c.contact_id)") {
-		t.Error("inbox does not resolve current Contact through Provider Profile ownership")
+	if !strings.Contains(repositorySource, "c.contact_id = $2") {
+		t.Error("FindByContactChannel must match conversation.contact_id, not provider ownership coalesce")
+	}
+	if strings.Contains(repositorySource, "COALESCE(pp.contact_id, c.contact_id) = $2") {
+		t.Error("FindByContactChannel must not resolve via provider profile ownership coalesce")
 	}
 	if !strings.Contains(repositorySource, "contact_id, provider_profile_id") {
 		t.Error("legacy contact_id is not retained alongside canonical ownership")
+	}
+
+	providerRepository, err := os.ReadFile("repository.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerSource := string(providerRepository)
+	if !strings.Contains(providerSource, "INSERT INTO contact_links") {
+		t.Error("provider Link must create contact_links relationship only")
+	}
+	if !strings.Contains(providerSource, `"mode":              "relationship_only"`) {
+		t.Error("provider Link must record relationship_only mode")
+	}
+	if strings.Contains(providerSource, "phone = CASE WHEN $4 AND phone = $5 THEN NULL ELSE phone END") {
+		t.Error("provider Link must not mutate contact phone during link")
 	}
 
 	contactRepository, err := os.ReadFile("../contact/repository.go")

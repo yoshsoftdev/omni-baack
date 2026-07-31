@@ -39,6 +39,9 @@ func ShouldAutoUpdateContactName(c *Contact) bool {
 	if contactName == "" {
 		return true
 	}
+	if isPlaceholderContactName(contactName) {
+		return true
+	}
 	if isPhoneOnlyContactName(contactName, c.Phone) {
 		return true
 	}
@@ -46,6 +49,15 @@ func ShouldAutoUpdateContactName(c *Contact) bool {
 		return true
 	}
 	return false
+}
+
+func isPlaceholderContactName(name string) bool {
+	switch strings.TrimSpace(strings.ToLower(name)) {
+	case "instagram user", "whatsapp user", "messenger user":
+		return true
+	default:
+		return false
+	}
 }
 
 func isPhoneOnlyContactName(name, phone string) bool {

@@ -235,11 +235,21 @@ func (s *Service) ResolveInstagramInbound(ctx context.Context, teamID uuid.UUID,
 
 func (s *Service) resolveCanonicalInstagramInbound(ctx context.Context, teamID uuid.UUID, senderID, displayName, username, avatarURL string) (*Contact, error) {
 	now := time.Now().UTC()
+	displayName = strings.TrimSpace(displayName)
+	username = strings.TrimPrefix(strings.TrimSpace(username), "@")
+	avatarURL = strings.TrimSpace(avatarURL)
+
 	profile, err := s.providers.FindByExternalID(ctx, teamID, provider.Instagram, senderID)
 	if err == nil {
-		profile.DisplayName = strings.TrimSpace(displayName)
-		profile.Username = strings.TrimPrefix(strings.TrimSpace(username), "@")
-		profile.AvatarURL = strings.TrimSpace(avatarURL)
+		if displayName != "" {
+			profile.DisplayName = displayName
+		}
+		if username != "" {
+			profile.Username = username
+		}
+		if avatarURL != "" {
+			profile.AvatarURL = avatarURL
+		}
 		profile.LastObservedAt = &now
 		profile.Status = provider.StatusActive
 		if err := s.providers.UpdateObserved(ctx, profile); err != nil {
@@ -249,19 +259,13 @@ func (s *Service) resolveCanonicalInstagramInbound(ctx context.Context, teamID u
 		if findErr != nil {
 			return nil, findErr
 		}
-		return s.ensureInstagramContactPhone(ctx, existing, senderID)
+		return s.syncCanonicalInstagramContact(ctx, existing, senderID, displayName, username, avatarURL, profile)
 	}
 	if !errors.Is(err, repository.ErrNotFound) {
 		return nil, err
 	}
 
-	profileName := strings.TrimSpace(displayName)
-	if profileName == "" {
-		profileName = strings.TrimSpace(username)
-	}
-	if profileName == "" {
-		profileName = "Instagram User"
-	}
+	profileName := firstNonEmpty(displayName, username, "Instagram User")
 	contactEntity := &Contact{
 		ID:              uuid.New(),
 		TeamID:          teamID,
@@ -273,6 +277,9 @@ func (s *Service) resolveCanonicalInstagramInbound(ctx context.Context, teamID u
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
+	if avatarURL != "" {
+		contactEntity.AvatarURL = &avatarURL
+	}
 	if err := s.contacts.Create(ctx, contactEntity); err != nil {
 		return nil, err
 	}
@@ -282,9 +289,9 @@ func (s *Service) resolveCanonicalInstagramInbound(ctx context.Context, teamID u
 		ContactID:      contactEntity.ID,
 		Provider:       provider.Instagram,
 		ProviderUserID: senderID,
-		DisplayName:    strings.TrimSpace(displayName),
-		Username:       strings.TrimPrefix(strings.TrimSpace(username), "@"),
-		AvatarURL:      strings.TrimSpace(avatarURL),
+		DisplayName:    displayName,
+		Username:       username,
+		AvatarURL:      avatarURL,
 		ConnectedAt:    now,
 		LastObservedAt: &now,
 		Status:         provider.StatusActive,
@@ -298,13 +305,52 @@ func (s *Service) resolveCanonicalInstagramInbound(ctx context.Context, teamID u
 			if contactErr != nil {
 				return nil, contactErr
 			}
-			return s.ensureInstagramContactPhone(ctx, existingContact, senderID)
+			return s.syncCanonicalInstagramContact(ctx, existingContact, senderID, displayName, username, avatarURL, existing)
 		}
 		return nil, err
 	}
 	contactEntity.Providers = []provider.Profile{*profile}
 	contactEntity.PopulateLegacyName()
 	return contactEntity, nil
+}
+
+// syncCanonicalInstagramContact applies public_profile fields onto the CRM contact.
+// Falls back to already-stored provider profile values when the latest Graph fetch is empty
+// (common on Instagram echo/outbound when the contact was created before profile enrichment).
+func (s *Service) syncCanonicalInstagramContact(
+	ctx context.Context,
+	existing *Contact,
+	senderID, displayName, username, avatarURL string,
+	profile *provider.Profile,
+) (*Contact, error) {
+	syncName := firstNonEmpty(displayName, username)
+	syncUsername := username
+	syncAvatar := avatarURL
+	if profile != nil {
+		if syncName == "" {
+			syncName = firstNonEmpty(strings.TrimSpace(profile.DisplayName), strings.TrimSpace(profile.Username))
+		}
+		if syncUsername == "" {
+			syncUsername = strings.TrimSpace(profile.Username)
+		}
+		if syncAvatar == "" {
+			syncAvatar = strings.TrimSpace(profile.AvatarURL)
+		}
+	}
+	synced, err := s.syncInstagramInboundProfile(ctx, existing, syncName, syncUsername, syncAvatar)
+	if err != nil {
+		return nil, err
+	}
+	return s.ensureInstagramContactPhone(ctx, synced, senderID)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func (s *Service) syncInstagramInboundProfile(ctx context.Context, existing *Contact, profileName, username, avatarURL string) (*Contact, error) {

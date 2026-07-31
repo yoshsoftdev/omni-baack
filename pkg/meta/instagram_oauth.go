@@ -268,19 +268,30 @@ type InstagramScopedUser struct {
 	ProfilePic string `json:"profile_pic"`
 }
 
-// GetInstagramScopedUser loads profile info for a user who messaged the business account.
+// GetInstagramScopedUser loads profile info for a messaging participant (IGSID).
+// Works for both inbound senders and echo/outbound recipients once Meta has an IGSID.
 func (c *Client) GetInstagramScopedUser(ctx context.Context, scopedUserID, accessToken string) (*InstagramScopedUser, error) {
 	scopedUserID = strings.TrimSpace(scopedUserID)
+	accessToken = strings.TrimSpace(accessToken)
 	if scopedUserID == "" {
 		return nil, fmt.Errorf("instagram scoped user id is required")
 	}
+	if accessToken == "" {
+		return nil, fmt.Errorf("instagram access token is required")
+	}
 	endpoint := fmt.Sprintf(
-		"https://graph.instagram.com/%s/%s?fields=id,username,name,profile_pic",
+		"https://graph.instagram.com/%s/%s?fields=id,username,name,profile_pic&access_token=%s",
 		c.apiVersion,
 		url.PathEscape(scopedUserID),
+		url.QueryEscape(accessToken),
 	)
 	if c.graphBaseURL != "" {
-		endpoint = fmt.Sprintf("%s/%s?fields=id,username,name,profile_pic", c.graphBaseURL, url.PathEscape(scopedUserID))
+		endpoint = fmt.Sprintf(
+			"%s/%s?fields=id,username,name,profile_pic&access_token=%s",
+			c.graphBaseURL,
+			url.PathEscape(scopedUserID),
+			url.QueryEscape(accessToken),
+		)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -306,6 +317,86 @@ func (c *Client) GetInstagramScopedUser(ctx context.Context, scopedUserID, acces
 		return nil, fmt.Errorf("decode instagram scoped user: %w", err)
 	}
 	return &user, nil
+}
+
+// GetInstagramConversationParticipant resolves username via the Conversations API.
+// Useful when User Profile API returns consent errors for outbound-first threads.
+func (c *Client) GetInstagramConversationParticipant(ctx context.Context, igUserID, scopedUserID, accessToken string) (*InstagramScopedUser, error) {
+	igUserID = strings.TrimSpace(igUserID)
+	scopedUserID = strings.TrimSpace(scopedUserID)
+	accessToken = strings.TrimSpace(accessToken)
+	if igUserID == "" {
+		return nil, fmt.Errorf("instagram business user id is required")
+	}
+	if scopedUserID == "" {
+		return nil, fmt.Errorf("instagram scoped user id is required")
+	}
+	if accessToken == "" {
+		return nil, fmt.Errorf("instagram access token is required")
+	}
+
+	endpoint := fmt.Sprintf(
+		"https://graph.instagram.com/%s/%s/conversations?platform=instagram&user_id=%s&fields=participants&access_token=%s",
+		c.apiVersion,
+		url.PathEscape(igUserID),
+		url.QueryEscape(scopedUserID),
+		url.QueryEscape(accessToken),
+	)
+	if c.graphBaseURL != "" {
+		endpoint = fmt.Sprintf(
+			"%s/%s/conversations?platform=instagram&user_id=%s&fields=participants&access_token=%s",
+			c.graphBaseURL,
+			url.PathEscape(igUserID),
+			url.QueryEscape(scopedUserID),
+			url.QueryEscape(accessToken),
+		)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("get instagram conversation participant: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	safeBody := redactSensitiveJSON(body)
+	if resp.StatusCode >= 400 {
+		return nil, NewAPIError(resp.StatusCode, safeBody)
+	}
+
+	var payload struct {
+		Data []struct {
+			Participants struct {
+				Data []struct {
+					ID       string `json:"id"`
+					Username string `json:"username"`
+					Name     string `json:"name"`
+				} `json:"data"`
+			} `json:"participants"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("decode instagram conversation participants: %w", err)
+	}
+	for _, conversation := range payload.Data {
+		for _, participant := range conversation.Participants.Data {
+			if strings.TrimSpace(participant.ID) != scopedUserID {
+				continue
+			}
+			return &InstagramScopedUser{
+				ID:       scopedUserID,
+				Username: strings.TrimSpace(participant.Username),
+				Name:     strings.TrimSpace(participant.Name),
+			}, nil
+		}
+	}
+	return nil, fmt.Errorf("instagram conversation participant not found")
 }
 
 // GetInstagramMediaPermalink resolves a public Instagram permalink for a media id.

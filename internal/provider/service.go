@@ -83,6 +83,7 @@ func (s *Service) Link(ctx context.Context, teamID, userID uuid.UUID, role strin
 	if profile.ContactID == targetContactID {
 		return nil, ErrCannotLinkToSameContact
 	}
+	// Relationship-only: creates contact_links; does not move provider ownership or CRM fields.
 	result, err := s.profiles.Link(ctx, teamID, profileID, targetContactID, userID, reason)
 	return result, serviceerrors.MapRepository(err)
 }

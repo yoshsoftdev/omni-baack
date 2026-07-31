@@ -64,6 +64,7 @@ type MetaMediaClient interface {
 
 type InstagramProfileClient interface {
 	GetInstagramScopedUser(ctx context.Context, scopedUserID, accessToken string) (*metaclient.InstagramScopedUser, error)
+	GetInstagramConversationParticipant(ctx context.Context, igUserID, scopedUserID, accessToken string) (*metaclient.InstagramScopedUser, error)
 	GetInstagramMediaPermalink(ctx context.Context, mediaID, accessToken string) (string, error)
 }
 
@@ -174,7 +175,7 @@ func (h *MessageHandler) processInstagram(ctx context.Context, event sharedevent
 		senderID = strings.TrimSpace(payload.ContactWAID)
 	}
 
-	displayName, username, avatarURL := h.fetchInstagramSenderProfile(ctx, tenant.ChannelID, senderID)
+	displayName, username, avatarURL := h.fetchInstagramSenderProfile(ctx, tenant.TeamID, tenant.ChannelID, senderID)
 	contactEntity, err := h.contacts.ResolveInstagramInbound(ctx, tenant.TeamID, senderID, displayName, username, avatarURL)
 	if err != nil {
 		return err
@@ -311,7 +312,7 @@ func (h *MessageHandler) processInstagramEcho(ctx context.Context, event sharede
 		return TerminalDLQ("message", errors.New("instagram echo missing recipient"))
 	}
 
-	displayName, username, avatarURL := h.fetchInstagramSenderProfile(ctx, tenant.ChannelID, contactID)
+	displayName, username, avatarURL := h.fetchInstagramSenderProfile(ctx, tenant.TeamID, tenant.ChannelID, contactID)
 	contactEntity, err := h.contacts.ResolveInstagramInbound(ctx, tenant.TeamID, contactID, displayName, username, avatarURL)
 	if err != nil {
 		return err
@@ -418,7 +419,7 @@ func (h *MessageHandler) processInstagramEcho(ctx context.Context, event sharede
 	return nil
 }
 
-func (h *MessageHandler) fetchInstagramSenderProfile(ctx context.Context, channelID uuid.UUID, senderID string) (displayName, username, avatarURL string) {
+func (h *MessageHandler) fetchInstagramSenderProfile(ctx context.Context, teamID, channelID uuid.UUID, senderID string) (displayName, username, avatarURL string) {
 	if h.instagramProfile == nil || h.tokenCipher == nil || h.channels == nil {
 		return "", "", ""
 	}
@@ -430,18 +431,40 @@ func (h *MessageHandler) fetchInstagramSenderProfile(ctx context.Context, channe
 	if err != nil || strings.TrimSpace(token) == "" {
 		return "", "", ""
 	}
+
 	profile, err := h.instagramProfile.GetInstagramScopedUser(ctx, senderID, token)
-	if err != nil {
+	if err == nil && profile != nil {
+		name := strings.TrimSpace(profile.Name)
+		user := strings.TrimSpace(profile.Username)
+		pic := strings.TrimSpace(profile.ProfilePic)
+		if name != "" || user != "" || pic != "" {
+			return name, user, pic
+		}
+	} else if err != nil && h.log != nil {
+		h.log.Warn("instagram sender profile lookup failed",
+			"sender_id", senderID,
+			"channel_id", channelID.String(),
+			"error", err.Error(),
+		)
+	}
+
+	// Outbound-first threads often lack User Profile consent; Conversations participants still expose username.
+	ch, chErr := h.channels.FindByID(ctx, teamID, channelID)
+	if chErr != nil || ch == nil || ch.IGUserID == nil || strings.TrimSpace(*ch.IGUserID) == "" {
+		return "", "", ""
+	}
+	participant, partErr := h.instagramProfile.GetInstagramConversationParticipant(ctx, strings.TrimSpace(*ch.IGUserID), senderID, token)
+	if partErr != nil {
 		if h.log != nil {
-			h.log.Warn("instagram sender profile lookup failed",
+			h.log.Warn("instagram conversation participant lookup failed",
 				"sender_id", senderID,
 				"channel_id", channelID.String(),
-				"error", err.Error(),
+				"error", partErr.Error(),
 			)
 		}
 		return "", "", ""
 	}
-	return strings.TrimSpace(profile.Name), strings.TrimSpace(profile.Username), strings.TrimSpace(profile.ProfilePic)
+	return strings.TrimSpace(participant.Name), strings.TrimSpace(participant.Username), strings.TrimSpace(participant.ProfilePic)
 }
 
 func (h *MessageHandler) enrichInstagramShareContent(ctx context.Context, channelID uuid.UUID, raw json.RawMessage, content string) string {

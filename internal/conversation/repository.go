@@ -65,18 +65,9 @@ func (r *PostgresRepository) FindByContactChannel(ctx context.Context, teamID, c
 		FROM `+conversationFromClause+`
 		WHERE c.team_id = $1
 		  AND c.channel_id IS NOT DISTINCT FROM $3
-		  AND (
-		      COALESCE(pp.contact_id, c.contact_id) = $2
-		      OR pp.provider_user_id = (
-		          SELECT CASE
-		              WHEN legacy.phone LIKE 'ig:%' THEN regexp_replace(legacy.phone, '^ig:', '')
-		              ELSE legacy.phone
-		          END
-		          FROM contacts legacy
-		          WHERE legacy.id = $2 AND legacy.team_id = $1 AND legacy.deleted_at IS NULL
-		      )
-		  )
+		  AND c.contact_id = $2
 		  AND c.deleted_at IS NULL
+		ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
 		LIMIT 1
 	`, teamID, contactID, channelID))
 }

@@ -1,12 +1,12 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -177,57 +177,41 @@ func (r *PostgresRepository) Link(ctx context.Context, teamID, profileID, target
 		return &LinkResult{Profile: profile, PreviousContactID: previous}, nil
 	}
 
-	var wasSource bool
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(source_of_truth_profile_id = $1, false)
-		FROM contacts
-		WHERE id = $2 AND team_id = $3 AND deleted_at IS NULL
-		FOR UPDATE
-	`, profileID, previous, teamID).Scan(&wasSource); err != nil {
-		return nil, repository.MapError(err)
+	// Relationship-only link: never move provider ownership or mutate either contact's CRM fields.
+	contactA, contactB := previous, targetContactID
+	if bytes.Compare(contactA[:], contactB[:]) > 0 {
+		contactA, contactB = contactB, contactA
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE contacts SET
-			source_of_truth_profile_id = NULL,
-			phone = CASE WHEN $4 AND phone = $5 THEN NULL ELSE phone END,
-			updated_at = NOW()
-		WHERE id = $1 AND team_id = $2 AND source_of_truth_profile_id = $3
-	`, previous, teamID, profileID, wasSource && profile.Provider == WhatsApp, nullable(profile.Phone)); err != nil {
+		INSERT INTO contact_links (
+			id, team_id, contact_a_id, contact_b_id, created_by, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,NOW(),NOW())
+		ON CONFLICT (team_id, contact_a_id, contact_b_id)
+			WHERE deleted_at IS NULL
+		DO NOTHING
+	`, uuid.New(), teamID, contactA, contactB, actorID); err != nil {
+		return nil, repository.MapError(err)
+	}
+
+	meta, _ := json.Marshal(map[string]any{
+		"source_contact_id": previous.String(),
+		"linked_contact_id": targetContactID.String(),
+		"provider":          profile.Provider,
+		"provider_user_id":  profile.ProviderUserID,
+		"reason":            strings.TrimSpace(reason),
+		"mode":              "relationship_only",
+	})
+	if err := insertActivity(ctx, tx, teamID, previous, profileID, previous, targetContactID, ActivityLinked, actorID,
+		fmt.Sprintf("Linked contact for %s account (no ownership change)", providerLabel(profile.Provider)), meta); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE provider_profiles SET contact_id = $1, status = 'active', updated_at = NOW()
-		WHERE id = $2 AND team_id = $3
-	`, targetContactID, profileID, teamID); err != nil {
-		return nil, repository.MapError(err)
-	}
-	if profile.Provider == WhatsApp {
-		if _, err := tx.Exec(ctx, `
-			UPDATE contacts SET
-				phone = CASE WHEN source_of_truth_profile_id IS NULL THEN NULLIF($4, '') ELSE phone END,
-				source_of_truth_profile_id = COALESCE(source_of_truth_profile_id, $1),
-				updated_at = NOW()
-			WHERE id = $2 AND team_id = $3
-		`, profileID, targetContactID, teamID, profile.Phone); err != nil {
-			return nil, err
-		}
-	}
-	meta, _ := json.Marshal(map[string]any{
-		"previous_contact_id": previous,
-		"new_contact_id":      targetContactID,
-		"provider":            profile.Provider,
-		"reason":              strings.TrimSpace(reason),
-	})
 	if err := insertActivity(ctx, tx, teamID, targetContactID, profileID, previous, targetContactID, ActivityLinked, actorID,
-		fmt.Sprintf("Linked %s account", providerLabel(profile.Provider)), meta); err != nil {
+		fmt.Sprintf("Linked contact for %s account (no ownership change)", providerLabel(profile.Provider)), meta); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	profile.ContactID = targetContactID
-	profile.Status = StatusActive
-	profile.UpdatedAt = time.Now().UTC()
 	return &LinkResult{Profile: profile, PreviousContactID: previous}, nil
 }
 

@@ -60,4 +60,10 @@ func TestShouldAutoUpdateContactName(t *testing.T) {
 	if !ShouldAutoUpdateContactName(c) {
 		t.Fatal("expected phone-only contact_name to be auto-updated")
 	}
+
+	c.ContactName = "Instagram User"
+	c.CustomerName = "Instagram User"
+	if !ShouldAutoUpdateContactName(c) {
+		t.Fatal("expected Instagram User placeholder to be auto-updated")
+	}
 }
