@@ -157,6 +157,9 @@ func (s *WindowRecontactService) runOnce(ctx context.Context) {
 		s.log.Error("window recontact list failed", "error", err)
 		return
 	}
+	if len(candidates) > 0 {
+		s.log.Info("window recontact due candidates", "count", len(candidates))
+	}
 	for _, candidate := range candidates {
 		if ctx.Err() != nil {
 			return

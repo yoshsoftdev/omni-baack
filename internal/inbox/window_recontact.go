@@ -163,8 +163,8 @@ func (r *PostgresSettingsRepository) ListDueWindowRecontacts(
 		  AND c.status IN ('open', 'pending')
 		  AND c.channel_type::text IN ('whatsapp', 'instagram')
 		  AND c.last_customer_message_at IS NOT NULL
-		  AND c.last_customer_message_at <= $1 - make_interval(hours => s.window_recontact_after_hours)
-		  AND c.last_customer_message_at > $1 - INTERVAL '24 hours'
+		  AND c.last_customer_message_at <= ($1::timestamptz - (s.window_recontact_after_hours * INTERVAL '1 hour'))
+		  AND c.last_customer_message_at > ($1::timestamptz - INTERVAL '24 hours')
 		  AND (c.last_agent_message_at IS NULL OR c.last_agent_message_at < c.last_customer_message_at)
 		  AND NOT EXISTS (
 			SELECT 1
