@@ -121,7 +121,8 @@ func TestService_MetaSendLanguageUsesLanguageResolver(t *testing.T) {
 	if got := svc.MetaSendLanguage("en_EN"); got != "en_US" {
 		t.Fatalf("en_EN → %s", got)
 	}
-	if got := svc.MetaSendLanguage("en"); got != "en_US" {
+	// Meta treats en and en_US as distinct locales (#132001 if swapped): keep en.
+	if got := svc.MetaSendLanguage("en"); got != "en" {
 		t.Fatalf("en → %s", got)
 	}
 	if got := svc.MetaSendLanguage("id"); got != "id" {

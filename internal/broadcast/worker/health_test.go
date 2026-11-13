@@ -30,8 +30,14 @@ func TestHealthEndpointPostgresAndNATSDown(t *testing.T) {
 }
 
 func TestHealthEndpointHealthyWhenConnected(t *testing.T) {
-	nc, err := nats.Connect(nats.DefaultURL, nats.RetryOnFailedConnect(true), nats.MaxReconnects(0))
-	if err != nil {
+	// Integration check: needs a NATS server on nats.DefaultURL. Connect without
+	// RetryOnFailedConnect so a missing server surfaces as an error (and a skip)
+	// instead of a disconnected-but-non-nil connection.
+	nc, err := nats.Connect(nats.DefaultURL, nats.Timeout(500*time.Millisecond), nats.MaxReconnects(0))
+	if err != nil || !nc.IsConnected() {
+		if nc != nil {
+			nc.Close()
+		}
 		t.Skip("nats unavailable for health test")
 	}
 	defer nc.Close()

@@ -40,7 +40,7 @@ func (workspaceStubTeamRepo) Create(context.Context, *team.Team) error { return 
 func (workspaceStubTeamRepo) FindByID(context.Context, uuid.UUID) (*team.Team, error) {
 	return nil, team.ErrNotFound
 }
-func (workspaceStubTeamRepo) Update(context.Context, *team.Team) error { return nil }
+func (workspaceStubTeamRepo) Update(context.Context, *team.Team) error         { return nil }
 func (workspaceStubTeamRepo) CreateMember(context.Context, *team.Member) error { return nil }
 func (workspaceStubTeamRepo) FindPrimaryMembership(context.Context, uuid.UUID) (*team.Member, error) {
 	return nil, team.ErrMemberNotFound
@@ -63,7 +63,9 @@ func (workspaceStubTeamRepo) UpdateMemberRole(context.Context, uuid.UUID, uuid.U
 func (workspaceStubTeamRepo) UpdateMemberStatus(context.Context, uuid.UUID, uuid.UUID, team.MemberStatus) error {
 	return nil
 }
-func (workspaceStubTeamRepo) SoftDeleteMember(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+func (workspaceStubTeamRepo) SoftDeleteMember(context.Context, uuid.UUID, uuid.UUID) error {
+	return nil
+}
 func (workspaceStubTeamRepo) FindRoleIDByName(context.Context, string) (uuid.UUID, error) {
 	return uuid.New(), nil
 }
@@ -79,7 +81,9 @@ func (workspaceStubTeamRepo) FindInvitationByID(context.Context, uuid.UUID, uuid
 	return nil, team.ErrNotFound
 }
 
-func (workspaceStubTeamRepo) SoftDeleteInvitation(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+func (workspaceStubTeamRepo) SoftDeleteInvitation(context.Context, uuid.UUID, uuid.UUID) error {
+	return nil
+}
 
 func (workspaceStubTeamRepo) UpdateInvitationRole(context.Context, uuid.UUID, uuid.UUID, team.Role, uuid.UUID) error {
 	return nil
@@ -105,12 +109,21 @@ func (workspaceStubRBACRepo) FindRoleByID(context.Context, uuid.UUID) (*rbac.Rol
 func (workspaceStubRBACRepo) FindRoleByName(context.Context, string) (*rbac.Role, error) {
 	return nil, rbac.ErrNotFound
 }
-func (workspaceStubRBACRepo) ListPermissions(context.Context) ([]rbac.Permission, error) { return nil, nil }
+func (workspaceStubRBACRepo) ListPermissions(context.Context) ([]rbac.Permission, error) {
+	return nil, nil
+}
 func (workspaceStubRBACRepo) ListPermissionsByRoleID(context.Context, uuid.UUID) ([]rbac.Permission, error) {
 	return nil, nil
 }
 func (workspaceStubRBACRepo) GetPermissionMatrix(context.Context) ([]rbac.PermissionMatrixRow, error) {
 	return nil, nil
+}
+
+func (workspaceStubRBACRepo) CreateRole(context.Context, *rbac.Role) error    { return nil }
+func (workspaceStubRBACRepo) UpdateRole(context.Context, *rbac.Role) error    { return nil }
+func (workspaceStubRBACRepo) SoftDeleteRole(context.Context, uuid.UUID) error { return nil }
+func (workspaceStubRBACRepo) ReplaceRolePermissions(context.Context, uuid.UUID, []string) error {
+	return nil
 }
 
 func testWorkspaceService(snapshots SnapshotRepository) *Service {

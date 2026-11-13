@@ -17,10 +17,10 @@ import (
 	"github.com/omnichannel/omni-chan-v2/pkg/logger"
 	"github.com/omnichannel/omni-chan-v2/pkg/migrate"
 	redisclient "github.com/omnichannel/omni-chan-v2/pkg/redis"
-	sharedconfig "github.com/omnichannel/omni-chan-v2/shared/config"
-	sharednats "github.com/omnichannel/omni-chan-v2/shared/nats"
 	"github.com/omnichannel/omni-chan-v2/pkg/workerregistry"
+	sharedconfig "github.com/omnichannel/omni-chan-v2/shared/config"
 	sharedevents "github.com/omnichannel/omni-chan-v2/shared/events"
+	sharednats "github.com/omnichannel/omni-chan-v2/shared/nats"
 )
 
 func main() {
@@ -125,6 +125,7 @@ func subscribeJobCreated(ctx context.Context, nc *nats.Conn, stream string, orch
 		return
 	}
 	log.Info("broadcast job.created subscriber started", "stream", stream, "consumer", "broadcast-orchestrator")
+	redelivery := sharednats.RedeliveryPolicyFrom(sharedconfig.NATS{})
 
 	for {
 		select {
@@ -138,12 +139,14 @@ func subscribeJobCreated(ctx context.Context, nc *nats.Conn, stream string, orch
 				continue
 			}
 			log.Error("job.created fetch failed", "error", err)
+			sharednats.PauseAfterFetchError(ctx)
 			continue
 		}
 		for _, msg := range msgs {
 			if err := orch.HandleNATSMessage(ctx, msg.Subject, msg.Data); err != nil {
-				log.Error("job created handler failed", "error", err)
-				_ = msg.Nak()
+				// Backoff, never terminate: orchestrator recovery owns final failure.
+				attempt := redelivery.NakWithBackoff(msg)
+				log.Error("job created handler failed", "attempt", attempt, "error", err)
 				continue
 			}
 			_ = msg.Ack()

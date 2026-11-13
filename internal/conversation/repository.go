@@ -417,7 +417,6 @@ func (r *PostgresRepository) CountOpenByAssignee(ctx context.Context, teamID, us
 }
 
 func (r *PostgresRepository) CountByTeamFilter(ctx context.Context, teamID uuid.UUID, filter ListFilter) (int64, error) {
-	filter.View = filter.View
 	page, err := r.List(ctx, teamID, filter, repository.PageParams{Page: 1, PageSize: 1})
 	if err != nil {
 		return 0, err

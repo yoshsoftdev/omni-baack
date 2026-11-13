@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	sharedconfig "github.com/omnichannel/omni-chan-v2/shared/config"
 	sharedevents "github.com/omnichannel/omni-chan-v2/shared/events"
+	sharednats "github.com/omnichannel/omni-chan-v2/shared/nats"
 )
 
 // Consumer subscribes to broadcast.batch.send events.
@@ -46,6 +48,7 @@ func (c *Consumer) Subscribe(ctx context.Context, nc *nats.Conn) error {
 		return err
 	}
 	c.log.Info("broadcast batch.send subscriber started", "stream", c.stream, "consumer", c.durable)
+	redelivery := sharednats.RedeliveryPolicyFrom(sharedconfig.NATS{})
 
 	go func() {
 		for {
@@ -60,12 +63,14 @@ func (c *Consumer) Subscribe(ctx context.Context, nc *nats.Conn) error {
 					continue
 				}
 				c.log.Error("batch.send fetch failed", "error", err)
+				sharednats.PauseAfterFetchError(ctx)
 				continue
 			}
 			for _, msg := range msgs {
 				if err := c.processor.HandleRaw(ctx, msg.Data); err != nil {
-					c.log.Error("batch send failed", "error", err)
-					_ = msg.Nak()
+					// Backoff, never terminate: worker recovery requeues stale batches.
+					attempt := redelivery.NakWithBackoff(msg)
+					c.log.Error("batch send failed", "attempt", attempt, "error", err)
 					continue
 				}
 				_ = msg.Ack()

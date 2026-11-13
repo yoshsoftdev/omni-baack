@@ -53,11 +53,11 @@ func (f *fakeObjectStore) Download(_ context.Context, _, objectID uuid.UUID) (io
 }
 
 type fakeUploader struct {
-	mu       sync.Mutex
-	calls    int
+	mu        sync.Mutex
+	calls     int
 	failTimes int
-	err      error
-	mediaID  string
+	err       error
+	mediaID   string
 }
 
 func (u *fakeUploader) Upload(context.Context, string, string, string, string, io.Reader, int64) (string, error) {
@@ -364,5 +364,103 @@ func TestNewWhatsAppMediaManagerRequiresDeps(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "required") {
 		t.Fatalf("unexpected: %v", err)
+	}
+}
+
+// staleReadCache serves an aged copy of the row on FindByKey, simulating a reader
+// that checked the cache just before another worker finished refreshing it.
+type staleReadCache struct {
+	*MemoryProviderMediaCacheRepository
+	staleReads int
+}
+
+func (s *staleReadCache) FindByKey(ctx context.Context, key CacheKey) (*ProviderMediaCache, error) {
+	entry, err := s.MemoryProviderMediaCacheRepository.FindByKey(ctx, key)
+	if err != nil || s.staleReads == 0 {
+		return entry, err
+	}
+	s.staleReads--
+	cp := *entry
+	cp.UploadedAt = cp.UploadedAt.Add(-60 * 24 * time.Hour)
+	return &cp, nil
+}
+
+// Regression: a stale cache read followed by a successful claim on a row that
+// another worker already refreshed must reuse that media id, not upload again.
+func TestEnsureMediaReusesRefreshCompletedByAnotherWorker(t *testing.T) {
+	store := newFakeObjectStore()
+	teamID, assetID := uuid.New(), uuid.New()
+	store.put(teamID, assetID, "image/jpeg", "a.jpg", "h", []byte("jpeg"))
+	uploader := &fakeUploader{mediaID: "media-1"}
+	cache := &staleReadCache{MemoryProviderMediaCacheRepository: NewMemoryProviderMediaCacheRepository()}
+	mgr, err := NewWhatsAppMediaManager(WhatsAppMediaManagerConfig{
+		Assets:      NewMemoryAssetRepository(),
+		Cache:       cache,
+		Storage:     store,
+		Uploader:    uploader,
+		Policy:      AgeBasedMediaCachePolicy{MaxAge: 28 * 24 * time.Hour},
+		Retry:       UploadRetryPolicy{MaxAttempts: 1, BaseDelay: time.Millisecond, IsTransient: DefaultTransientUploadError},
+		RefreshWait: RefreshWaitPolicy{MaxWait: 50 * time.Millisecond, Interval: time.Millisecond},
+		Metrics:     &MemoryMetrics{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := EnsureInput{TeamID: teamID, AssetID: assetID, PhoneNumberID: "pn1", AccessToken: "tok"}
+
+	// "Other worker" finishes a fresh upload.
+	if _, err := mgr.EnsureMedia(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	key := CacheKey{Provider: ProviderWhatsApp, AssetID: assetID, PhoneNumberID: "pn1"}.Normalize()
+	before, _ := cache.MemoryProviderMediaCacheRepository.FindByKey(context.Background(), key)
+	uploader.calls = 0
+	uploader.mediaID = "media-2-should-not-upload"
+
+	// This worker read the row before that upload landed.
+	cache.staleReads = 1
+	ref, err := mgr.EnsureMedia(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uploader.calls != 0 {
+		t.Fatalf("expected reuse without upload, got %d upload(s)", uploader.calls)
+	}
+	if ref.ProviderMediaID != "media-1" || ref.Source != MediaSourceCacheHit {
+		t.Fatalf("ref = %#v, want media-1 cache hit", ref)
+	}
+	after, _ := cache.MemoryProviderMediaCacheRepository.FindByKey(context.Background(), key)
+	if after.State != CacheStateActive || after.RefreshStartedAt != nil {
+		t.Fatalf("claim not released: state=%s refresh_started_at=%v", after.State, after.RefreshStartedAt)
+	}
+	if !after.UploadedAt.Equal(before.UploadedAt) {
+		t.Fatalf("uploaded_at changed %v → %v; media age must be preserved", before.UploadedAt, after.UploadedAt)
+	}
+}
+
+// A FAILED row must still be re-uploaded after claiming (never reused).
+func TestEnsureMediaDoesNotReuseFailedRow(t *testing.T) {
+	store := newFakeObjectStore()
+	teamID, assetID := uuid.New(), uuid.New()
+	store.put(teamID, assetID, "image/jpeg", "a.jpg", "h", []byte("jpeg"))
+	uploader := &fakeUploader{mediaID: "media-1"}
+	mgr := newTestManager(t, store, uploader, &MemoryMetrics{})
+	in := EnsureInput{TeamID: teamID, AssetID: assetID, PhoneNumberID: "pn1", AccessToken: "tok"}
+	if _, err := mgr.EnsureMedia(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	key := CacheKey{Provider: ProviderWhatsApp, AssetID: assetID, PhoneNumberID: "pn1"}.Normalize()
+	entry, _ := mgr.cache.FindByKey(context.Background(), key)
+	if err := mgr.cache.FailRefresh(context.Background(), entry.ID, "invalid", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	uploader.calls = 0
+	uploader.mediaID = "media-2"
+	ref, err := mgr.EnsureMedia(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uploader.calls != 1 || ref.ProviderMediaID != "media-2" {
+		t.Fatalf("FAILED row must re-upload: calls=%d ref=%s", uploader.calls, ref.ProviderMediaID)
 	}
 }

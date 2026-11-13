@@ -129,6 +129,9 @@ func (m *WhatsAppMediaManager) EnsureMedia(ctx context.Context, in EnsureInput) 
 		log.Info("media ensure waiting for in-flight refresh")
 		return m.waitForRefresh(ctx, key, asset, now, log)
 	}
+	if ref, reused := m.reuseConcurrentRefresh(ctx, in, entry, asset, log); reused {
+		return ref, nil
+	}
 
 	wasRefresh := entry.HasProviderMediaID() || in.ForceRefresh ||
 		(entry.UploadedAt.Before(now) && m.policy.NeedsRefresh(*entry, now))
@@ -164,6 +167,42 @@ func (m *WhatsAppMediaManager) EnsureMedia(ctx context.Context, in EnsureInput) 
 		MimeType:        asset.MimeType,
 		Source:          source,
 	}, nil
+}
+
+// reuseConcurrentRefresh closes the check-then-claim race: between our stale cache
+// check and ClaimRefresh another worker may have finished a refresh. If the row we
+// just locked was ACTIVE and is still fresh, keep its media id instead of uploading
+// again, and release the lock with the original upload time (age unchanged).
+func (m *WhatsAppMediaManager) reuseConcurrentRefresh(
+	ctx context.Context,
+	in EnsureInput,
+	entry *ProviderMediaCache,
+	asset *MediaAsset,
+	log *slog.Logger,
+) (*MediaReference, bool) {
+	if entry == nil || in.ForceRefresh || entry.ClaimedFromState != CacheStateActive || !entry.HasProviderMediaID() {
+		return nil, false
+	}
+	prior := *entry
+	prior.State = CacheStateActive
+	if m.policy.NeedsRefresh(prior, time.Now().UTC()) {
+		return nil, false
+	}
+	if err := m.cache.CompleteRefresh(ctx, entry.ID, entry.ProviderMediaID, entry.UploadedAt); err != nil {
+		log.Warn("media ensure release reused claim failed", "error", err)
+		return nil, false
+	}
+	m.metrics.IncCacheHit()
+	log.Info("media ensure cache hit after concurrent refresh",
+		"source", string(MediaSourceCacheHit),
+		"provider_media_id", entry.ProviderMediaID,
+	)
+	return &MediaReference{
+		AssetID:         asset.ID,
+		ProviderMediaID: entry.ProviderMediaID,
+		MimeType:        asset.MimeType,
+		Source:          MediaSourceCacheHit,
+	}, true
 }
 
 func validateEnsureInput(in EnsureInput) error {

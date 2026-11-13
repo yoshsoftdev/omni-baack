@@ -57,6 +57,10 @@ type ProviderMediaCache struct {
 	RefreshStartedAt *time.Time
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+
+	// ClaimedFromState is the row state just before ClaimRefresh took the lock.
+	// Set only on ClaimRefresh results; never persisted.
+	ClaimedFromState CacheState
 }
 
 // Key returns the unique cache key for this row.

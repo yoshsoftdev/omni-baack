@@ -31,18 +31,20 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.HTTP.ReadTimeout != 10*time.Second {
 		t.Errorf("HTTP.ReadTimeout = %v", cfg.HTTP.ReadTimeout)
 	}
-	if cfg.Storage.Driver != "local" {
-		t.Errorf("Storage.Driver = %q, want local", cfg.Storage.Driver)
+	if cfg.StorageService.URL != "http://127.0.0.1:8082" {
+		t.Errorf("StorageService.URL = %q, want default http://127.0.0.1:8082", cfg.StorageService.URL)
 	}
 }
 
-func TestLoad_MinIOValidation(t *testing.T) {
+// Storage drivers (local/minio) live in storage-service; backend only needs its URL.
+func TestLoad_RequiresStorageServiceURL(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://localhost:5432/test?sslmode=disable")
-	t.Setenv("STORAGE_DRIVER", "minio")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("STORAGE_SERVICE_URL", "   ")
 
 	_, err := Load()
 	if err == nil {
-		t.Fatal("expected error for minio without credentials")
+		t.Fatal("expected error when STORAGE_SERVICE_URL is blank")
 	}
 }
 

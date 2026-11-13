@@ -57,7 +57,7 @@ func (stubTeamRepo) Create(context.Context, *team.Team) error { return nil }
 func (stubTeamRepo) FindByID(context.Context, uuid.UUID) (*team.Team, error) {
 	return nil, team.ErrNotFound
 }
-func (stubTeamRepo) Update(context.Context, *team.Team) error { return nil }
+func (stubTeamRepo) Update(context.Context, *team.Team) error         { return nil }
 func (stubTeamRepo) CreateMember(context.Context, *team.Member) error { return nil }
 func (stubTeamRepo) FindPrimaryMembership(context.Context, uuid.UUID) (*team.Member, error) {
 	return nil, team.ErrMemberNotFound
@@ -129,6 +129,11 @@ func (stubRBACRepo) ListPermissionsByRoleID(context.Context, uuid.UUID) ([]rbac.
 func (stubRBACRepo) GetPermissionMatrix(context.Context) ([]rbac.PermissionMatrixRow, error) {
 	return nil, nil
 }
+
+func (stubRBACRepo) CreateRole(context.Context, *rbac.Role) error                      { return nil }
+func (stubRBACRepo) UpdateRole(context.Context, *rbac.Role) error                      { return nil }
+func (stubRBACRepo) SoftDeleteRole(context.Context, uuid.UUID) error                   { return nil }
+func (stubRBACRepo) ReplaceRolePermissions(context.Context, uuid.UUID, []string) error { return nil }
 
 func testReportService(reports Repository) *Service {
 	rbacSvc := rbac.NewService(stubRBACRepo{})

@@ -190,6 +190,7 @@ func (r *PostgresProviderMediaCacheRepository) ClaimRefresh(
 	if err := tx.Commit(ctx); err != nil {
 		return nil, false, err
 	}
+	existing.ClaimedFromState = existing.State
 	existing.State = CacheStateRefreshing
 	existing.RefreshStartedAt = &now
 	existing.UpdatedAt = now
@@ -304,7 +305,7 @@ func validateCacheEntry(entry ProviderMediaCache) error {
 
 // MemoryProviderMediaCacheRepository is an in-memory cache repo for unit tests.
 type MemoryProviderMediaCacheRepository struct {
-	mu   sync.Mutex
+	mu    sync.Mutex
 	byKey map[string]ProviderMediaCache
 }
 
@@ -413,12 +414,14 @@ func (r *MemoryProviderMediaCacheRepository) ClaimRefresh(
 		return &cp, false, nil
 	}
 
+	claimedFrom := existing.State
 	existing.State = CacheStateRefreshing
 	existing.RefreshStartedAt = &now
 	existing.UpdatedAt = now
 	existing.LastError = nil
 	r.byKey[mk] = existing
 	cp := existing
+	cp.ClaimedFromState = claimedFrom
 	return &cp, true, nil
 }
 
