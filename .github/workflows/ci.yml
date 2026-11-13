@@ -1,0 +1,83 @@
+# This module builds against ../../shared, which lives in the parent repo
+# yoshsoftdev/omni-chan. Set secret PARENT_REPO_TOKEN (read access) if it is private.
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    env:
+      # Only this module and shared/ are checked out; the parent go.work would
+      # point at missing sibling modules. Build like the Dockerfile does.
+      GOWORK: "off"
+    defaults:
+      run:
+        working-directory: services/backend-service
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: yoshsoftdev/omni-chan
+          token: ${{ secrets.PARENT_REPO_TOKEN || github.token }}
+      - uses: actions/checkout@v7
+        with:
+          path: services/backend-service
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.11"
+          cache-dependency-path: services/backend-service/go.sum
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race -count=1 -coverprofile=cover.out ./...
+      - name: coverage gate
+        # min = baseline floor measured 2026-11-13; raise it, never lower it.
+        run: go tool cover -func=cover.out | awk -v min=23 '/^total:/ { gsub("%", "", $3); print "coverage " $3 "% (min " min "%)"; if ($3 + 0 < min) exit 1 }'
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          working-directory: services/backend-service
+          only-new-issues: true
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: omni_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 5s --health-retries 20
+    env:
+      GOWORK: "off"
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/omni_test?sslmode=disable
+      APP_ENV: development
+    defaults:
+      run:
+        working-directory: services/backend-service
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: yoshsoftdev/omni-chan
+          token: ${{ secrets.PARENT_REPO_TOKEN || github.token }}
+      - uses: actions/checkout@v7
+        with:
+          path: services/backend-service
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.11"
+          cache-dependency-path: services/backend-service/go.sum
+      - run: go run ./cmd/migrate -direction=up
+      - run: go test -race -count=1 -tags=integration ./...

@@ -13,17 +13,17 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 	"github.com/omnichannel/omni-chan-v2/pkg/cryptoutil"
-	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 	sharedevents "github.com/omnichannel/omni-chan-v2/shared/events"
 )
 
 type mockMeta struct {
-	mu      sync.Mutex
-	calls   int
-	wamid   string
-	errs    []error
-	delay   bool
+	mu    sync.Mutex
+	calls int
+	wamid string
+	errs  []error
+	delay bool
 }
 
 func (m *mockMeta) SendTemplateMessage(context.Context, string, string, string, string, string, []metaclient.TemplateComponent) (string, error) {
@@ -42,14 +42,14 @@ func (m *mockMeta) SendTemplateMessage(context.Context, string, string, string, 
 }
 
 type mockSendRepo struct {
-	mu          sync.Mutex
-	batch       campaign.BroadcastBatch
-	recipients  []campaign.Recipient
-	claimed     int
-	completed   int
-	requeued    int
-	sentInc     int
-	failedInc   int
+	mu           sync.Mutex
+	batch        campaign.BroadcastBatch
+	recipients   []campaign.Recipient
+	claimed      int
+	completed    int
+	requeued     int
+	sentInc      int
+	failedInc    int
 	leaseRefresh int
 }
 
@@ -236,9 +236,9 @@ func newTestProcessor(t *testing.T, meta *mockMeta, send *mockSendRepo) (*BatchP
 	}
 	campRepo := &mockCampaignRepo{campaign: camp, sendRepo: send}
 	tpl := &template.Template{
-		ID:       camp.TemplateID,
-		Name:     "hello",
-		Language: "en",
+		ID:         camp.TemplateID,
+		Name:       "hello",
+		Language:   "en",
 		Components: json.RawMessage(`[{"type":"BODY","text":"Hello {{1}}"}]`),
 	}
 	cipher := testCipher(t)
@@ -510,5 +510,14 @@ func TestClassifyTransientTimeout(t *testing.T) {
 	kind, _, _ := ClassifySendError(errors.New("connection timeout"))
 	if kind != FailureTransient {
 		t.Fatalf("expected transient")
+	}
+}
+
+// Regression: Meta throttling arrives as HTTP 400 + code 130429; it must be
+// retried as rate-limited, never mark the recipient permanently failed.
+func TestClassifySendError_Meta130429IsRateLimited(t *testing.T) {
+	kind, code, _ := ClassifySendError(metaclient.NewAPIError(400, `{"error":{"message":"(#130429) Rate limit hit","code":130429}}`))
+	if kind != FailureRateLimited || code != "rate_limited" {
+		t.Fatalf("kind=%v code=%s, want rate limited", kind, code)
 	}
 }

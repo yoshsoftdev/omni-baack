@@ -130,41 +130,60 @@ func (r *PostgresProviderMediaCacheRepository) ClaimRefresh(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	row := tx.QueryRow(ctx, providerMediaCacheSelect+`
-		WHERE provider = $1 AND asset_id = $2 AND phone_number_id = $3
-		FOR UPDATE
-	`, string(key.Provider), key.AssetID, key.PhoneNumberID)
-	existing, err := scanProviderMediaCache(row)
-	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+	lockRow := func() (*ProviderMediaCache, error) {
+		row := tx.QueryRow(ctx, providerMediaCacheSelect+`
+			WHERE provider = $1 AND asset_id = $2 AND phone_number_id = $3
+			FOR UPDATE
+		`, string(key.Provider), key.AssetID, key.PhoneNumberID)
+		entry, err := scanProviderMediaCache(row)
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, nil
+		}
+		return entry, err
+	}
+	existing, err := lockRow()
+	if err != nil {
 		return nil, false, err
 	}
 
 	if existing == nil {
 		id := uuid.New()
-		_, err = tx.Exec(ctx, `
+		// FOR UPDATE cannot lock a row that does not exist yet, so concurrent first
+		// claims race here. ON CONFLICT makes the loser wait for the winner's row.
+		tag, err := tx.Exec(ctx, `
 			INSERT INTO provider_media_cache (
 				id, team_id, provider, asset_id, phone_number_id, provider_media_id,
 				state, last_error, uploaded_at, refresh_started_at, created_at, updated_at
 			) VALUES ($1,$2,$3,$4,$5,'','REFRESHING',NULL,$6,$6,$6,$6)
+			ON CONFLICT ON CONSTRAINT uq_provider_media_cache_key DO NOTHING
 		`, id, teamID, string(key.Provider), key.AssetID, key.PhoneNumberID, now)
 		if err != nil {
 			return nil, false, repository.MapError(err)
 		}
-		if err := tx.Commit(ctx); err != nil {
+		if tag.RowsAffected() == 1 {
+			if err := tx.Commit(ctx); err != nil {
+				return nil, false, err
+			}
+			return &ProviderMediaCache{
+				ID:               id,
+				TeamID:           teamID,
+				Provider:         key.Provider,
+				AssetID:          key.AssetID,
+				PhoneNumberID:    key.PhoneNumberID,
+				State:            CacheStateRefreshing,
+				UploadedAt:       now,
+				RefreshStartedAt: &now,
+				CreatedAt:        now,
+				UpdatedAt:        now,
+			}, true, nil
+		}
+		// Lost the race: lock the row the concurrent claimer just created.
+		if existing, err = lockRow(); err != nil {
 			return nil, false, err
 		}
-		return &ProviderMediaCache{
-			ID:               id,
-			TeamID:           teamID,
-			Provider:         key.Provider,
-			AssetID:          key.AssetID,
-			PhoneNumberID:    key.PhoneNumberID,
-			State:            CacheStateRefreshing,
-			UploadedAt:       now,
-			RefreshStartedAt: &now,
-			CreatedAt:        now,
-			UpdatedAt:        now,
-		}, true, nil
+		if existing == nil {
+			return nil, false, ErrCacheNotFound
+		}
 	}
 
 	if existing.State == CacheStateRefreshing &&

@@ -45,6 +45,10 @@ func TestUpdateContactIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list members: %v", err)
 	}
+	if len(members) == 0 {
+		// Runs only against the dev database that holds these fixed seed rows.
+		t.Skip("dev seed team not present")
+	}
 	for _, member := range members {
 		if member.Role == team.RoleOwner {
 			userID = member.UserID

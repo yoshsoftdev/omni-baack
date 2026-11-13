@@ -2,11 +2,14 @@ package resolver
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
 	"github.com/omnichannel/omni-chan-v2/internal/consumererrors"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 )
 
 // TenantContext holds resolved team and channel for an event.
@@ -30,15 +33,7 @@ func (r *TenantResolver) ResolveByPhoneNumberID(ctx context.Context, phoneNumber
 	if phoneNumberID == "" {
 		return nil, terminalDLQ("channel", consumererrors.ErrUnknownChannel)
 	}
-	ch, err := r.channels.FindByPhoneNumberID(ctx, phoneNumberID)
-	if err != nil {
-		return nil, terminalDLQ("channel", consumererrors.ErrUnknownChannel)
-	}
-	return &TenantContext{
-		TeamID:    ch.TeamID,
-		ChannelID: ch.ID,
-		Channel:   ch,
-	}, nil
+	return toTenant(r.channels.FindByPhoneNumberID(ctx, phoneNumberID))
 }
 
 func (r *TenantResolver) ResolveByWABAID(ctx context.Context, wabaID string) (*TenantContext, error) {
@@ -46,15 +41,7 @@ func (r *TenantResolver) ResolveByWABAID(ctx context.Context, wabaID string) (*T
 	if wabaID == "" {
 		return nil, terminalDLQ("channel", consumererrors.ErrUnknownChannel)
 	}
-	ch, err := r.channels.FindByWABAID(ctx, wabaID)
-	if err != nil {
-		return nil, terminalDLQ("channel", consumererrors.ErrUnknownChannel)
-	}
-	return &TenantContext{
-		TeamID:    ch.TeamID,
-		ChannelID: ch.ID,
-		Channel:   ch,
-	}, nil
+	return toTenant(r.channels.FindByWABAID(ctx, wabaID))
 }
 
 func (r *TenantResolver) ResolveByIGUserID(ctx context.Context, igUserID string) (*TenantContext, error) {
@@ -62,15 +49,20 @@ func (r *TenantResolver) ResolveByIGUserID(ctx context.Context, igUserID string)
 	if igUserID == "" {
 		return nil, terminalDLQ("channel", consumererrors.ErrUnknownChannel)
 	}
-	ch, err := r.channels.FindByIGUserIDGlobal(ctx, igUserID)
-	if err != nil {
+	return toTenant(r.channels.FindByIGUserIDGlobal(ctx, igUserID))
+}
+
+// toTenant dead-letters only a channel that does not exist. Any other lookup
+// error (DB down, timeout) is returned as retryable so the event is redelivered
+// instead of being dropped to the DLQ during an outage.
+func toTenant(ch *channel.Channel, err error) (*TenantContext, error) {
+	if errors.Is(err, repository.ErrNotFound) {
 		return nil, terminalDLQ("channel", consumererrors.ErrUnknownChannel)
 	}
-	return &TenantContext{
-		TeamID:    ch.TeamID,
-		ChannelID: ch.ID,
-		Channel:   ch,
-	}, nil
+	if err != nil {
+		return nil, fmt.Errorf("resolve channel: %w", err)
+	}
+	return &TenantContext{TeamID: ch.TeamID, ChannelID: ch.ID, Channel: ch}, nil
 }
 
 func terminalDLQ(category string, err error) error {
