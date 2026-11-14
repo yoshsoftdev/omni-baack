@@ -349,7 +349,7 @@ func main() {
 	go windowRecontactService.Start(ctx)
 
 	if cfg.NATS.Enabled {
-		startEventConsumer(ctx, cfg, channelRepo, contactService, conversationService, messageService, templateRepo, onboardingService, channelSyncService, inboxSync, campaignRepo, reportRepo, automationService.Forwarder(), tokenCipher, metaClient, storageClient, rdb, log, reg, readiness)
+		startEventConsumer(ctx, cfg, channelRepo, contactService, conversationService, messageService, templateRepo, onboardingService, channelSyncService, inboxSync, campaignRepo, reportRepo, automationService.Forwarder(), tokenCipher, metaClient, storageClient, rdb, db, log, reg, readiness)
 	}
 	observability.Serve(ctx, observability.MetricsAddr("127.0.0.1:9101"), reg, readiness, log.Logger)
 
@@ -435,6 +435,7 @@ func startEventConsumer(
 	metaClient *metaclient.Client,
 	storageClient *storageclient.Client,
 	rdb *redisclient.Client,
+	db *database.DB,
 	log *logger.Logger,
 	metricsReg *prometheus.Registry,
 	readiness map[string]observability.Check,
@@ -452,13 +453,11 @@ func startEventConsumer(
 		return
 	}
 
-	var idempStore eventconsumeridempotency.Store
-	if pingErr := rdb.Client.Ping(ctx).Err(); pingErr != nil {
-		log.Warn("redis idempotency unavailable, using memory store", "error", pingErr)
-		idempStore = eventconsumeridempotency.NewMemoryStore(24 * time.Hour)
-	} else {
-		idempStore = eventconsumeridempotency.NewRedisStore(rdb.Client, 24*time.Hour)
-	}
+	// Durable idempotency in Postgres with Redis as a cache (D8): never fall back
+	// to process memory, which loses state on restart and is not shared by replicas.
+	processedEvents := eventconsumeridempotency.NewPostgresStore(db)
+	idempStore := eventconsumeridempotency.NewCachedStore(processedEvents, eventconsumeridempotency.NewRedisStore(rdb.Client, 24*time.Hour))
+	go purgeProcessedEvents(ctx, processedEvents, log.Logger)
 
 	metaSub, err := sharednats.NewMetaSubscriber(nc, natsCfg, slogLog)
 	if err != nil {
@@ -566,4 +565,27 @@ func (a *dashboardSyncAdapter) TeamSyncSummary(ctx context.Context, teamID uuid.
 		LastConversationSyncAt: summary.LastConversationSyncAt,
 		PermissionStatus:       string(summary.PermissionStatus),
 	}, nil
+}
+
+// processedEventsRetention must exceed the JetStream stream MaxAge (7 days):
+// older events can no longer be redelivered, so their records are dead weight.
+const processedEventsRetention = 8 * 24 * time.Hour
+
+func purgeProcessedEvents(ctx context.Context, store *eventconsumeridempotency.PostgresStore, log *slog.Logger) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		if n, err := store.PurgeOlderThan(ctx, processedEventsRetention); err != nil {
+			if ctx.Err() == nil {
+				log.Warn("purge processed_events failed", "error", err)
+			}
+		} else if n > 0 {
+			log.Info("purged processed_events", "rows", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
