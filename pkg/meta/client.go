@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"io"
 	"net/http"
 	"strings"
@@ -25,7 +26,7 @@ func NewClient(apiVersion string) *Client {
 	}
 	return &Client{
 		apiVersion: apiVersion,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: &http.Client{Timeout: 30 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 	}
 }
 
@@ -42,10 +43,10 @@ func (c *Client) graphURL(path string) string {
 }
 
 type PhoneNumber struct {
-	ID                  string `json:"id"`
-	DisplayPhoneNumber  string `json:"display_phone_number"`
-	VerifiedName        string `json:"verified_name"`
-	QualityRating       string `json:"quality_rating"`
+	ID                 string `json:"id"`
+	DisplayPhoneNumber string `json:"display_phone_number"`
+	VerifiedName       string `json:"verified_name"`
+	QualityRating      string `json:"quality_rating"`
 }
 
 func (c *Client) GetPhoneNumber(ctx context.Context, phoneNumberID, accessToken string) (*PhoneNumber, error) {
@@ -87,7 +88,7 @@ type sendMessageRequest struct {
 	Context          *struct {
 		MessageID string `json:"message_id"`
 	} `json:"context,omitempty"`
-	Text             struct {
+	Text struct {
 		Body string `json:"body"`
 	} `json:"text"`
 }

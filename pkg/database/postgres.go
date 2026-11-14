@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"github.com/exaring/otelpgx"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -31,6 +32,7 @@ func New(ctx context.Context, cfg config.DatabaseConfig) (*DB, error) {
 	poolCfg.MaxConns = int32(cfg.MaxOpenConns)
 	poolCfg.MinConns = int32(cfg.MaxIdleConns)
 	poolCfg.MaxConnLifetime = cfg.ConnMaxLifetime
+	poolCfg.ConnConfig.Tracer = otelpgx.NewTracer() // query spans; no-op cost without an exporter
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {

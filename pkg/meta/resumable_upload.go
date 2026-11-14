@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"io"
 	"net/http"
 	"net/url"
@@ -149,5 +150,5 @@ func (c *Client) uploadHTTPClient() *http.Client {
 	if c.httpClient != nil && c.httpClient.Timeout >= 2*time.Minute {
 		return c.httpClient
 	}
-	return &http.Client{Timeout: 2 * time.Minute}
+	return &http.Client{Timeout: 2 * time.Minute, Transport: otelhttp.NewTransport(http.DefaultTransport)}
 }

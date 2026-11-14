@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"github.com/omnichannel/omni-chan-v2/shared/observability"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -32,9 +34,9 @@ import (
 	"github.com/omnichannel/omni-chan-v2/pkg/migrate"
 	redisclient "github.com/omnichannel/omni-chan-v2/pkg/redis"
 	"github.com/omnichannel/omni-chan-v2/pkg/workerregistry"
-	"github.com/redis/go-redis/v9"
 	sharedconfig "github.com/omnichannel/omni-chan-v2/shared/config"
 	sharednats "github.com/omnichannel/omni-chan-v2/shared/nats"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -46,7 +48,9 @@ func main() {
 		panic(err)
 	}
 	log := logger.New(cfg.App.Env)
-	slogLog := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slogLog := slog.New(observability.WrapLogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	shutdownTracing := observability.SetupTracing(ctx, "broadcast-worker", slogLog)
+	defer func() { _ = shutdownTracing(context.Background()) }()
 
 	if err := migrate.Up(cfg.Database.URL, "migrations"); err != nil {
 		log.Error("migration failed", "error", err)
@@ -80,11 +84,16 @@ func main() {
 	channelRepo := channel.NewRepository(db)
 	metaClient := meta.NewClient(cfg.Meta.APIVersion)
 	metrics := worker.NewMetrics()
+	obsReg := observability.NewRegistry()
+	obsReg.MustRegister(observability.NewSnapshotCollector("omni_broadcast", metrics.Snapshot))
+	obsReg.MustRegister(observability.NewLabeledCounterCollector("omni_broadcast_send_failures_by_code_total",
+		"Recipients that failed permanently, by failure code.", "code", metrics.FailureCodes))
 	metrics.IncWorkerRestart()
 	sender := worker.NewSender(metaClient, channelRepo, tokenCipher, metrics, slogLog)
 	if strings.TrimSpace(cfg.StorageService.URL) != "" {
 		storageClient := storageclient.New(cfg.StorageService.URL, cfg.NATS.InternalToken)
 		mediaMetrics := &mediamanager.MemoryMetrics{}
+		obsReg.MustRegister(observability.NewSnapshotCollector("omni", mediaMetrics.Values))
 		mediaMgr, err := mediamanager.NewWhatsAppMediaManagerFromMeta(
 			mediamanager.NewPostgresAssetRepository(db),
 			mediamanager.NewPostgresProviderMediaCacheRepository(db),
@@ -167,6 +176,22 @@ func main() {
 		redisPing = redisCLI.Client
 	}
 	_ = worker.ServeHealth(ctx, healthAddr, worker.NewHealthChecker(db, redisPing, nc))
+	if js, jsErr := nc.JetStream(); jsErr == nil {
+		obsReg.MustRegister(sharednats.NewJetStreamCollector(js, workerCfg.BroadcastStream, "broadcast-send-worker"))
+	}
+	checks := map[string]observability.Check{
+		"postgres": func(ctx context.Context) error { return db.Pool.Ping(ctx) },
+		"nats": func(context.Context) error {
+			if !nc.IsConnected() {
+				return errors.New("nats disconnected")
+			}
+			return nil
+		},
+	}
+	if redisPing != nil {
+		checks["redis"] = func(ctx context.Context) error { return redisPing.Ping(ctx).Err() }
+	}
+	observability.Serve(ctx, observability.MetricsAddr("127.0.0.1:9102"), obsReg, checks, slogLog)
 
 	recipientRecovery := worker.NewRecipientRecovery(campaignRepo, metrics, worker.DefaultRecipientStaleAfter, slogLog)
 	go recipientRecovery.Start(ctx, worker.DefaultRecipientRecoveryInterval)

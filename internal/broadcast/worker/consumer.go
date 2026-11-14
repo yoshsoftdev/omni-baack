@@ -67,7 +67,10 @@ func (c *Consumer) Subscribe(ctx context.Context, nc *nats.Conn) error {
 				continue
 			}
 			for _, msg := range msgs {
-				if err := c.processor.HandleRaw(ctx, msg.Data); err != nil {
+				msgCtx, span := sharednats.ConsumerSpan(ctx, msg)
+				err := c.processor.HandleRaw(msgCtx, msg.Data)
+				span.End()
+				if err != nil {
 					// Backoff, never terminate: worker recovery requeues stale batches.
 					attempt := redelivery.NakWithBackoff(msg)
 					c.log.Error("batch send failed", "attempt", attempt, "error", err)

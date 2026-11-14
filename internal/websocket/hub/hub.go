@@ -3,10 +3,11 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"github.com/omnichannel/omni-chan-v2/shared/observability"
 	"sync"
 
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/omnichannel/omni-chan-v2/pkg/logger"
+	goredis "github.com/redis/go-redis/v9"
 )
 
 const redisChannelPrefix = "ws:tenant:"
@@ -87,6 +88,9 @@ func (h *Hub) BroadcastToTenant(tenantID string, payload []byte) {
 
 // PublishTenant publishes an event to Redis for cross-instance delivery.
 func (h *Hub) PublishTenant(ctx context.Context, tenantID string, event any) error {
+	// Last hop of an inbound message's trace: fan-out to WebSocket clients.
+	ctx, span := observability.Tracer().Start(ctx, "realtime publish")
+	defer span.End()
 	if h.redis == nil {
 		return nil
 	}
@@ -132,4 +136,15 @@ func tenantIDFromChannel(channel string) string {
 		return channel[len(prefix):]
 	}
 	return channel
+}
+
+// ConnectionCount returns the number of WebSocket clients on this instance.
+func (h *Hub) ConnectionCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	n := 0
+	for _, clients := range h.rooms {
+		n += len(clients)
+	}
+	return n
 }

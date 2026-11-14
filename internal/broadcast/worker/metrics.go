@@ -29,7 +29,8 @@ type Metrics struct {
 	WorkerBatchesCompleted   int64
 	MetaSendDurationMillis   int64
 
-	byChannel map[uuid.UUID]*channelMetrics
+	byChannel    map[uuid.UUID]*channelMetrics
+	failureCodes map[string]int64
 }
 
 type channelMetrics struct {
@@ -47,7 +48,32 @@ type channelMetrics struct {
 }
 
 func NewMetrics() *Metrics {
-	return &Metrics{byChannel: make(map[uuid.UUID]*channelMetrics)}
+	return &Metrics{byChannel: make(map[uuid.UUID]*channelMetrics), failureCodes: map[string]int64{}}
+}
+
+// IncFailureCode counts a permanently failed recipient by its failure code
+// (invalid_number, blocked, template_error, ...: a small fixed set).
+func (m *Metrics) IncFailureCode(code string) {
+	if code == "" {
+		code = "unknown"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failureCodes == nil {
+		m.failureCodes = map[string]int64{}
+	}
+	m.failureCodes[code]++
+}
+
+// FailureCodes returns a copy of the per-code failure counts.
+func (m *Metrics) FailureCodes() map[string]int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]int64, len(m.failureCodes))
+	for k, v := range m.failureCodes {
+		out[k] = v
+	}
+	return out
 }
 
 func (m *Metrics) channel(channelID uuid.UUID) *channelMetrics {
@@ -197,7 +223,7 @@ func (m *Metrics) Snapshot() map[string]int64 {
 		"recipient_recovery_total":         m.RecipientRecovery,
 		"worker_restarts_total":            m.WorkerRestarts,
 		"worker_batches_processing":        m.WorkerBatchesProcessing,
-		"worker_batches_completed":           m.WorkerBatchesCompleted,
+		"worker_batches_completed":         m.WorkerBatchesCompleted,
 		"meta_send_duration_ms":            m.MetaSendDurationMillis,
 	}
 }

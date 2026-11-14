@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -26,7 +27,7 @@ type StoredObject struct {
 }
 
 type apiResponse struct {
-	Success bool `json:"success"`
+	Success bool   `json:"success"`
 	Message string `json:"message"`
 	Data    struct {
 		Object StoredObject `json:"object"`
@@ -43,7 +44,7 @@ func New(baseURL, internalToken string) *Client {
 	return &Client{
 		baseURL:       strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		internalToken: strings.TrimSpace(internalToken),
-		httpClient:    &http.Client{Timeout: 60 * time.Second},
+		httpClient:    &http.Client{Timeout: 60 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 	}
 }
 

@@ -53,3 +53,16 @@ func (m *MemoryMetrics) Snapshot() MemoryMetrics {
 		DeprecatedLink: atomic.LoadInt64(&m.DeprecatedLink),
 	}
 }
+
+// Values returns the counters keyed by exported metric name (for Prometheus).
+func (m *MemoryMetrics) Values() map[string]int64 {
+	s := m.Snapshot()
+	return map[string]int64{
+		"media_cache_hit_total":       s.CacheHit,
+		"media_cache_miss_total":      s.CacheMiss,
+		"media_upload_total":          s.Upload,
+		"media_refresh_total":         s.Refresh,
+		"media_upload_failure_total":  s.UploadFailure,
+		"media_deprecated_link_total": s.DeprecatedLink,
+	}
+}

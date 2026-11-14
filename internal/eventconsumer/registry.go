@@ -19,34 +19,34 @@ import (
 
 // Registry routes canonical Meta events to typed handlers.
 type Registry struct {
-	legacy       *LegacyConsumer
-	messages     *MessageHandler
-	statuses     *StatusHandler
-	templates    *TemplateHandler
-	channels     *ChannelHandler
-	dlq          ConsumerDLQ
-	metrics      *Metrics
-	log          *slog.Logger
+	legacy    *LegacyConsumer
+	messages  *MessageHandler
+	statuses  *StatusHandler
+	templates *TemplateHandler
+	channels  *ChannelHandler
+	dlq       ConsumerDLQ
+	metrics   *Metrics
+	log       *slog.Logger
 }
 
 type Deps struct {
-	Channels      channel.Repository
-	Contacts      *contact.Service
-	Conversations *conversation.Service
-	Messages      *message.Service
-	MetaMedia         MetaMediaClient
-	InstagramProfile  InstagramProfileClient
-	TokenCipher       TokenCipher
-	Storage       StorageUploader
-	Templates     template.Repository
-	Onboarding    *onboarding.Service
-	ChannelSync   *channelsync.Service
-	Inbox         Syncer
-	Delivery      CampaignDelivery
-	Forwarder     InboundMessageForwarder
-	Idempotency   idempotency.Store
-	DLQ           ConsumerDLQ
-	Logger        *slog.Logger
+	Channels         channel.Repository
+	Contacts         *contact.Service
+	Conversations    *conversation.Service
+	Messages         *message.Service
+	MetaMedia        MetaMediaClient
+	InstagramProfile InstagramProfileClient
+	TokenCipher      TokenCipher
+	Storage          StorageUploader
+	Templates        template.Repository
+	Onboarding       *onboarding.Service
+	ChannelSync      *channelsync.Service
+	Inbox            Syncer
+	Delivery         CampaignDelivery
+	Forwarder        InboundMessageForwarder
+	Idempotency      idempotency.Store
+	DLQ              ConsumerDLQ
+	Logger           *slog.Logger
 }
 
 func NewRegistry(deps Deps) *Registry {
@@ -96,7 +96,7 @@ func (r *Registry) HandleCanonical(ctx context.Context, event sharedevents.Canon
 	case sharedevents.TypeChannelUpdated:
 		err = r.channels.Handle(ctx, event)
 	default:
-		r.log.Warn("unknown canonical event type", "type", event.Type, "event_id", event.EventID)
+		r.log.WarnContext(ctx, "unknown canonical event type", "type", event.Type, "event_id", event.EventID)
 		return nil
 	}
 
@@ -111,11 +111,11 @@ func (r *Registry) HandleCanonical(ctx context.Context, event sharedevents.Canon
 		r.metrics.IncDLQ()
 		if r.dlq != nil {
 			if dlqErr := r.dlq.PublishConsumerDLQ(ctx, category, te.Error(), event); dlqErr != nil {
-				r.log.Error("consumer dlq publish failed", "error", dlqErr, "event_id", event.EventID)
+				r.log.ErrorContext(ctx, "consumer dlq publish failed", "error", dlqErr, "event_id", event.EventID)
 				return err
 			}
 		}
-		r.log.Warn("event routed to consumer dlq",
+		r.log.WarnContext(ctx, "event routed to consumer dlq",
 			"category", category,
 			"event_id", event.EventID,
 			"event_type", event.Type,

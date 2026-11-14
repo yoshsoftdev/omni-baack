@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"github.com/omnichannel/omni-chan-v2/shared/observability"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -32,7 +34,9 @@ func main() {
 		panic(err)
 	}
 	log := logger.New(cfg.App.Env)
-	slogLog := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slogLog := slog.New(observability.WrapLogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	shutdownTracing := observability.SetupTracing(ctx, "broadcast-orchestrator", slogLog)
+	defer func() { _ = shutdownTracing(context.Background()) }()
 
 	if err := migrate.Up(cfg.Database.URL, "migrations"); err != nil {
 		log.Error("migration failed", "error", err)
@@ -99,6 +103,21 @@ func main() {
 	}
 
 	go subscribeJobCreated(ctx, nc, orchCfg.BroadcastStream, orch, slogLog)
+
+	obsReg := observability.NewRegistry()
+	obsReg.MustRegister(observability.NewSnapshotCollector("omni_orchestrator", metrics.Snapshot))
+	if js, jsErr := nc.JetStream(); jsErr == nil {
+		obsReg.MustRegister(sharednats.NewJetStreamCollector(js, orchCfg.BroadcastStream, "broadcast-orchestrator"))
+	}
+	observability.Serve(ctx, observability.MetricsAddr("127.0.0.1:9103"), obsReg, map[string]observability.Check{
+		"postgres": func(ctx context.Context) error { return db.Pool.Ping(ctx) },
+		"nats": func(context.Context) error {
+			if !nc.IsConnected() {
+				return errors.New("nats disconnected")
+			}
+			return nil
+		},
+	}, slogLog)
 	go orch.Start(ctx)
 
 	log.Info("broadcast orchestrator started")
@@ -143,7 +162,10 @@ func subscribeJobCreated(ctx context.Context, nc *nats.Conn, stream string, orch
 			continue
 		}
 		for _, msg := range msgs {
-			if err := orch.HandleNATSMessage(ctx, msg.Subject, msg.Data); err != nil {
+			msgCtx, span := sharednats.ConsumerSpan(ctx, msg)
+			err := orch.HandleNATSMessage(msgCtx, msg.Subject, msg.Data)
+			span.End()
+			if err != nil {
 				// Backoff, never terminate: orchestrator recovery owns final failure.
 				attempt := redelivery.NakWithBackoff(msg)
 				log.Error("job created handler failed", "attempt", attempt, "error", err)

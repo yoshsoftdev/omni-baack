@@ -309,6 +309,7 @@ func (p *BatchProcessor) processRecipient(
 				return err
 			}
 			p.metrics.IncSendFailed(ch.ID)
+			p.metrics.IncFailureCode(code)
 			log.Warn("recipient failed permanently", "failure_code", code, "error", msg)
 			return nil
 		}
@@ -319,6 +320,7 @@ func (p *BatchProcessor) processRecipient(
 				return err
 			}
 			p.metrics.IncSendFailed(ch.ID)
+			p.metrics.IncFailureCode(code)
 			log.Warn("recipient failed after retries", "failure_code", code, "error", msg)
 			return nil
 		}

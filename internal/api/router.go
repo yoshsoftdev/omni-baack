@@ -7,8 +7,8 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/requestid"
 	v1 "github.com/omnichannel/omni-chan-v2/internal/api/v1"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
-	jwtmanager "github.com/omnichannel/omni-chan-v2/pkg/jwt"
 	"github.com/omnichannel/omni-chan-v2/pkg/database"
+	jwtmanager "github.com/omnichannel/omni-chan-v2/pkg/jwt"
 	"github.com/omnichannel/omni-chan-v2/pkg/logger"
 )
 
@@ -18,6 +18,8 @@ type Deps struct {
 	DB     *database.DB
 	V1     v1.Deps
 	JWT    *jwtmanager.Manager
+	// Observability (tracing, RED metrics, access log) runs before every route.
+	Observability fiber.Handler
 }
 
 func NewRouter(deps Deps) *fiber.App {
@@ -30,6 +32,9 @@ func NewRouter(deps Deps) *fiber.App {
 
 	app.Use(recover.New())
 	app.Use(requestid.New())
+	if deps.Observability != nil {
+		app.Use(deps.Observability)
+	}
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "*",
 		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",

@@ -3,6 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"github.com/gofiber/fiber/v2"
+	apimiddleware "github.com/omnichannel/omni-chan-v2/internal/api/middleware"
+	"github.com/omnichannel/omni-chan-v2/shared/observability"
+	"github.com/prometheus/client_golang/prometheus"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -77,6 +82,10 @@ func main() {
 	}
 
 	log := logger.New(cfg.App.Env)
+	shutdownTracing := observability.SetupTracing(ctx, "backend-api", log.Logger)
+	defer func() { _ = shutdownTracing(context.Background()) }()
+	reg := observability.NewRegistry()
+	readiness := map[string]observability.Check{}
 
 	if err := migrate.Up(cfg.Database.URL, "migrations"); err != nil {
 		log.Error("migration failed", "error", err)
@@ -89,6 +98,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+	readiness["postgres"] = func(ctx context.Context) error { return db.Pool.Ping(ctx) }
 
 	rdb, err := redisclient.New(ctx, cfg.Redis)
 	if err != nil {
@@ -96,8 +106,13 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() { _ = rdb.Close() }()
+	readiness["redis"] = func(ctx context.Context) error { return rdb.Client.Ping(ctx).Err() }
 
 	wsHub := hub.New(log, rdb.Client)
+	reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "omni_websocket_connections",
+		Help: "Open WebSocket connections on this instance.",
+	}, func() float64 { return float64(wsHub.ConnectionCount()) }))
 	go func() {
 		if err := wsHub.StartRedisSubscriber(ctx); err != nil && ctx.Err() == nil {
 			log.Error("websocket redis subscriber stopped", "error", err)
@@ -220,6 +235,7 @@ func main() {
 	var inboxMediaManager mediamanager.Manager
 	if strings.TrimSpace(cfg.StorageService.URL) != "" {
 		mediaMetrics := &mediamanager.MemoryMetrics{}
+		reg.MustRegister(observability.NewSnapshotCollector("omni", mediaMetrics.Values))
 		mediaMgr, mediaErr := mediamanager.NewWhatsAppMediaManagerFromMeta(
 			mediamanager.NewPostgresAssetRepository(db),
 			mediamanager.NewPostgresProviderMediaCacheRepository(db),
@@ -327,19 +343,31 @@ func main() {
 	dashboardService := dashboard.NewService(dashboardRepo, teamRepo, workspaceService, rbacService, &dashboardSyncAdapter{channelSyncService})
 
 	deliveryMetrics := &delivery.Metrics{}
+	reg.MustRegister(observability.NewSnapshotCollector("omni_reconcile", deliveryMetrics.Snapshot))
 	deliveryReconciler := delivery.NewReconciler(campaignRepo, deliveryMetrics, log.Logger, 30*24*time.Hour)
 	go deliveryReconciler.StartDaily(ctx)
 	go windowRecontactService.Start(ctx)
 
 	if cfg.NATS.Enabled {
-		startEventConsumer(ctx, cfg, channelRepo, contactService, conversationService, messageService, templateRepo, onboardingService, channelSyncService, inboxSync, campaignRepo, reportRepo, automationService.Forwarder(), tokenCipher, metaClient, storageClient, rdb, log)
+		startEventConsumer(ctx, cfg, channelRepo, contactService, conversationService, messageService, templateRepo, onboardingService, channelSyncService, inboxSync, campaignRepo, reportRepo, automationService.Forwarder(), tokenCipher, metaClient, storageClient, rdb, log, reg, readiness)
 	}
+	observability.Serve(ctx, observability.MetricsAddr("127.0.0.1:9101"), reg, readiness, log.Logger)
 
 	app := api.NewRouter(api.Deps{
 		Config: cfg,
 		Logger: log,
 		DB:     db,
 		JWT:    jwt,
+		Observability: observability.FiberMiddleware(observability.FiberOptions{
+			Metrics: observability.NewHTTPMetrics(reg),
+			Log:     log.Logger,
+			TeamID: func(c *fiber.Ctx) string {
+				if claims, err := apimiddleware.ClaimsFromContext(c); err == nil && claims != nil {
+					return claims.TeamID.String()
+				}
+				return ""
+			},
+		}),
 		V1: v1.Deps{
 			Auth:                 handler.NewAuthHandler(authService),
 			Workspace:            handler.NewWorkspaceHandler(workspaceService),
@@ -408,8 +436,10 @@ func startEventConsumer(
 	storageClient *storageclient.Client,
 	rdb *redisclient.Client,
 	log *logger.Logger,
+	metricsReg *prometheus.Registry,
+	readiness map[string]observability.Check,
 ) {
-	slogLog := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slogLog := slog.New(observability.WrapLogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	natsCfg := sharedconfig.NATS{
 		URL:           cfg.NATS.URL,
 		StreamName:    cfg.NATS.StreamName,
@@ -445,6 +475,7 @@ func startEventConsumer(
 	}
 
 	deliveryMetrics := &delivery.Metrics{}
+	metricsReg.MustRegister(observability.NewSnapshotCollector("omni", deliveryMetrics.Snapshot))
 	deliveryAggregator := delivery.NewReportAggregator(campaignRepo, reportRepo)
 	deliveryCompletion := delivery.NewCompletionMonitor(campaignRepo, deliveryMetrics, slogLog)
 	deliveryTracker := delivery.NewTracker(campaignRepo, deliveryAggregator, deliveryCompletion, deliveryMetrics, slogLog)
@@ -468,6 +499,17 @@ func startEventConsumer(
 		DLQ:              metaSub,
 		Logger:           slogLog,
 	})
+	metricsReg.MustRegister(observability.NewSnapshotCollector("omni", registry.Metrics().Snapshot))
+	if js, jsErr := nc.JetStream(); jsErr == nil {
+		metricsReg.MustRegister(sharednats.NewJetStreamCollector(js, natsCfg.StreamName,
+			cfg.NATS.ConsumerName+"-meta", cfg.NATS.ConsumerName+"-legacy"))
+	}
+	readiness["nats"] = func(context.Context) error {
+		if !nc.IsConnected() {
+			return errors.New("nats disconnected")
+		}
+		return nil
+	}
 
 	if err := metaSub.Subscribe(ctx, cfg.NATS.ConsumerName+"-meta", registry.HandleCanonical); err != nil {
 		log.Error("meta subscribe failed", "error", err)

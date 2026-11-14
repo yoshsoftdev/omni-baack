@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"github.com/omnichannel/omni-chan-v2/shared/observability"
 	"log/slog"
 	"os"
 )
@@ -16,9 +17,9 @@ func New(env string) *Logger {
 		level = slog.LevelDebug
 	}
 
-	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	handler := observability.WrapLogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: level,
-	})
+	}))
 
 	return &Logger{Logger: slog.New(handler)}
 }
