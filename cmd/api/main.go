@@ -289,7 +289,7 @@ func main() {
 		inboxSync,
 		log.Logger,
 	)
-	onboardingService := onboarding.NewService(deviceRepo, contactRepo, conversationRepo, messageRepo, teamRepo, metaClient)
+	onboardingService := onboarding.NewService(deviceRepo, teamRepo, metaClient)
 
 	channelSyncService := channelsync.NewService(
 		channelSyncRepo,
@@ -466,13 +466,6 @@ func startEventConsumer(
 		return
 	}
 
-	legacySub, err := sharednats.NewSubscriber(nc, natsCfg, slogLog)
-	if err != nil {
-		log.Error("legacy subscriber init failed", "error", err)
-		nc.Close()
-		return
-	}
-
 	deliveryMetrics := &delivery.Metrics{}
 	metricsReg.MustRegister(observability.NewSnapshotCollector("omni", deliveryMetrics.Snapshot))
 	deliveryAggregator := delivery.NewReportAggregator(campaignRepo, reportRepo)
@@ -489,7 +482,6 @@ func startEventConsumer(
 		TokenCipher:      tokenCipher,
 		Storage:          storageClient,
 		Templates:        templateRepo,
-		Onboarding:       onboardingService,
 		ChannelSync:      channelSyncService,
 		Inbox:            inboxSync,
 		Delivery:         deliveryTracker,
@@ -512,11 +504,6 @@ func startEventConsumer(
 
 	if err := metaSub.Subscribe(ctx, cfg.NATS.ConsumerName+"-meta", registry.HandleCanonical); err != nil {
 		log.Error("meta subscribe failed", "error", err)
-		nc.Close()
-		return
-	}
-	if err := legacySub.Subscribe(ctx, cfg.NATS.ConsumerName+"-legacy", registry.HandleLegacy); err != nil {
-		log.Error("legacy subscribe failed", "error", err)
 		nc.Close()
 		return
 	}

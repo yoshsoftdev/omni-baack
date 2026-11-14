@@ -3,18 +3,12 @@ package onboarding
 import (
 	"context"
 	"errors"
-	"github.com/omnichannel/omni-chan-v2/pkg/repository"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/omnichannel/omni-chan-v2/internal/contact"
-	"github.com/omnichannel/omni-chan-v2/internal/conversation"
 	"github.com/omnichannel/omni-chan-v2/internal/device"
-	"github.com/omnichannel/omni-chan-v2/internal/message"
 	"github.com/omnichannel/omni-chan-v2/internal/team"
 	metaclient "github.com/omnichannel/omni-chan-v2/pkg/meta"
-	"github.com/omnichannel/omni-chan-v2/pkg/phone"
 )
 
 var (
@@ -25,29 +19,20 @@ var (
 )
 
 type Service struct {
-	devices       device.Repository
-	contacts      contact.Repository
-	conversations conversation.Repository
-	messages      message.Repository
-	teams         team.Repository
-	meta          *metaclient.Client
+	devices device.Repository
+	teams   team.Repository
+	meta    *metaclient.Client
 }
 
 func NewService(
 	devices device.Repository,
-	contacts contact.Repository,
-	conversations conversation.Repository,
-	messages message.Repository,
 	teams team.Repository,
 	meta *metaclient.Client,
 ) *Service {
 	return &Service{
-		devices:       devices,
-		contacts:      contacts,
-		conversations: conversations,
-		messages:      messages,
-		teams:         teams,
-		meta:          meta,
+		devices: devices,
+		teams:   teams,
+		meta:    meta,
 	}
 }
 
@@ -129,210 +114,6 @@ func (s *Service) StartSync(ctx context.Context, teamID, userID uuid.UUID, role 
 		return nil, err
 	}
 	return toStatusResponse(dev), nil
-}
-
-func (s *Service) HandleWebhook(ctx context.Context, events *metaclient.CoexWebhookEvents) error {
-	for i := range events.ContactSyncEvents {
-		if err := s.handleContactSync(ctx, &events.ContactSyncEvents[i]); err != nil {
-			return err
-		}
-	}
-	for i := range events.HistoryEvents {
-		if err := s.handleHistory(ctx, &events.HistoryEvents[i]); err != nil {
-			return err
-		}
-	}
-	for i := range events.MessageEchoes {
-		if err := s.handleMessageEcho(ctx, &events.MessageEchoes[i]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Service) handleContactSync(ctx context.Context, event *metaclient.ContactSyncEvent) error {
-	dev, err := s.devices.FindByPhoneNumberID(ctx, event.PhoneNumberID)
-	if err != nil {
-		return nil
-	}
-	if event.Action == "remove" {
-		return nil
-	}
-
-	rawPhone := phone.Normalize(event.PhoneNumber)
-	name := strings.TrimSpace(event.FullName)
-	if name == "" {
-		name = strings.TrimSpace(event.FirstName)
-	}
-	if name == "" {
-		name = rawPhone
-	}
-
-	if _, err := findOrCreateContact(ctx, s.contacts, dev.TeamID, rawPhone, name); err != nil {
-		return err
-	}
-
-	dev.ContactsSyncedCount++
-	if dev.OnboardingStatus != nil && *dev.OnboardingStatus == device.OnboardingPending {
-		syncing := device.OnboardingSyncingContacts
-		dev.OnboardingStatus = &syncing
-	}
-	dev.UpdatedAt = time.Now().UTC()
-	return s.devices.Update(ctx, dev)
-}
-
-func (s *Service) handleHistory(ctx context.Context, event *metaclient.HistoryEvent) error {
-	dev, err := s.devices.FindByPhoneNumberID(ctx, event.PhoneNumberID)
-	if err != nil {
-		return nil
-	}
-
-	if event.Declined {
-		reason := event.DeclineReason
-		if reason == "" {
-			reason = "history sync declined by business"
-		}
-		dev.OnboardingError = &reason
-		return s.completeOnboarding(ctx, dev)
-	}
-
-	businessPhone := ""
-	if dev.PhoneNumber != nil {
-		businessPhone = phone.Normalize(*dev.PhoneNumber)
-	}
-
-	for _, thread := range event.Threads {
-		contactPhone := phone.Normalize(thread.ContactPhone)
-		contactEntity, err := findOrCreateContact(ctx, s.contacts, dev.TeamID, contactPhone, contactPhone)
-		if err != nil {
-			return err
-		}
-		conv, err := findOrCreateConversation(ctx, s.conversations, dev.TeamID, contactEntity.ID, dev.ID)
-		if err != nil {
-			return err
-		}
-
-		for _, histMsg := range thread.Messages {
-			if histMsg.ID == "" {
-				continue
-			}
-			existing, findErr := s.messages.FindByWAMID(ctx, histMsg.ID)
-			if findErr == nil && existing != nil {
-				continue
-			}
-
-			direction := message.DirectionInbound
-			sender := phone.Normalize(histMsg.From)
-			var recipient *string
-			if businessPhone != "" && phone.Normalize(histMsg.From) == businessPhone {
-				direction = message.DirectionOutbound
-				recipient = &contactPhone
-			}
-
-			sentAt := metaclient.ParseUnixTimestamp(histMsg.Timestamp)
-			channelID := dev.ID
-			wamid := histMsg.ID
-			now := time.Now().UTC()
-
-			msg := &message.Message{
-				ID:             uuid.New(),
-				TeamID:         dev.TeamID,
-				ConversationID: conv.ID,
-				ChannelID:      &channelID,
-				WAMID:          &wamid,
-				Direction:      direction,
-				Sender:         sender,
-				Recipient:      recipient,
-				Content:        histMsg.Body,
-				ContentType:    message.ContentText,
-				ReceivedAt:     sentAt,
-				CreatedAt:      now,
-			}
-			if err := s.messages.Create(ctx, msg); err != nil {
-				if errors.Is(err, repository.ErrConflict) {
-					continue // already imported (re-run of history sync)
-				}
-				return err
-			}
-			if err := touchConversationFromMessage(ctx, s.conversations, conv, histMsg.Body, direction == message.DirectionInbound); err != nil {
-				return err
-			}
-			dev.HistoryMessagesSynced++
-		}
-	}
-
-	if event.Progress > dev.HistorySyncProgress {
-		dev.HistorySyncProgress = event.Progress
-	}
-	syncing := device.OnboardingSyncingHistory
-	dev.OnboardingStatus = &syncing
-	dev.UpdatedAt = time.Now().UTC()
-
-	if event.Progress >= 100 {
-		return s.completeOnboarding(ctx, dev)
-	}
-	return s.devices.Update(ctx, dev)
-}
-
-func (s *Service) handleMessageEcho(ctx context.Context, event *metaclient.MessageEchoEvent) error {
-	dev, err := s.devices.FindByPhoneNumberID(ctx, event.PhoneNumberID)
-	if err != nil {
-		return nil
-	}
-
-	contactPhone := phone.Normalize(event.To)
-	contactEntity, err := findOrCreateContact(ctx, s.contacts, dev.TeamID, contactPhone, contactPhone)
-	if err != nil {
-		return err
-	}
-	conv, err := findOrCreateConversation(ctx, s.conversations, dev.TeamID, contactEntity.ID, dev.ID)
-	if err != nil {
-		return err
-	}
-
-	if event.ID != "" {
-		if existing, findErr := s.messages.FindByWAMID(ctx, event.ID); findErr == nil && existing != nil {
-			return nil
-		}
-	}
-
-	sentAt := metaclient.ParseUnixTimestamp(event.Timestamp)
-	channelID := dev.ID
-	wamid := event.ID
-	now := time.Now().UTC()
-	recipient := contactPhone
-
-	msg := &message.Message{
-		ID:             uuid.New(),
-		TeamID:         dev.TeamID,
-		ConversationID: conv.ID,
-		ChannelID:      &channelID,
-		WAMID:          &wamid,
-		Direction:      message.DirectionOutbound,
-		Sender:         phone.Normalize(event.From),
-		Recipient:      &recipient,
-		Content:        event.Body,
-		ContentType:    message.ContentText,
-		ReceivedAt:     sentAt,
-		CreatedAt:      now,
-	}
-	if err := s.messages.Create(ctx, msg); err != nil {
-		if errors.Is(err, repository.ErrConflict) {
-			return nil // echo already stored
-		}
-		return err
-	}
-	return touchConversationFromMessage(ctx, s.conversations, conv, event.Body, false)
-}
-
-func (s *Service) completeOnboarding(ctx context.Context, dev *device.Device) error {
-	completed := device.OnboardingCompleted
-	now := time.Now().UTC()
-	dev.OnboardingStatus = &completed
-	dev.OnboardingCompletedAt = &now
-	dev.HistorySyncProgress = 100
-	dev.UpdatedAt = now
-	return s.devices.Update(ctx, dev)
 }
 
 func (s *Service) ensureMember(ctx context.Context, teamID, userID uuid.UUID) error {

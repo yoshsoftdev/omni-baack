@@ -12,14 +12,12 @@ import (
 	"github.com/omnichannel/omni-chan-v2/internal/eventconsumer/idempotency"
 	"github.com/omnichannel/omni-chan-v2/internal/eventconsumer/resolver"
 	"github.com/omnichannel/omni-chan-v2/internal/message"
-	"github.com/omnichannel/omni-chan-v2/internal/onboarding"
 	"github.com/omnichannel/omni-chan-v2/internal/template"
 	sharedevents "github.com/omnichannel/omni-chan-v2/shared/events"
 )
 
 // Registry routes canonical Meta events to typed handlers.
 type Registry struct {
-	legacy    *LegacyConsumer
 	messages  *MessageHandler
 	statuses  *StatusHandler
 	templates *TemplateHandler
@@ -39,7 +37,6 @@ type Deps struct {
 	TokenCipher      TokenCipher
 	Storage          StorageUploader
 	Templates        template.Repository
-	Onboarding       *onboarding.Service
 	ChannelSync      *channelsync.Service
 	Inbox            Syncer
 	Delivery         CampaignDelivery
@@ -62,7 +59,6 @@ func NewRegistry(deps Deps) *Registry {
 	}
 
 	return &Registry{
-		legacy:    NewLegacyConsumer(deps.Messages, deps.Onboarding, deps.ChannelSync, log),
 		messages:  NewMessageHandler(tenantResolver, deps.Channels, deps.Contacts, deps.Conversations, deps.Messages, deps.Inbox, deps.MetaMedia, deps.InstagramProfile, deps.TokenCipher, deps.Storage, store, metrics, deps.Forwarder, log),
 		statuses:  NewStatusHandler(tenantResolver, deps.Messages, deps.Delivery, store, metrics, log),
 		templates: NewTemplateHandler(tenantResolver, deps.Channels, deps.Templates, store, metrics, log),
@@ -125,9 +121,4 @@ func (r *Registry) HandleCanonical(ctx context.Context, event sharedevents.Canon
 	}
 	r.metrics.IncFailures()
 	return err
-}
-
-// HandleLegacy dispatches legacy events.> envelope events.
-func (r *Registry) HandleLegacy(ctx context.Context, envelope sharedevents.Envelope) error {
-	return r.legacy.Handle(ctx, envelope)
 }
