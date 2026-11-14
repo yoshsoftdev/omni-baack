@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -705,7 +706,8 @@ func (i *Invoker) recordOutboundHistory(
 	if msg.Content == "" {
 		msg.Content = "Automated message"
 	}
-	if err := i.messages.Create(ctx, msg); err != nil {
+	// The message is already sent; a conflict only means it was recorded (e.g. by an echo).
+	if err := i.messages.Create(ctx, msg); err != nil && !errors.Is(err, repository.ErrConflict) {
 		return err
 	}
 	preview := msg.Content

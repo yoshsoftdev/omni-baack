@@ -34,15 +34,32 @@ func NewRepository(db *database.DB) *PostgresRepository {
 	return &PostgresRepository{db: db}
 }
 
+// Create inserts a message. A non-empty wamid is claimed in message_wamids in the
+// same transaction, so a second insert for the same (team, wamid) fails with
+// repository.ErrConflict instead of creating a duplicate (D7, ADR-0008).
 func (r *PostgresRepository) Create(ctx context.Context, m *Message) error {
-	_, err := r.db.Pool.Exec(ctx, `
+	return repository.MapError(r.db.WithTx(ctx, func(tx pgx.Tx) error {
+		if m.WAMID != nil && strings.TrimSpace(*m.WAMID) != "" {
+			tag, err := tx.Exec(ctx, `
+				INSERT INTO message_wamids (team_id, wamid, message_id) VALUES ($1, $2, $3)
+				ON CONFLICT (team_id, wamid) DO NOTHING
+			`, m.TeamID, *m.WAMID, m.ID)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				return fmt.Errorf("%w: message_wamids", repository.ErrConflict)
+			}
+		}
+		_, err := tx.Exec(ctx, `
 		INSERT INTO messages (
 			id, client_message_id, conversation_id, team_id, channel_id, direction, sender, recipient,
 			content, content_type, wamid, wamid_key, reply_to_wamid, reply_to_message_id, status, is_deleted, deleted_at, deleted_by_source, raw_payload, received_at, created_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 	`, m.ID, m.ClientMessageID, m.ConversationID, m.TeamID, m.ChannelID, string(m.Direction), m.Sender, m.Recipient,
-		m.Content, string(m.ContentType), m.WAMID, wamidKeyPtr(m.WAMID), m.ReplyToWAMID, m.ReplyToMessageID, statusPtr(m.Status), m.IsDeleted, m.DeletedAt, deletedBySourcePtr(m.DeletedBySource), nullableJSON(m.RawPayload), m.ReceivedAt, m.CreatedAt)
-	return repository.MapError(err)
+			m.Content, string(m.ContentType), m.WAMID, wamidKeyPtr(m.WAMID), m.ReplyToWAMID, m.ReplyToMessageID, statusPtr(m.Status), m.IsDeleted, m.DeletedAt, deletedBySourcePtr(m.DeletedBySource), nullableJSON(m.RawPayload), m.ReceivedAt, m.CreatedAt)
+		return err
+	}))
 }
 
 func (r *PostgresRepository) FindByID(ctx context.Context, teamID, id uuid.UUID) (*Message, error) {

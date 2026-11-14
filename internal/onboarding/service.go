@@ -3,6 +3,7 @@ package onboarding
 import (
 	"context"
 	"errors"
+	"github.com/omnichannel/omni-chan-v2/pkg/repository"
 	"strings"
 	"time"
 
@@ -248,6 +249,9 @@ func (s *Service) handleHistory(ctx context.Context, event *metaclient.HistoryEv
 				CreatedAt:      now,
 			}
 			if err := s.messages.Create(ctx, msg); err != nil {
+				if errors.Is(err, repository.ErrConflict) {
+					continue // already imported (re-run of history sync)
+				}
 				return err
 			}
 			if err := touchConversationFromMessage(ctx, s.conversations, conv, histMsg.Body, direction == message.DirectionInbound); err != nil {
@@ -313,6 +317,9 @@ func (s *Service) handleMessageEcho(ctx context.Context, event *metaclient.Messa
 		CreatedAt:      now,
 	}
 	if err := s.messages.Create(ctx, msg); err != nil {
+		if errors.Is(err, repository.ErrConflict) {
+			return nil // echo already stored
+		}
 		return err
 	}
 	return touchConversationFromMessage(ctx, s.conversations, conv, event.Body, false)

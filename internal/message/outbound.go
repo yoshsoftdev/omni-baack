@@ -483,8 +483,14 @@ func (s *Service) createOutbound(ctx context.Context, teamID, userID uuid.UUID, 
 	if m.ContentType == "" {
 		m.ContentType = ContentText
 	}
-	if err := serviceerrors.MapRepository(s.messages.Create(ctx, m)); err != nil {
-		return nil, err
+	if err := s.messages.Create(ctx, m); err != nil {
+		// Already sent; an echo may have stored the same wamid first.
+		if errors.Is(err, repository.ErrConflict) && m.WAMID != nil {
+			if existing, findErr := s.messages.FindByWAMID(ctx, *m.WAMID); findErr == nil {
+				return existing, nil
+			}
+		}
+		return nil, serviceerrors.MapRepository(err)
 	}
 	if input.Attachment != nil && s.attachments != nil {
 		if err := s.attachments.Create(ctx, &MessageAttachment{

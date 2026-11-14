@@ -524,6 +524,9 @@ func (s *Service) handleHistoryEvent(ctx context.Context, event *metapkg.History
 				CreatedAt:      now,
 			}
 			if err := s.messages.Create(ctx, msg); err != nil {
+				if errors.Is(err, repository.ErrConflict) {
+					continue // already imported (re-run of history sync)
+				}
 				createErrors++
 				// #region agent log
 				debug.AgentLog("H6", "channelsync/service.go:handleHistoryEvent", "create history message failed", map[string]any{
@@ -634,6 +637,9 @@ func (s *Service) handleMessageEchoEvent(ctx context.Context, event *metapkg.Mes
 		return nil
 	}
 	if err := s.messages.Create(ctx, msg); err != nil {
+		if errors.Is(err, repository.ErrConflict) {
+			return nil // echo already stored
+		}
 		// #region agent log
 		debug.AgentLog("H7", "channelsync/service.go:handleMessageEchoEvent", "create echo message failed", map[string]any{
 			"channel_id": ch.ID.String(), "wamid": event.ID, "error": err.Error(),
