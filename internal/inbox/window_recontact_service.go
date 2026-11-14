@@ -133,22 +133,15 @@ func (s *WindowRecontactService) ensureMember(ctx context.Context, teamID, userI
 	return nil
 }
 
-// Start runs the due-recontact poller until ctx is cancelled.
-func (s *WindowRecontactService) Start(ctx context.Context) {
+// Interval is how often RunOnce should be called (by the scheduler process).
+func (s *WindowRecontactService) Interval() time.Duration { return s.interval }
+
+// RunOnce sends every due recontact. The scheduler calls it under a leader lock.
+func (s *WindowRecontactService) RunOnce(ctx context.Context) {
 	if s == nil || s.store == nil || s.messages == nil {
 		return
 	}
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
 	s.runOnce(ctx)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.runOnce(ctx)
-		}
-	}
 }
 
 func (s *WindowRecontactService) runOnce(ctx context.Context) {

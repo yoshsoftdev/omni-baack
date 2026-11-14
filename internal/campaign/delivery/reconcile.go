@@ -49,23 +49,3 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	}
 	return nil
 }
-
-// StartDaily runs reconciliation once per day until context cancellation.
-func (r *Reconciler) StartDaily(ctx context.Context) {
-	ticker := time.NewTicker(24 * time.Hour)
-	defer ticker.Stop()
-
-	if err := r.Run(ctx); err != nil {
-		r.log.Error("initial reconciliation failed", "error", err)
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := r.Run(ctx); err != nil {
-				r.log.Error("daily reconciliation failed", "error", err)
-			}
-		}
-	}
-}
