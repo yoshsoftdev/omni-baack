@@ -4,37 +4,32 @@ import (
 	"context"
 	"time"
 
+	"github.com/omnichannel/omni-chan-v2/internal/eventconsumer/idempotency/dbq"
 	"github.com/omnichannel/omni-chan-v2/pkg/database"
 )
 
 // PostgresStore is the durable idempotency record (processed_events), shared by
 // every replica and kept across restarts.
+// Queries live in query.sql (sqlc, S5).
 type PostgresStore struct {
-	db *database.DB
+	q *dbq.Queries
 }
 
 func NewPostgresStore(db *database.DB) *PostgresStore {
-	return &PostgresStore{db: db}
+	return &PostgresStore{q: dbq.New(db.Pool)}
 }
 
 func (s *PostgresStore) Seen(ctx context.Context, key string) (bool, error) {
-	var seen bool
-	err := s.db.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM processed_events WHERE key = $1)`, key).Scan(&seen)
-	return seen, err
+	return s.q.IsProcessed(ctx, key)
 }
 
 func (s *PostgresStore) Mark(ctx context.Context, key string) error {
-	_, err := s.db.Pool.Exec(ctx, `INSERT INTO processed_events (key) VALUES ($1) ON CONFLICT (key) DO NOTHING`, key)
-	return err
+	return s.q.MarkProcessed(ctx, key)
 }
 
 // PurgeOlderThan deletes records past the redelivery horizon and returns how many.
 func (s *PostgresStore) PurgeOlderThan(ctx context.Context, age time.Duration) (int64, error) {
-	tag, err := s.db.Pool.Exec(ctx, `DELETE FROM processed_events WHERE processed_at < $1`, time.Now().Add(-age))
-	if err != nil {
-		return 0, err
-	}
-	return tag.RowsAffected(), nil
+	return s.q.PurgeProcessedBefore(ctx, time.Now().Add(-age))
 }
 
 // CachedStore reads a fast cache (Redis) first and falls back to the durable

@@ -1,0 +1,18 @@
+# Type-safe SQL (S5, TODO 6.6): new and touched modules write queries in a
+# query.sql next to the code; `make sqlc` generates the Go. CI fails on drift.
+version: "2"
+sql:
+  - engine: postgresql
+    schema: migrations # golang-migrate layout; sqlc skips *.down.sql
+    queries: internal/eventconsumer/idempotency/query.sql
+    gen:
+      go:
+        package: dbq
+        out: internal/eventconsumer/idempotency/dbq
+        sql_package: pgx/v5
+        omit_unused_structs: true # only models the queries use, not every table
+        overrides:
+          - db_type: timestamptz
+            go_type: time.Time
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID

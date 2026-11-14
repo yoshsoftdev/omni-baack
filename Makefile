@@ -1,4 +1,4 @@
-.PHONY: run run-consumer run-scheduler run-all build test lint migrate-up migrate-down migrate-force
+.PHONY: run run-consumer run-scheduler run-all build test lint sqlc migrate-up migrate-down migrate-force
 
 # The backend is three processes (6.3): api (HTTP+WS), event-consumer (NATS), scheduler.
 run:
@@ -23,6 +23,10 @@ test:
 
 lint:
 	go vet ./...
+
+# Regenerate type-safe queries from sqlc.yaml; CI fails if this would change anything.
+sqlc:
+	docker run --rm -u "$$(id -u):$$(id -g)" -v "$(CURDIR)":/src -w /src sqlc/sqlc:1.31.1 generate
 
 migrate-up:
 	go run ./cmd/migrate -direction=up
