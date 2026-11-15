@@ -85,4 +85,7 @@ type ListFilter struct {
 	TagID           *uuid.UUID
 	SegmentID       *uuid.UUID
 	MarketingStatus *MarketingStatus
+	Source          *Source
+	// City matches case-insensitively as a substring.
+	City string
 }

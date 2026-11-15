@@ -132,6 +132,14 @@ func (r *PostgresRepository) List(ctx context.Context, teamID uuid.UUID, filter 
 		args = append(args, string(*filter.MarketingStatus))
 		where += fmt.Sprintf(` AND c.marketing_status = $%d`, len(args))
 	}
+	if filter.Source != nil {
+		args = append(args, string(*filter.Source))
+		where += fmt.Sprintf(` AND c.source = $%d`, len(args))
+	}
+	if filter.City != "" {
+		args = append(args, "%"+filter.City+"%")
+		where += fmt.Sprintf(` AND c.city ILIKE $%d`, len(args))
+	}
 	if filter.Search != "" {
 		args = append(args, "%"+filter.Search+"%")
 		where += fmt.Sprintf(` AND (

@@ -138,6 +138,8 @@ func Register(router fiber.Router, deps Deps) {
 		contacts.Delete("/field-definitions/:id", deps.Contact.DeleteFieldDefinition)
 		contacts.Get("/", deps.Contact.List)
 		contacts.Post("/", deps.Contact.Create)
+		contacts.Post("/import/csv", deps.Contact.ImportCSV)
+		contacts.Post("/import/excel", deps.Contact.ImportExcel)
 		if deps.Provider != nil {
 			contacts.Get("/:id/providers", deps.Provider.ListByContact)
 			contacts.Get("/:id/activities", deps.Provider.ListActivities)

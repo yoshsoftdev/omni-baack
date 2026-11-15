@@ -160,10 +160,24 @@ func (h *ContactHandler) List(c *fiber.Ctx) error {
 	if err != nil {
 		return mapError(c, err)
 	}
+	var source *contact.Source
+	if raw := strings.TrimSpace(c.Query("source")); raw != "" {
+		value := contact.Source(raw)
+		switch value {
+		case contact.SourceWhatsApp, contact.SourceImport, contact.SourceManual, contact.SourceAPI,
+			contact.SourceMetaInbound, contact.SourceInstagram:
+			source = &value
+		default:
+			// source is a Postgres enum (no meta_sync value); an unknown value would fail the query.
+			return response.BadRequest(c, "invalid source")
+		}
+	}
 	page, err := h.svc.List(c.Context(), actor.TeamID, actor.UserID, actor.Role, contact.ListFilter{
 		Search:          strings.TrimSpace(c.Query("search")),
 		TagID:           tagID,
 		MarketingStatus: marketingStatus,
+		Source:          source,
+		City:            strings.TrimSpace(c.Query("city")),
 	}, params)
 	if err != nil {
 		return mapError(c, err)
@@ -444,4 +458,47 @@ func (h *ContactHandler) DeleteFieldDefinition(c *fiber.Ctx) error {
 		return mapError(c, err)
 	}
 	return response.OK(c, "field definition deleted", nil)
+}
+
+// ImportCSV imports contacts from a CSV upload (see importFile).
+func (h *ContactHandler) ImportCSV(c *fiber.Ctx) error { return h.importFile(c, contact.ParseCSV) }
+
+// ImportExcel imports contacts from the first sheet of an .xlsx upload (see importFile).
+func (h *ContactHandler) ImportExcel(c *fiber.Ctx) error { return h.importFile(c, contact.ParseExcel) }
+
+// importFile takes multipart `file` plus an optional `mapping` JSON object
+// ("file column header" → name|phone|email|notes|city|company; "" skips the column).
+func (h *ContactHandler) importFile(c *fiber.Ctx, parse func([]byte, map[string]string) ([]contact.ImportRow, error)) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	header, err := c.FormFile("file")
+	if err != nil {
+		return response.BadRequest(c, "file is required")
+	}
+	file, err := header.Open()
+	if err != nil {
+		return response.BadRequest(c, "cannot read file")
+	}
+	defer func() { _ = file.Close() }()
+	data, err := contact.ReadUploadFile(file, contact.MaxImportBytes)
+	if err != nil {
+		return response.BadRequest(c, "file too large (max 10 MB)")
+	}
+	mapping := map[string]string{}
+	if raw := strings.TrimSpace(c.FormValue("mapping")); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &mapping); err != nil {
+			return response.BadRequest(c, "mapping must be a JSON object of column header → field")
+		}
+	}
+	rows, err := parse(data, mapping)
+	if err != nil {
+		return response.BadRequest(c, err.Error())
+	}
+	result, err := h.svc.Import(c.Context(), actor.TeamID, actor.UserID, actor.Role, rows)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "import finished", result)
 }
