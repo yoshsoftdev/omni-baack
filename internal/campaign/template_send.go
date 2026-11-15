@@ -42,8 +42,9 @@ func MaterializeMappingFromSnapshot(mapping VariableMapping, variables map[strin
 	}
 	if mapping.Header != nil {
 		out.Header = &HeaderMapping{
-			MediaLink: mapping.Header.MediaLink,
-			MediaID:   mapping.Header.MediaID,
+			MediaLink:       mapping.Header.MediaLink,
+			MediaID:         mapping.Header.MediaID,
+			StorageObjectID: mapping.Header.StorageObjectID,
 		}
 		if len(mapping.Header.Text) > 0 {
 			out.Header.Text = make(map[string]string, len(mapping.Header.Text))
@@ -148,6 +149,8 @@ type HeaderMapping struct {
 	Text      map[string]string `json:"text,omitempty"`
 	MediaLink string            `json:"media_link,omitempty"`
 	MediaID   string            `json:"media_id,omitempty"`
+	// StorageObjectID is a file uploaded for this campaign; it overrides the template's stored media.
+	StorageObjectID string `json:"storage_object_id,omitempty"`
 }
 
 // MediaReference returns the header media reference for Template Builder.

@@ -136,7 +136,7 @@ type ResolveHeaderMediaInput struct {
 
 // ResolveHeaderMediaForSend is a thin adapter from campaign send mapping → Media Manager.
 // Priority:
-//  1. storage_object_id → EnsureMedia (primary)
+//  1. storage_object_id → EnsureMedia (primary; the campaign's own upload wins over the template's)
 //  2. existing Cloud media_id on mapping
 //  3. media_link (deprecated compatibility path)
 //
@@ -166,9 +166,11 @@ func ResolveHeaderMediaForSend(
 		mapping.Header = &cleared
 	}
 
-	defaults, ok := ExtractTemplateHeaderMediaFromTemplate(tpl)
 	storageObjectID := ""
-	if ok {
+	if mapping.Header != nil {
+		storageObjectID = strings.TrimSpace(mapping.Header.StorageObjectID)
+	}
+	if defaults, ok := ExtractTemplateHeaderMediaFromTemplate(tpl); ok && storageObjectID == "" {
 		storageObjectID = strings.TrimSpace(defaults.StorageObjectID)
 	}
 

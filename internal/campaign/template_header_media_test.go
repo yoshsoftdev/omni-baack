@@ -153,12 +153,15 @@ type stubMediaManager struct {
 	err error
 	mu  sync.Mutex
 	n   int
+	// lastAsset is the asset id of the most recent EnsureMedia call.
+	lastAsset uuid.UUID
 }
 
-func (s *stubMediaManager) EnsureMedia(context.Context, media.EnsureInput) (*media.MediaReference, error) {
+func (s *stubMediaManager) EnsureMedia(_ context.Context, in media.EnsureInput) (*media.MediaReference, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.n++
+	s.lastAsset = in.AssetID
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -222,5 +225,38 @@ func TestResolveHeaderMediaForSendEnsureFailure(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected EnsureMedia error to propagate")
+	}
+}
+
+func TestValidateTemplateSendAllowsCampaignUploadedHeader(t *testing.T) {
+	components := json.RawMessage(`[{"type":"HEADER","format":"IMAGE","example":{"header_handle":["4::meta-handle-1"]}},{"type":"BODY","text":"Hi"}]`)
+	tpl := &template.Template{Components: components}
+	mapping := VariableMapping{Header: &HeaderMapping{StorageObjectID: "22222222-2222-2222-2222-222222222222"}}
+
+	if err := ValidateTemplateSend(tpl, mapping, nil); err != nil {
+		t.Fatalf("a header file uploaded for the campaign must satisfy the media requirement: %v", err)
+	}
+}
+
+func TestResolveHeaderMediaForSendCampaignUploadWinsOverTemplate(t *testing.T) {
+	campaignAsset := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	components := json.RawMessage(`[{"type":"HEADER","format":"IMAGE","example":{"storage_object_id":["11111111-1111-1111-1111-111111111111"]}}]`)
+	tpl := &template.Template{Components: components}
+	mgr := &stubMediaManager{ref: &media.MediaReference{AssetID: campaignAsset, ProviderMediaID: "777"}}
+
+	mapping, err := ResolveHeaderMediaForSend(
+		t.Context(),
+		VariableMapping{Header: &HeaderMapping{StorageObjectID: campaignAsset.String()}},
+		tpl,
+		ResolveHeaderMediaInput{TeamID: uuid.New(), Manager: mgr},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mgr.lastAsset != campaignAsset {
+		t.Fatalf("EnsureMedia asset=%s, want the campaign upload %s", mgr.lastAsset, campaignAsset)
+	}
+	if mapping.Header.MediaID != "777" {
+		t.Fatalf("expected EnsureMedia id, got %+v", mapping.Header)
 	}
 }

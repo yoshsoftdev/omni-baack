@@ -65,7 +65,8 @@ func ValidateTemplateSend(
 		}
 	}
 	vars := materialized.ToBuilderVariables()
-	storageBackedHeader := TemplateHasStorageBackedHeaderMedia(tpl)
+	storageBackedHeader := TemplateHasStorageBackedHeaderMedia(tpl) ||
+		(materialized.Header != nil && strings.TrimSpace(materialized.Header.StorageObjectID) != "")
 
 	for index := range required.HeaderText {
 		if err := validateMappedValue("header", index, vars.HeaderText); err != nil {
