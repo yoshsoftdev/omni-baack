@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/omnichannel/omni-chan-v2/internal/broadcast/worker"
 	"github.com/omnichannel/omni-chan-v2/internal/campaign"
@@ -153,13 +152,8 @@ func main() {
 	).WithLifecycle(delivery.NewCompletionMonitor(campaignRepo, &delivery.Metrics{}, slogLog)).
 		WithInboxRecorder(inboxRecorder)
 
-	natsCfg := sharedconfig.NATS{
-		URL:              cfg.NATS.URL,
-		StreamName:       cfg.NATS.StreamName,
-		InternalToken:    cfg.NATS.InternalToken,
-		MaxPublishRetry:  3,
-		PublishRetryWait: 200 * time.Millisecond,
-	}
+	// LoadNATS reads the same NATS_* env as the webhook service, including stream retention and replicas.
+	natsCfg := sharedconfig.LoadNATS()
 	nc, err := sharednats.Connect(natsCfg.URL)
 	if err != nil {
 		log.Error("nats connect failed", "error", err)

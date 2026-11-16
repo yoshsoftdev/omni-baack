@@ -61,13 +61,8 @@ func main() {
 	campaignRepo := campaign.NewRepository(db)
 	metrics := &orchestrator.Metrics{}
 
-	natsCfg := sharedconfig.NATS{
-		URL:              cfg.NATS.URL,
-		StreamName:       cfg.NATS.StreamName,
-		InternalToken:    cfg.NATS.InternalToken,
-		MaxPublishRetry:  3,
-		PublishRetryWait: 200 * time.Millisecond,
-	}
+	// LoadNATS reads the same NATS_* env as the webhook service, including stream retention and replicas.
+	natsCfg := sharedconfig.LoadNATS()
 
 	nc, err := sharednats.Connect(natsCfg.URL)
 	if err != nil {

@@ -462,11 +462,8 @@ func startEventConsumer(
 	readiness map[string]observability.Check,
 ) error {
 	slogLog := slog.New(observability.WrapLogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	natsCfg := sharedconfig.NATS{
-		URL:           cfg.NATS.URL,
-		StreamName:    cfg.NATS.StreamName,
-		InternalToken: cfg.NATS.InternalToken,
-	}
+	// LoadNATS reads the same NATS_* env as the webhook service, including stream retention and replicas.
+	natsCfg := sharedconfig.LoadNATS()
 
 	nc, err := sharednats.Connect(natsCfg.URL)
 	if err != nil {
