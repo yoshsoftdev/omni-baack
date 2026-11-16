@@ -30,6 +30,7 @@ type PermissionRefresher interface {
 }
 
 type EmbeddedSignupService struct {
+	authz               Authorizer
 	meta                MetaClient
 	channels            channel.Repository
 	sessions            EmbeddedSignupSessionRepository
@@ -76,7 +77,10 @@ type StartEmbeddedSignupResult struct {
 
 // StartTeamEmbeddedSignup begins signup without writing channel, credentials, or onboarding rows.
 // The returned session_id is a signed, stateless token (no database write).
-func (s *EmbeddedSignupService) StartTeamEmbeddedSignup(ctx context.Context, teamID, userID uuid.UUID) (*StartEmbeddedSignupResult, error) {
+func (s *EmbeddedSignupService) StartTeamEmbeddedSignup(ctx context.Context, teamID, userID uuid.UUID, role string) (*StartEmbeddedSignupResult, error) {
+	if err := authorize(s.authz, role, permChannelManage); err != nil {
+		return nil, err
+	}
 	if s.cfg.AppID == "" || s.cfg.ConfigID == "" || s.cfg.AppSecret == "" {
 		return nil, serviceerrors.NewValidation("meta", "embedded signup is not configured")
 	}
@@ -100,7 +104,10 @@ func (s *EmbeddedSignupService) StartTeamEmbeddedSignup(ctx context.Context, tea
 }
 
 // StartEmbeddedSignup starts re-authorization for an existing channel (session persisted in DB).
-func (s *EmbeddedSignupService) StartEmbeddedSignup(ctx context.Context, teamID, channelID uuid.UUID) (*StartEmbeddedSignupResult, error) {
+func (s *EmbeddedSignupService) StartEmbeddedSignup(ctx context.Context, teamID, channelID uuid.UUID, role string) (*StartEmbeddedSignupResult, error) {
+	if err := authorize(s.authz, role, permChannelManage); err != nil {
+		return nil, err
+	}
 	if _, err := s.channels.FindByID(ctx, teamID, channelID); err != nil {
 		return nil, serviceerrors.MapRepository(err)
 	}
@@ -149,7 +156,10 @@ type EmbeddedSignupStatusResult struct {
 	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 }
 
-func (s *EmbeddedSignupService) GetTeamEmbeddedSignupStatus(ctx context.Context, teamID uuid.UUID, sessionID string) (*EmbeddedSignupStatusResult, error) {
+func (s *EmbeddedSignupService) GetTeamEmbeddedSignupStatus(ctx context.Context, teamID uuid.UUID, role string, sessionID string) (*EmbeddedSignupStatusResult, error) {
+	if err := authorize(s.authz, role, permChannelManage); err != nil {
+		return nil, err
+	}
 	id, err := uuid.Parse(sessionID)
 	if err != nil {
 		return nil, serviceerrors.NewValidation("session_id", "invalid session id")
@@ -157,7 +167,10 @@ func (s *EmbeddedSignupService) GetTeamEmbeddedSignupStatus(ctx context.Context,
 	return s.getEmbeddedSignupStatus(ctx, teamID, id)
 }
 
-func (s *EmbeddedSignupService) GetEmbeddedSignupStatus(ctx context.Context, teamID, channelID uuid.UUID, sessionID string) (*EmbeddedSignupStatusResult, error) {
+func (s *EmbeddedSignupService) GetEmbeddedSignupStatus(ctx context.Context, teamID, channelID uuid.UUID, role string, sessionID string) (*EmbeddedSignupStatusResult, error) {
+	if err := authorize(s.authz, role, permChannelManage); err != nil {
+		return nil, err
+	}
 	session, err := s.loadOwnedSession(ctx, teamID, channelID, sessionID)
 	if err != nil {
 		return nil, err
@@ -240,10 +253,13 @@ type CompleteEmbeddedSignupResult struct {
 // CompleteTeamEmbeddedSignup validates Meta assets, subscribes the app, then persists channel data.
 func (s *EmbeddedSignupService) CompleteTeamEmbeddedSignup(
 	ctx context.Context,
-	teamID, userID uuid.UUID,
+	teamID, userID uuid.UUID, role string,
 	startToken string,
 	input CompleteEmbeddedSignupInput,
 ) (*CompleteEmbeddedSignupResult, error) {
+	if err := authorize(s.authz, role, permChannelManage); err != nil {
+		return nil, err
+	}
 	if s.cfg.AppSecret == "" {
 		return nil, serviceerrors.NewValidation("meta", "embedded signup is not configured")
 	}
@@ -263,10 +279,13 @@ func (s *EmbeddedSignupService) CompleteTeamEmbeddedSignup(
 
 func (s *EmbeddedSignupService) CompleteEmbeddedSignup(
 	ctx context.Context,
-	teamID, channelID uuid.UUID,
+	teamID, channelID uuid.UUID, role string,
 	sessionID string,
 	input CompleteEmbeddedSignupInput,
 ) (*CompleteEmbeddedSignupResult, error) {
+	if err := authorize(s.authz, role, permChannelManage); err != nil {
+		return nil, err
+	}
 	session, err := s.loadOwnedSession(ctx, teamID, channelID, sessionID)
 	if err != nil {
 		return nil, err
@@ -616,3 +635,6 @@ func mapOAuthError(err error) error {
 		return serviceerrors.NewValidation("code", "invalid authorization code")
 	}
 }
+
+// SetAuthorizer enables permission checks (TEAM-04); without it the guarded methods deny.
+func (s *EmbeddedSignupService) SetAuthorizer(a Authorizer) { s.authz = a }

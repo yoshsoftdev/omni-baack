@@ -44,4 +44,6 @@ type MeResponse struct {
 	User UserProfile `json:"user"`
 	Team TeamProfile `json:"team"`
 	Role string      `json:"role"`
+	// Permissions are the codes the role grants, so the UI shows only what the API allows.
+	Permissions []string `json:"permissions"`
 }

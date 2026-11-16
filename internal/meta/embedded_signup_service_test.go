@@ -1,6 +1,10 @@
 package meta_test
 
 import (
+	"github.com/omnichannel/omni-chan-v2/pkg/serviceerrors"
+
+	"errors"
+
 	"context"
 	"sync"
 	"testing"
@@ -8,8 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnichannel/omni-chan-v2/internal/channel"
-	metasvc "github.com/omnichannel/omni-chan-v2/internal/meta"
 	"github.com/omnichannel/omni-chan-v2/internal/config"
+	metasvc "github.com/omnichannel/omni-chan-v2/internal/meta"
 	"github.com/omnichannel/omni-chan-v2/pkg/cryptoutil"
 	metapkg "github.com/omnichannel/omni-chan-v2/pkg/meta"
 	"github.com/omnichannel/omni-chan-v2/pkg/repository"
@@ -180,15 +184,19 @@ func (s *signupChannelRepo) FindByIGUserIDGlobal(context.Context, string) (*chan
 func (s *signupChannelRepo) FindConnectedByType(context.Context, uuid.UUID, channel.ChannelType) (*channel.Channel, error) {
 	return nil, repository.ErrNotFound
 }
-func (s *signupChannelRepo) UpdateHealthMetadata(context.Context, uuid.UUID, []byte) error { return nil }
-
-type mockMetaClient struct {
-	exchange   func(code string) (*metapkg.TokenResponse, error)
-	subscribe  func(wabaID string) error
-	phoneNums  []metasvc.PhoneNumber
+func (s *signupChannelRepo) UpdateHealthMetadata(context.Context, uuid.UUID, []byte) error {
+	return nil
 }
 
-func (m *mockMetaClient) VerifyWebhook(string, string, string, string) (string, error) { return "", nil }
+type mockMetaClient struct {
+	exchange  func(code string) (*metapkg.TokenResponse, error)
+	subscribe func(wabaID string) error
+	phoneNums []metasvc.PhoneNumber
+}
+
+func (m *mockMetaClient) VerifyWebhook(string, string, string, string) (string, error) {
+	return "", nil
+}
 func (m *mockMetaClient) ListTemplates(context.Context, string, string) ([]metasvc.MessageTemplate, error) {
 	return nil, nil
 }
@@ -201,7 +209,9 @@ func (m *mockMetaClient) GetPhoneNumbers(context.Context, string, string) ([]met
 func (m *mockMetaClient) GetPhoneNumber(context.Context, string, string) (*metasvc.PhoneNumber, error) {
 	return &metasvc.PhoneNumber{ID: "phone-1", DisplayPhoneNumber: "+123"}, nil
 }
-func (m *mockMetaClient) GetWABA(context.Context, string, string) (*metasvc.WABA, error) { return nil, nil }
+func (m *mockMetaClient) GetWABA(context.Context, string, string) (*metasvc.WABA, error) {
+	return nil, nil
+}
 func (m *mockMetaClient) GetWABAPrimaryFunding(context.Context, string, string) (string, error) {
 	return "", nil
 }
@@ -236,10 +246,22 @@ func (r *readinessSpy) RefreshReadinessInternal(context.Context, uuid.UUID) erro
 
 func newTestSignupService(meta *mockMetaClient, chRepo *signupChannelRepo, sessions *memorySessionRepo) *metasvc.EmbeddedSignupService {
 	cipher, _ := cryptoutil.NewTokenCipherFromBase64("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
-	return metasvc.NewEmbeddedSignupService(meta, chRepo, sessions, cipher, config.MetaConfig{
+	svc := metasvc.NewEmbeddedSignupService(meta, chRepo, sessions, cipher, config.MetaConfig{
 		AppID: "app", AppSecret: "secret", ConfigID: "cfg",
 	}, &readinessSpy{}, nil)
+	svc.SetAuthorizer(allowAll{})
+	return svc
 }
+
+// allowAll grants every permission; RBAC itself is tested in TestEmbeddedSignupRequiresChannelManage.
+type allowAll struct{}
+
+func (allowAll) Require(string, string) bool { return true }
+
+// rolePerms grants only the listed codes, like rbac.Service for one role.
+type rolePerms map[string]bool
+
+func (r rolePerms) Require(_ string, code string) bool { return r[code] }
 
 func TestEmbeddedSignupDeferredChannelCreate(t *testing.T) {
 	teamID := uuid.New()
@@ -252,8 +274,9 @@ func TestEmbeddedSignupDeferredChannelCreate(t *testing.T) {
 	svc := metasvc.NewEmbeddedSignupService(meta, chRepo, sessions, cipher, config.MetaConfig{
 		AppID: "app", AppSecret: "secret", ConfigID: "cfg",
 	}, spy, nil)
+	svc.SetAuthorizer(allowAll{})
 
-	start, err := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID)
+	start, err := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID, "owner")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -264,7 +287,7 @@ func TestEmbeddedSignupDeferredChannelCreate(t *testing.T) {
 		t.Fatal("start must not create channel before complete")
 	}
 
-	result, err := svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, start.SessionID, metasvc.CompleteEmbeddedSignupInput{
+	result, err := svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, "owner", start.SessionID, metasvc.CompleteEmbeddedSignupInput{
 		Code: "auth-code", OAuthState: start.OAuthState, BusinessID: "biz-1", WABAID: "waba-1", PhoneNumberID: "phone-1",
 	})
 	if err != nil {
@@ -295,8 +318,8 @@ func TestEmbeddedSignupOAuthFailureNoPersist(t *testing.T) {
 		return nil, metapkg.NewAPIError(400, `{"error":{"message":"Invalid authorization code"}}`)
 	}}
 	svc := newTestSignupService(meta, chRepo, newMemorySessionRepo())
-	start, _ := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID)
-	_, err := svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, start.SessionID, metasvc.CompleteEmbeddedSignupInput{
+	start, _ := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID, "owner")
+	_, err := svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, "owner", start.SessionID, metasvc.CompleteEmbeddedSignupInput{
 		Code: "bad", OAuthState: start.OAuthState, WABAID: "waba", PhoneNumberID: "phone-1",
 	})
 	if err == nil {
@@ -316,8 +339,8 @@ func TestEmbeddedSignupSubscriptionFailureStillPersistsCredentials(t *testing.T)
 		subscribe: func(string) error { return metapkg.NewAPIError(400, `{"error":{"message":"fail"}}`) },
 	}
 	svc := newTestSignupService(meta, chRepo, newMemorySessionRepo())
-	start, _ := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID)
-	result, err := svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, start.SessionID, metasvc.CompleteEmbeddedSignupInput{
+	start, _ := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID, "owner")
+	result, err := svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, "owner", start.SessionID, metasvc.CompleteEmbeddedSignupInput{
 		Code: "code", OAuthState: start.OAuthState, WABAID: "waba", PhoneNumberID: "phone-1",
 	})
 	if err != nil {
@@ -344,13 +367,14 @@ func TestEmbeddedSignupOAuthSuccessReauth(t *testing.T) {
 	svc := metasvc.NewEmbeddedSignupService(&mockMetaClient{}, chRepo, sessions, cipher, config.MetaConfig{
 		AppID: "app", AppSecret: "secret", ConfigID: "cfg",
 	}, spy, nil)
+	svc.SetAuthorizer(allowAll{})
 
-	start, err := svc.StartEmbeddedSignup(context.Background(), teamID, channelID)
+	start, err := svc.StartEmbeddedSignup(context.Background(), teamID, channelID, "owner")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 
-	result, err := svc.CompleteEmbeddedSignup(context.Background(), teamID, channelID, start.SessionID, metasvc.CompleteEmbeddedSignupInput{
+	result, err := svc.CompleteEmbeddedSignup(context.Background(), teamID, channelID, "owner", start.SessionID, metasvc.CompleteEmbeddedSignupInput{
 		Code: "auth-code", OAuthState: start.OAuthState, BusinessID: "biz-1", WABAID: "waba-1", PhoneNumberID: "phone-1",
 	})
 	if err != nil {
@@ -371,8 +395,8 @@ func TestEmbeddedSignupExpiredCode(t *testing.T) {
 	teamID := uuid.New()
 	userID := uuid.New()
 	svc := newTestSignupService(meta, &signupChannelRepo{}, newMemorySessionRepo())
-	start, _ := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID)
-	_, err := svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, start.SessionID, metasvc.CompleteEmbeddedSignupInput{
+	start, _ := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID, "owner")
+	_, err := svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, "owner", start.SessionID, metasvc.CompleteEmbeddedSignupInput{
 		Code: "expired", OAuthState: start.OAuthState, WABAID: "waba", PhoneNumberID: "phone-1",
 	})
 	if err == nil {
@@ -385,8 +409,8 @@ func TestEmbeddedSignupCrossTeamAccess(t *testing.T) {
 	otherTeam := uuid.New()
 	userID := uuid.New()
 	svc := newTestSignupService(&mockMetaClient{}, &signupChannelRepo{}, newMemorySessionRepo())
-	start, _ := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID)
-	_, err := svc.CompleteTeamEmbeddedSignup(context.Background(), otherTeam, userID, start.SessionID, metasvc.CompleteEmbeddedSignupInput{
+	start, _ := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID, "owner")
+	_, err := svc.CompleteTeamEmbeddedSignup(context.Background(), otherTeam, userID, "owner", start.SessionID, metasvc.CompleteEmbeddedSignupInput{
 		Code: "code", OAuthState: start.OAuthState, WABAID: "waba", PhoneNumberID: "phone-1",
 	})
 	if err == nil {
@@ -400,15 +424,15 @@ func TestEmbeddedSignupReplayAttack(t *testing.T) {
 	chRepo := &signupChannelRepo{}
 	meta := &mockMetaClient{phoneNums: []metasvc.PhoneNumber{{ID: "phone-1"}}}
 	svc := newTestSignupService(meta, chRepo, newMemorySessionRepo())
-	start1, _ := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID)
-	_, err := svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, start1.SessionID, metasvc.CompleteEmbeddedSignupInput{
+	start1, _ := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID, "owner")
+	_, err := svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, "owner", start1.SessionID, metasvc.CompleteEmbeddedSignupInput{
 		Code: "same-code", OAuthState: start1.OAuthState, WABAID: "waba", PhoneNumberID: "phone-1",
 	})
 	if err != nil {
 		t.Fatalf("first complete: %v", err)
 	}
-	start2, _ := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID)
-	_, err = svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, start2.SessionID, metasvc.CompleteEmbeddedSignupInput{
+	start2, _ := svc.StartTeamEmbeddedSignup(context.Background(), teamID, userID, "owner")
+	_, err = svc.CompleteTeamEmbeddedSignup(context.Background(), teamID, userID, "owner", start2.SessionID, metasvc.CompleteEmbeddedSignupInput{
 		Code: "same-code", OAuthState: start2.OAuthState, WABAID: "waba", PhoneNumberID: "phone-1",
 	})
 	if err == nil {
@@ -421,15 +445,34 @@ func TestEmbeddedSignupSessionExpiration(t *testing.T) {
 	channelID := uuid.New()
 	sessions := newMemorySessionRepo()
 	svc := newTestSignupService(&mockMetaClient{}, &signupChannelRepo{ch: &channel.Channel{ID: channelID, TeamID: teamID}}, sessions)
-	start, _ := svc.StartEmbeddedSignup(context.Background(), teamID, channelID)
+	start, _ := svc.StartEmbeddedSignup(context.Background(), teamID, channelID, "owner")
 	id, _ := uuid.Parse(start.SessionID)
 	sessions.mu.Lock()
 	sessions.sessions[id].ExpiresAt = time.Now().UTC().Add(-time.Minute)
 	sessions.mu.Unlock()
-	_, err := svc.CompleteEmbeddedSignup(context.Background(), teamID, channelID, start.SessionID, metasvc.CompleteEmbeddedSignupInput{
+	_, err := svc.CompleteEmbeddedSignup(context.Background(), teamID, channelID, "owner", start.SessionID, metasvc.CompleteEmbeddedSignupInput{
 		Code: "code", OAuthState: start.OAuthState, WABAID: "waba", PhoneNumberID: "phone-1",
 	})
 	if err == nil {
 		t.Fatal("expected expired session error")
+	}
+}
+
+// TEAM-04: connecting a number needs device.manage; an agent (device.view only) is refused
+// before any session is created.
+func TestEmbeddedSignupRequiresChannelManage(t *testing.T) {
+	sessions := newMemorySessionRepo()
+	svc := newTestSignupService(&mockMetaClient{}, &signupChannelRepo{}, sessions)
+	svc.SetAuthorizer(rolePerms{"device.view": true})
+
+	_, err := svc.StartTeamEmbeddedSignup(context.Background(), uuid.New(), uuid.New(), "agent")
+	if !errors.Is(err, serviceerrors.ErrForbidden) {
+		t.Fatalf("err = %v, want ErrForbidden", err)
+	}
+
+	unset := newTestSignupService(&mockMetaClient{}, &signupChannelRepo{}, sessions)
+	unset.SetAuthorizer(nil)
+	if _, err := unset.StartTeamEmbeddedSignup(context.Background(), uuid.New(), uuid.New(), "owner"); !errors.Is(err, serviceerrors.ErrForbidden) {
+		t.Fatalf("without an authorizer the check must fail closed, got %v", err)
 	}
 }

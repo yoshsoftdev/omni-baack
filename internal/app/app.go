@@ -146,6 +146,7 @@ func Run(role Role) {
 	quotaSvc := quota.NewService(teamRepo, channelRepo, contactRepo)
 	refreshRepo := auth.NewRefreshRepository(db)
 	authService := auth.NewService(userRepo, teamRepo, refreshRepo, jwt, cfg.JWT)
+	authService.SetPermissionSource(rbacService.PermissionsForRole)
 	actorResolver := auth.NewResolver(teamRepo, rbacService)
 
 	templateRepo := template.NewRepository(db)
@@ -165,8 +166,10 @@ func Run(role Role) {
 		WithStorage(storageClient)
 	channelSyncRepo := channelsync.NewRepository(db)
 	metaHealthService := metasvc.NewHealthService(metaAPI, metaClient, channelRepo, tokenCipher, metaSyncService, log.Logger)
+	metaHealthService.SetAuthorizer(rbacService)
 	embeddedSignupSessionRepo := metasvc.NewEmbeddedSignupSessionRepository(db)
 	paymentService := metasvc.NewPaymentService(metaAPI, channelRepo, tokenCipher, cfg.Meta, log.Logger)
+	paymentService.SetAuthorizer(rbacService)
 
 	workspaceService := workspace.NewService(
 		teamRepo, quotaSvc, rbacService,
@@ -312,6 +315,7 @@ func Run(role Role) {
 		workspaceService,
 	)
 	embeddedSignupService.SetPermissionRefresher(channelSyncService)
+	embeddedSignupService.SetAuthorizer(rbacService)
 
 	templateService := template.NewService(templateRepo, channelRepo, teamRepo, rbacService, metaSyncService)
 

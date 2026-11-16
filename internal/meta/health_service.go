@@ -35,6 +35,7 @@ type TemplateSyncChecker interface {
 }
 
 type HealthService struct {
+	authz       Authorizer
 	meta        MetaClient
 	instagram   *metapkg.Client
 	channels    channel.Repository
@@ -50,7 +51,10 @@ func NewHealthService(meta MetaClient, instagram *metapkg.Client, channels chann
 	return &HealthService{meta: meta, instagram: instagram, channels: channels, cipher: cipher, syncChecker: syncChecker, log: log}
 }
 
-func (s *HealthService) CheckChannel(ctx context.Context, teamID, channelID uuid.UUID) (*HealthResult, error) {
+func (s *HealthService) CheckChannel(ctx context.Context, teamID, channelID uuid.UUID, role string) (*HealthResult, error) {
+	if err := authorize(s.authz, role, permChannelView); err != nil {
+		return nil, err
+	}
 	ch, err := s.channels.FindByID(ctx, teamID, channelID)
 	if err != nil {
 		return nil, serviceerrors.MapRepository(err)
@@ -139,3 +143,6 @@ func (s *HealthService) checkInstagramChannel(ctx context.Context, token string,
 	result.Healthy = result.Checks.Token && result.Checks.Profile
 	return result, nil
 }
+
+// SetAuthorizer enables permission checks (TEAM-04); without it the guarded methods deny.
+func (s *HealthService) SetAuthorizer(a Authorizer) { s.authz = a }

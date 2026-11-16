@@ -20,9 +20,9 @@ const (
 	PaymentStatusRestricted  = "restricted"
 	PaymentStatusUnavailable = "unavailable"
 
-	PaymentMessageMissing    = "Metode pembayaran belum dikonfigurasi."
-	PaymentMessageOK         = "Payment OK"
-	PaymentMessageRestricted = "Akun WhatsApp Business sedang dibatasi oleh Meta. Silakan buka WhatsApp Manager untuk melihat dan menyelesaikan masalah."
+	PaymentMessageMissing     = "Metode pembayaran belum dikonfigurasi."
+	PaymentMessageOK          = "Payment OK"
+	PaymentMessageRestricted  = "Akun WhatsApp Business sedang dibatasi oleh Meta. Silakan buka WhatsApp Manager untuk melihat dan menyelesaikan masalah."
 	PaymentMessageUnavailable = "Tidak dapat memastikan status pembayaran dari Meta saat ini. Coba refresh atau buka Meta Billing."
 	PaymentCheckSourceFunding = "primary_funding_id"
 	PaymentCheckSourceHealth  = "health_status"
@@ -52,6 +52,7 @@ type PaymentLinkResult struct {
 }
 
 type PaymentService struct {
+	authz    Authorizer
 	meta     MetaClient
 	channels channel.Repository
 	cipher   *cryptoutil.TokenCipher
@@ -66,11 +67,17 @@ func NewPaymentService(meta MetaClient, channels channel.Repository, cipher *cry
 	return &PaymentService{meta: meta, channels: channels, cipher: cipher, cfg: cfg, log: log}
 }
 
-func (s *PaymentService) GetPaymentStatus(ctx context.Context, teamID, channelID uuid.UUID) (*PaymentStatusResult, error) {
+func (s *PaymentService) GetPaymentStatus(ctx context.Context, teamID, channelID uuid.UUID, role string) (*PaymentStatusResult, error) {
+	if err := authorize(s.authz, role, permChannelView); err != nil {
+		return nil, err
+	}
 	return s.inspectChannelPayment(ctx, teamID, channelID)
 }
 
-func (s *PaymentService) GetPaymentLink(ctx context.Context, teamID, channelID uuid.UUID) (*PaymentLinkResult, error) {
+func (s *PaymentService) GetPaymentLink(ctx context.Context, teamID, channelID uuid.UUID, role string) (*PaymentLinkResult, error) {
+	if err := authorize(s.authz, role, permChannelManage); err != nil {
+		return nil, err
+	}
 	ch, err := s.channels.FindByID(ctx, teamID, channelID)
 	if err != nil {
 		return nil, serviceerrors.MapRepository(err)
@@ -476,3 +483,6 @@ func applyPaymentURLPlaceholders(template string, ch *channel.Channel) string {
 	}
 	return out
 }
+
+// SetAuthorizer enables permission checks (TEAM-04); without it the guarded methods deny.
+func (s *PaymentService) SetAuthorizer(a Authorizer) { s.authz = a }

@@ -58,7 +58,8 @@ func TestHealthServiceMissingWABA(t *testing.T) {
 	cipher, _ := cryptoutil.NewTokenCipherFromBase64("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
 	chRepo := stubChannelRepo{ch: &channel.Channel{ID: channelID, TeamID: teamID}}
 	health := metasvc.NewHealthService(nil, nil, chRepo, cipher, nil, nil)
-	result, err := health.CheckChannel(context.Background(), teamID, channelID)
+	health.SetAuthorizer(allowAll{})
+	result, err := health.CheckChannel(context.Background(), teamID, channelID, "owner")
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}

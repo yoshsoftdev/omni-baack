@@ -199,7 +199,7 @@ func (h *ChannelHandler) Health(c *fiber.Ctx) error {
 	if h.health == nil {
 		return response.FeatureNotAvailable(c, "channel health checks are not configured")
 	}
-	result, err := h.health.CheckChannel(c.Context(), actor.TeamID, id)
+	result, err := h.health.CheckChannel(c.Context(), actor.TeamID, id, actor.Role)
 	if err != nil {
 		return mapError(c, err)
 	}
@@ -214,7 +214,7 @@ func (h *ChannelHandler) StartTeamEmbeddedSignup(c *fiber.Ctx) error {
 	if h.embeddedSignup == nil {
 		return response.FeatureNotAvailable(c, "embedded signup is not configured")
 	}
-	result, err := h.embeddedSignup.StartTeamEmbeddedSignup(c.Context(), actor.TeamID, actor.UserID)
+	result, err := h.embeddedSignup.StartTeamEmbeddedSignup(c.Context(), actor.TeamID, actor.UserID, actor.Role)
 	if err != nil {
 		return mapError(c, err)
 	}
@@ -237,7 +237,7 @@ func (h *ChannelHandler) CompleteTeamEmbeddedSignup(c *fiber.Ctx) error {
 	if h.embeddedSignup == nil {
 		return response.FeatureNotAvailable(c, "embedded signup is not configured")
 	}
-	result, err := h.embeddedSignup.CompleteTeamEmbeddedSignup(c.Context(), actor.TeamID, actor.UserID, sessionID, metasvc.CompleteEmbeddedSignupInput{
+	result, err := h.embeddedSignup.CompleteTeamEmbeddedSignup(c.Context(), actor.TeamID, actor.UserID, actor.Role, sessionID, metasvc.CompleteEmbeddedSignupInput{
 		Code:          req.Code,
 		OAuthState:    req.OAuthState,
 		BusinessID:    req.BusinessID,
@@ -262,7 +262,7 @@ func (h *ChannelHandler) GetTeamEmbeddedSignupStatus(c *fiber.Ctx) error {
 	if h.embeddedSignup == nil {
 		return response.FeatureNotAvailable(c, "embedded signup is not configured")
 	}
-	result, err := h.embeddedSignup.GetTeamEmbeddedSignupStatus(c.Context(), actor.TeamID, sessionID)
+	result, err := h.embeddedSignup.GetTeamEmbeddedSignupStatus(c.Context(), actor.TeamID, actor.Role, sessionID)
 	if err != nil {
 		return mapError(c, err)
 	}
@@ -281,7 +281,7 @@ func (h *ChannelHandler) StartEmbeddedSignup(c *fiber.Ctx) error {
 	if h.embeddedSignup == nil {
 		return response.FeatureNotAvailable(c, "embedded signup is not configured")
 	}
-	result, err := h.embeddedSignup.StartEmbeddedSignup(c.Context(), actor.TeamID, id)
+	result, err := h.embeddedSignup.StartEmbeddedSignup(c.Context(), actor.TeamID, id, actor.Role)
 	if err != nil {
 		return mapError(c, err)
 	}
@@ -316,7 +316,7 @@ func (h *ChannelHandler) CompleteEmbeddedSignup(c *fiber.Ctx) error {
 	if h.embeddedSignup == nil {
 		return response.FeatureNotAvailable(c, "embedded signup is not configured")
 	}
-	result, err := h.embeddedSignup.CompleteEmbeddedSignup(c.Context(), actor.TeamID, channelID, sessionID, metasvc.CompleteEmbeddedSignupInput{
+	result, err := h.embeddedSignup.CompleteEmbeddedSignup(c.Context(), actor.TeamID, channelID, actor.Role, sessionID, metasvc.CompleteEmbeddedSignupInput{
 		Code:          req.Code,
 		OAuthState:    req.OAuthState,
 		BusinessID:    req.BusinessID,
@@ -345,7 +345,7 @@ func (h *ChannelHandler) GetEmbeddedSignupStatus(c *fiber.Ctx) error {
 	if h.embeddedSignup == nil {
 		return response.FeatureNotAvailable(c, "embedded signup is not configured")
 	}
-	result, err := h.embeddedSignup.GetEmbeddedSignupStatus(c.Context(), actor.TeamID, channelID, sessionID)
+	result, err := h.embeddedSignup.GetEmbeddedSignupStatus(c.Context(), actor.TeamID, channelID, actor.Role, sessionID)
 	if err != nil {
 		return mapError(c, err)
 	}
@@ -364,7 +364,7 @@ func (h *ChannelHandler) GetPaymentStatus(c *fiber.Ctx) error {
 	if h.payment == nil {
 		return response.FeatureNotAvailable(c, "payment status checks are not configured")
 	}
-	result, err := h.payment.GetPaymentStatus(c.Context(), actor.TeamID, id)
+	result, err := h.payment.GetPaymentStatus(c.Context(), actor.TeamID, id, actor.Role)
 	if err != nil {
 		return mapError(c, err)
 	}
@@ -383,7 +383,7 @@ func (h *ChannelHandler) CreatePaymentLink(c *fiber.Ctx) error {
 	if h.payment == nil {
 		return response.FeatureNotAvailable(c, "payment setup is not configured")
 	}
-	result, err := h.payment.GetPaymentLink(c.Context(), actor.TeamID, id)
+	result, err := h.payment.GetPaymentLink(c.Context(), actor.TeamID, id, actor.Role)
 	if err != nil {
 		return mapError(c, err)
 	}
@@ -478,7 +478,7 @@ func (h *ChannelHandler) ReauthorizePermissions(c *fiber.Ctx) error {
 	if h.embeddedSignup == nil {
 		return response.FeatureNotAvailable(c, "embedded signup is not configured")
 	}
-	result, err := h.embeddedSignup.StartEmbeddedSignup(c.Context(), actor.TeamID, id)
+	result, err := h.embeddedSignup.StartEmbeddedSignup(c.Context(), actor.TeamID, id, actor.Role)
 	if err != nil {
 		return mapError(c, err)
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,11 +28,18 @@ var (
 )
 
 type Service struct {
-	users    user.Repository
-	teams    team.Repository
-	refresh  RefreshRepository
-	jwt      *jwtmanager.Manager
+	users      user.Repository
+	teams      team.Repository
+	refresh    RefreshRepository
+	jwt        *jwtmanager.Manager
 	refreshTTL time.Duration
+	// permissions resolves a role's granted codes for Me; nil means none.
+	permissions func(role string) map[string]bool
+}
+
+// SetPermissionSource lets Me report the role's permissions (rbac.Service.PermissionsForRole).
+func (s *Service) SetPermissionSource(fn func(role string) map[string]bool) {
+	s.permissions = fn
 }
 
 func NewService(
@@ -322,8 +330,23 @@ func (s *Service) Me(ctx context.Context, userID, teamID uuid.UUID, role string)
 			Name: t.Name,
 			Slug: t.Slug,
 		},
-		Role: role,
+		Role:        role,
+		Permissions: s.grantedPermissions(role),
 	}, nil
+}
+
+func (s *Service) grantedPermissions(role string) []string {
+	out := []string{}
+	if s.permissions == nil {
+		return out
+	}
+	for code, granted := range s.permissions(role) {
+		if granted {
+			out = append(out, code)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (s *Service) issueSession(ctx context.Context, u *user.User, t *team.Team, role string) (*Session, error) {
