@@ -46,3 +46,27 @@ func TestSyncService_HandleOutboundReopensClosedConversation(t *testing.T) {
 		t.Fatalf("expected reopen activity, calls=%d", collab.calls)
 	}
 }
+
+// 9.2/9.3: an automated reply is not a human response: first response time, the last agent
+// message and the customer's waiting clock are left untouched.
+func TestSyncService_HandleOutboundAutomatedIsNotAHumanResponse(t *testing.T) {
+	teamID, convID := uuid.New(), uuid.New()
+	waiting := time.Now().Add(-time.Minute).UTC()
+	conv := &conversation.Conversation{ID: convID, TeamID: teamID, Status: conversation.StatusOpen, WaitingSince: &waiting}
+	repo := &memConvRepo{conv: conv}
+	svc := inbox.NewSyncService(repo, nil, &memSettings{}, nil, &memRT{})
+
+	msg := &message.Message{ID: uuid.New(), Content: "Selamat datang!"}
+	if _, err := svc.HandleOutbound(context.Background(), inbox.OutboundParams{
+		TeamID: teamID, AgentID: uuid.New(), Conversation: conv, Message: msg, Automated: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	u := repo.syncs[len(repo.syncs)-1]
+	if u.SetFirstResponseAt || u.LastAgentMessageAt != nil || u.ClearWaitingSince {
+		t.Fatalf("automated reply touched human-response fields: %+v", u)
+	}
+	if !u.TouchLastMessage || u.LastMessagePreview != "Selamat datang!" {
+		t.Fatalf("the conversation preview should still show the reply: %+v", u)
+	}
+}

@@ -49,7 +49,30 @@ type MessageHandler struct {
 	idempotency      idempotency.Store
 	metrics          *Metrics
 	forwarder        InboundMessageForwarder
+	autoResponder    InboundAutoResponder
 	log              *slog.Logger
+}
+
+// InboundAutoResponder sends welcome and keyword replies (inbox.AutoReplyService). It never fails ingestion.
+type InboundAutoResponder interface {
+	HandleInbound(ctx context.Context, in inbox.AutoReplyInbound)
+}
+
+// SetAutoResponder enables automatic replies on newly stored inbound messages (9.2).
+func (h *MessageHandler) SetAutoResponder(r InboundAutoResponder) { h.autoResponder = r }
+
+// autoReply runs after a new inbound message is stored; redeliveries (msgCreated false) are skipped.
+func (h *MessageHandler) autoReply(ctx context.Context, teamID uuid.UUID, conv *conversation.Conversation, convCreated bool, msg *message.Message) {
+	if h.autoResponder == nil {
+		return
+	}
+	h.autoResponder.HandleInbound(ctx, inbox.AutoReplyInbound{
+		TeamID:              teamID,
+		ConversationID:      conv.ID,
+		ConversationCreated: convCreated,
+		LastHumanReplyAt:    conv.LastAgentMessageAt,
+		Message:             msg,
+	})
 }
 
 // InboundMessageForwarder pushes received messages to customer apps.
@@ -299,6 +322,9 @@ func (h *MessageHandler) processInstagram(ctx context.Context, event sharedevent
 			Contact:            contactEntity,
 			Message:            msg,
 		})
+	}
+	if msgCreated {
+		h.autoReply(ctx, tenant.TeamID, conv, convCreated, msg)
 	}
 	return nil
 }
@@ -614,6 +640,9 @@ func (h *MessageHandler) process(ctx context.Context, event sharedevents.Canonic
 			Contact:            contactEntity,
 			Message:            msg,
 		})
+	}
+	if msgCreated {
+		h.autoReply(ctx, tenant.TeamID, conv, convCreated, msg)
 	}
 	return nil
 }

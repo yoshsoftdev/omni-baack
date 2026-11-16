@@ -282,6 +282,13 @@ func Register(router fiber.Router, deps Deps) {
 		inboxSettings := protected.Group("/inbox/settings")
 		inboxSettings.Get("/window-recontact", deps.Inbox.GetWindowRecontactSettings)
 		inboxSettings.Patch("/window-recontact", deps.Inbox.UpdateWindowRecontactSettings)
+		inboxSettings.Get("/welcome", deps.Inbox.GetWelcomeSettings)
+		inboxSettings.Put("/welcome", deps.Inbox.UpdateWelcomeSettings)
+		keywordRules := protected.Group("/inbox/keyword-rules")
+		keywordRules.Get("/", deps.Inbox.ListKeywordRules)
+		keywordRules.Post("/", deps.Inbox.CreateKeywordRule)
+		keywordRules.Patch("/:id", deps.Inbox.UpdateKeywordRule)
+		keywordRules.Delete("/:id", deps.Inbox.DeleteKeywordRule)
 	}
 
 	if deps.Workspace != nil {

@@ -12,10 +12,11 @@ import (
 type InboxHandler struct {
 	list            *inbox.ListService
 	windowRecontact *inbox.WindowRecontactService
+	autoReply       *inbox.AutoReplyService
 }
 
-func NewInboxHandler(list *inbox.ListService, windowRecontact *inbox.WindowRecontactService) *InboxHandler {
-	return &InboxHandler{list: list, windowRecontact: windowRecontact}
+func NewInboxHandler(list *inbox.ListService, windowRecontact *inbox.WindowRecontactService, autoReply *inbox.AutoReplyService) *InboxHandler {
+	return &InboxHandler{list: list, windowRecontact: windowRecontact, autoReply: autoReply}
 }
 
 func (h *InboxHandler) List(c *fiber.Ctx) error {
@@ -122,4 +123,117 @@ func (h *InboxHandler) UpdateWindowRecontactSettings(c *fiber.Ctx) error {
 		return mapError(c, err)
 	}
 	return response.OK(c, "window recontact settings updated", updated)
+}
+
+type welcomeRequest struct {
+	Enabled bool   `json:"enabled"`
+	Text    string `json:"text"`
+}
+
+type keywordRuleRequest struct {
+	Keywords  []string `json:"keywords"`
+	MatchType string   `json:"match_type"`
+	ReplyText string   `json:"reply_text"`
+	Enabled   *bool    `json:"enabled"`
+	SortOrder int      `json:"sort_order"`
+}
+
+func (r keywordRuleRequest) rule() inbox.KeywordRule {
+	enabled := true
+	if r.Enabled != nil {
+		enabled = *r.Enabled
+	}
+	return inbox.KeywordRule{Keywords: r.Keywords, MatchType: r.MatchType, ReplyText: r.ReplyText, Enabled: enabled, SortOrder: r.SortOrder}
+}
+
+// GetWelcomeSettings returns the welcome message sent on a customer's first conversation (9.2).
+func (h *InboxHandler) GetWelcomeSettings(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	settings, err := h.autoReply.GetWelcome(c.Context(), actor.TeamID, actor.UserID, actor.Role)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", settings)
+}
+
+func (h *InboxHandler) UpdateWelcomeSettings(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	var req welcomeRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	settings, err := h.autoReply.UpdateWelcome(c.Context(), actor.TeamID, actor.UserID, actor.Role, inbox.WelcomeSettings{Enabled: req.Enabled, Text: req.Text})
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "welcome message updated", settings)
+}
+
+func (h *InboxHandler) ListKeywordRules(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	rules, err := h.autoReply.ListRules(c.Context(), actor.TeamID, actor.UserID, actor.Role)
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", fiber.Map{"items": rules})
+}
+
+func (h *InboxHandler) CreateKeywordRule(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	var req keywordRuleRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	rule, err := h.autoReply.CreateRule(c.Context(), actor.TeamID, actor.UserID, actor.Role, req.rule())
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.Created(c, "keyword rule created", rule)
+}
+
+func (h *InboxHandler) UpdateKeywordRule(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid rule id")
+	}
+	var req keywordRuleRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "invalid request body")
+	}
+	rule, err := h.autoReply.UpdateRule(c.Context(), actor.TeamID, actor.UserID, actor.Role, id, req.rule())
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "keyword rule updated", rule)
+}
+
+func (h *InboxHandler) DeleteKeywordRule(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	id, err := parseUUIDParam(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "invalid rule id")
+	}
+	if err := h.autoReply.DeleteRule(c.Context(), actor.TeamID, actor.UserID, actor.Role, id); err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "keyword rule deleted", nil)
 }

@@ -41,6 +41,7 @@ type Deps struct {
 	Inbox            Syncer
 	Delivery         CampaignDelivery
 	Forwarder        InboundMessageForwarder
+	AutoResponder    InboundAutoResponder
 	Idempotency      idempotency.Store
 	DLQ              ConsumerDLQ
 	Logger           *slog.Logger
@@ -58,8 +59,12 @@ func NewRegistry(deps Deps) *Registry {
 		store = idempotency.NewMemoryStore(0)
 	}
 
+	messages := NewMessageHandler(tenantResolver, deps.Channels, deps.Contacts, deps.Conversations, deps.Messages, deps.Inbox, deps.MetaMedia, deps.InstagramProfile, deps.TokenCipher, deps.Storage, store, metrics, deps.Forwarder, log)
+	if deps.AutoResponder != nil {
+		messages.SetAutoResponder(deps.AutoResponder)
+	}
 	return &Registry{
-		messages:  NewMessageHandler(tenantResolver, deps.Channels, deps.Contacts, deps.Conversations, deps.Messages, deps.Inbox, deps.MetaMedia, deps.InstagramProfile, deps.TokenCipher, deps.Storage, store, metrics, deps.Forwarder, log),
+		messages:  messages,
 		statuses:  NewStatusHandler(tenantResolver, deps.Messages, deps.Delivery, store, metrics, log),
 		templates: NewTemplateHandler(tenantResolver, deps.Channels, deps.Templates, store, metrics, log),
 		channels:  NewChannelHandler(tenantResolver, deps.Channels, deps.ChannelSync, store, metrics, log),

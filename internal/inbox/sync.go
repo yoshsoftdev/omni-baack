@@ -27,6 +27,9 @@ type OutboundParams struct {
 	AgentID      uuid.UUID
 	Conversation *conversation.Conversation
 	Message      *message.Message
+	// Automated (welcome/keyword auto-replies) is not a human response: first-response time,
+	// last agent message and the customer's waiting clock stay as they were.
+	Automated bool
 }
 
 // CollaborationRecorder persists inbox timeline entries.
@@ -160,23 +163,27 @@ func (s *SyncService) HandleOutbound(ctx context.Context, p OutboundParams) (*co
 		status = conversation.StatusOpen
 	}
 
-	setFirstResponse := p.Conversation.FirstResponseAt == nil
+	setFirstResponse := p.Conversation.FirstResponseAt == nil && !p.Automated
 	working := *p.Conversation
 	working.Status = status
 	working.UnreadCount = unread
-	working.LastAgentMessageAt = &now
+	var agentAt *time.Time
+	if !p.Automated {
+		agentAt = &now
+		working.LastAgentMessageAt = agentAt
+	}
 	priority := RecalculatePriority(&working, PriorityEventOutbound, now)
 
 	update := conversation.InboxSyncUpdate{
 		Status:             status,
 		UnreadCount:        unread,
-		LastAgentMessageAt: &now,
+		LastAgentMessageAt: agentAt,
 		SetFirstResponseAt: setFirstResponse,
 		LastMessagePreview: p.Message.Content,
 		LastMessageAt:      now,
 		TouchLastMessage:   true,
 		ClearResolutionAt:  reopen,
-		ClearWaitingSince:  true,
+		ClearWaitingSince:  !p.Automated,
 		BasePriority:       &priority.BasePriority,
 		PriorityScore:      &priority.PriorityScore,
 	}

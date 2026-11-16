@@ -298,6 +298,15 @@ func Run(role Role) {
 		inboxSync,
 		log.Logger,
 	)
+	autoReplyService := inbox.NewAutoReplyService(
+		inboxSettingsRepo,
+		teamRepo,
+		rbacService,
+		messageService,
+		conversationRepo,
+		inboxSync,
+		log.Logger,
+	)
 	onboardingService := onboarding.NewService(deviceRepo, teamRepo, metaClient)
 
 	channelSyncService := channelsync.NewService(
@@ -364,7 +373,7 @@ func Run(role Role) {
 			log.Error("event-consumer needs NATS_CONSUMER_ENABLED=true")
 			os.Exit(1)
 		}
-		if err := startEventConsumer(ctx, cfg, channelRepo, contactService, conversationService, messageService, templateRepo, onboardingService, channelSyncService, inboxSync, campaignRepo, reportRepo, automationService.Forwarder(), tokenCipher, metaClient, storageClient, rdb, db, log, reg, readiness); err != nil {
+		if err := startEventConsumer(ctx, cfg, channelRepo, contactService, conversationService, messageService, templateRepo, onboardingService, channelSyncService, inboxSync, campaignRepo, reportRepo, automationService.Forwarder(), autoReplyService, tokenCipher, metaClient, storageClient, rdb, db, log, reg, readiness); err != nil {
 			// A consumer without NATS does nothing; exit so the supervisor restarts it.
 			log.Error("event consumer failed to start", "error", err)
 			os.Exit(1)
@@ -412,7 +421,7 @@ func Run(role Role) {
 			Report:               handler.NewReportHandler(reportService),
 			Conversation:         handler.NewConversationHandler(conversationService, collaborationService),
 			ConversationPresence: handler.NewConversationPresenceHandler(collisionService, conversationService, userRepo),
-			Inbox:                handler.NewInboxHandler(inboxListService, windowRecontactService),
+			Inbox:                handler.NewInboxHandler(inboxListService, windowRecontactService, autoReplyService),
 			Message:              handler.NewMessageHandler(messageService, conversationService, inboxSync),
 			MediaProxy:           handler.NewMediaProxyHandler(mediaTokenIssuer, storageClient, cfg.NATS.InternalToken),
 			StorageServiceURL:    cfg.StorageService.URL,
@@ -456,6 +465,7 @@ func startEventConsumer(
 	campaignRepo campaign.Repository,
 	reportRepo report.Repository,
 	messageForwarder eventconsumer.InboundMessageForwarder,
+	autoResponder eventconsumer.InboundAutoResponder,
 	tokenCipher *cryptoutil.TokenCipher,
 	metaClient *metaclient.Client,
 	storageClient *storageclient.Client,
@@ -506,6 +516,7 @@ func startEventConsumer(
 		Inbox:            inboxSync,
 		Delivery:         deliveryTracker,
 		Forwarder:        messageForwarder,
+		AutoResponder:    autoResponder,
 		Idempotency:      idempStore,
 		DLQ:              metaSub,
 		Logger:           slogLog,
