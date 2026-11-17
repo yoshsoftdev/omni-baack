@@ -30,16 +30,21 @@ func NewClient(apiVersion string) *Client {
 	}
 }
 
-// SetBaseURL overrides the Graph API host (used in tests).
+// SetBaseURL overrides the Graph API host (tests, and META_GRAPH_BASE_URL for E2E stacks).
 func (c *Client) SetBaseURL(baseURL string) {
 	c.graphBaseURL = strings.TrimRight(baseURL, "/")
 }
 
 func (c *Client) graphURL(path string) string {
+	return c.graphBase() + path
+}
+
+// graphBase is the Graph API origin: graph.facebook.com unless overridden (META_GRAPH_BASE_URL, tests).
+func (c *Client) graphBase() string {
 	if c.graphBaseURL != "" {
-		return c.graphBaseURL + path
+		return c.graphBaseURL
 	}
-	return "https://graph.facebook.com" + path
+	return "https://graph.facebook.com"
 }
 
 type PhoneNumber struct {
@@ -51,7 +56,7 @@ type PhoneNumber struct {
 
 func (c *Client) GetPhoneNumber(ctx context.Context, phoneNumberID, accessToken string) (*PhoneNumber, error) {
 	url := fmt.Sprintf(
-		"https://graph.facebook.com/%s/%s?fields=display_phone_number,verified_name,quality_rating",
+		c.graphBase()+"/%s/%s?fields=display_phone_number,verified_name,quality_rating",
 		c.apiVersion,
 		phoneNumberID,
 	)
@@ -124,7 +129,7 @@ func (c *Client) SendTextMessageWithContext(ctx context.Context, phoneNumberID, 
 		return "", err
 	}
 
-	url := fmt.Sprintf("https://graph.facebook.com/%s/%s/messages", c.apiVersion, phoneNumberID)
+	url := fmt.Sprintf(c.graphBase()+"/%s/%s/messages", c.apiVersion, phoneNumberID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return "", err
@@ -159,7 +164,7 @@ func (c *Client) DeleteMessage(ctx context.Context, phoneNumberID, accessToken, 
 	if phoneNumberID == "" || wamid == "" {
 		return fmt.Errorf("phone number id and wamid are required")
 	}
-	url := fmt.Sprintf("https://graph.facebook.com/%s/%s/messages?message_id=%s", c.apiVersion, phoneNumberID, wamid)
+	url := fmt.Sprintf(c.graphBase()+"/%s/%s/messages?message_id=%s", c.apiVersion, phoneNumberID, wamid)
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 	if err != nil {
 		return err

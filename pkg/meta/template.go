@@ -183,7 +183,7 @@ func (c *Client) SendTemplateMessage(
 		return "", err
 	}
 
-	url := fmt.Sprintf("https://graph.facebook.com/%s/%s/messages", c.apiVersion, phoneNumberID)
+	url := fmt.Sprintf(c.graphBase()+"/%s/%s/messages", c.apiVersion, phoneNumberID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return "", err
@@ -235,7 +235,7 @@ func (c *Client) CreateMessageTemplate(
 		return nil, err
 	}
 
-	url := fmt.Sprintf("https://graph.facebook.com/%s/%s/message_templates", c.apiVersion, wabaID)
+	url := fmt.Sprintf(c.graphBase()+"/%s/%s/message_templates", c.apiVersion, wabaID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -274,7 +274,7 @@ func (c *Client) DeleteMessageTemplate(ctx context.Context, wabaID, accessToken,
 		return fmt.Errorf("template name or hsm_id is required")
 	}
 
-	endpoint := fmt.Sprintf("https://graph.facebook.com/%s/%s/message_templates", c.apiVersion, wabaID)
+	endpoint := fmt.Sprintf(c.graphBase()+"/%s/%s/message_templates", c.apiVersion, wabaID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil {
 		return err

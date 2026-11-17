@@ -24,7 +24,7 @@ type WABAPhoneNumbersResponse struct {
 // ExchangeEmbeddedCode exchanges the authorization code from Embedded Signup for an access token.
 // When using the Facebook JS SDK with response_type code, redirect_uri must be omitted.
 func (c *Client) ExchangeEmbeddedCode(ctx context.Context, appID, appSecret, code string) (*TokenResponse, error) {
-	endpoint := fmt.Sprintf("https://graph.facebook.com/%s/oauth/access_token", c.apiVersion)
+	endpoint := fmt.Sprintf(c.graphBase()+"/%s/oauth/access_token", c.apiVersion)
 	params := url.Values{
 		"client_id":     {appID},
 		"client_secret": {appSecret},
@@ -58,7 +58,7 @@ func (c *Client) ExchangeEmbeddedCode(ctx context.Context, appID, appSecret, cod
 
 func (c *Client) ListWABAPhoneNumbers(ctx context.Context, wabaID, accessToken string) ([]PhoneNumber, error) {
 	endpoint := fmt.Sprintf(
-		"https://graph.facebook.com/%s/%s/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating",
+		c.graphBase()+"/%s/%s/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating",
 		c.apiVersion,
 		wabaID,
 	)
@@ -94,7 +94,7 @@ type SMBSyncResponse struct {
 // RequestSMBSync triggers contact or history sync for coexistence onboarding.
 // syncType must be "smb_app_state_sync" or "history".
 func (c *Client) RequestSMBSync(ctx context.Context, phoneNumberID, accessToken, syncType string) (*SMBSyncResponse, error) {
-	endpoint := fmt.Sprintf("https://graph.facebook.com/%s/%s/smb_app_data", c.apiVersion, phoneNumberID)
+	endpoint := fmt.Sprintf(c.graphBase()+"/%s/%s/smb_app_data", c.apiVersion, phoneNumberID)
 	payload := map[string]string{
 		"messaging_product": "whatsapp",
 		"sync_type":         syncType,
@@ -137,7 +137,7 @@ type CoexistenceStatus struct {
 
 func (c *Client) GetCoexistenceStatus(ctx context.Context, phoneNumberID, accessToken string) (*CoexistenceStatus, error) {
 	endpoint := fmt.Sprintf(
-		"https://graph.facebook.com/%s/%s?fields=is_on_biz_app,platform_type",
+		c.graphBase()+"/%s/%s?fields=is_on_biz_app,platform_type",
 		c.apiVersion,
 		phoneNumberID,
 	)

@@ -153,6 +153,7 @@ func Run(role Role) {
 	campaignRepo := campaign.NewRepository(db)
 
 	metaClient := metaclient.NewClient(cfg.Meta.APIVersion)
+	metaClient.SetBaseURL(cfg.Meta.GraphBaseURL)
 	metaAPI := metasvc.NewGraphClient(metaClient)
 	tokenCipher, err := cryptoutil.NewTokenCipherFromBase64(cfg.Meta.TokenEncryptionKey)
 	if err != nil {

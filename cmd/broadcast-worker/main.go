@@ -82,6 +82,7 @@ func main() {
 	templateRepo := template.NewRepository(db)
 	channelRepo := channel.NewRepository(db)
 	metaClient := meta.NewClient(cfg.Meta.APIVersion)
+	metaClient.SetBaseURL(cfg.Meta.GraphBaseURL)
 	metrics := worker.NewMetrics()
 	obsReg := observability.NewRegistry()
 	obsReg.MustRegister(observability.NewSnapshotCollector("omni_broadcast", metrics.Snapshot))

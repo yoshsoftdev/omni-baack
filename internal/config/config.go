@@ -43,11 +43,13 @@ type OTPConfig struct {
 }
 
 type MetaConfig struct {
-	AppID              string
-	AppSecret          string
-	ConfigID           string
-	VerifyToken        string
-	APIVersion         string
+	AppID       string
+	AppSecret   string
+	ConfigID    string
+	VerifyToken string
+	APIVersion  string
+	// GraphBaseURL points the Graph API at another host (E2E fake Graph). Empty = graph.facebook.com.
+	GraphBaseURL       string
 	TokenEncryptionKey string
 	PaymentSetupURL    string
 }
@@ -140,6 +142,7 @@ func Load() (*Config, error) {
 			ConfigID:           getEnv("META_EMBEDDED_CONFIG_ID", ""),
 			VerifyToken:        getEnv("META_VERIFY_TOKEN", ""),
 			APIVersion:         getEnv("META_API_VERSION", "v21.0"),
+			GraphBaseURL:       getEnv("META_GRAPH_BASE_URL", ""),
 			TokenEncryptionKey: getEnv("META_TOKEN_ENCRYPTION_KEY", ""),
 			PaymentSetupURL:    getEnv("META_PAYMENT_SETUP_URL", ""),
 		},
@@ -191,6 +194,10 @@ func (c *Config) Validate() error {
 	}
 	if c.NATS.InternalToken == "" && c.App.Env == "development" {
 		c.NATS.InternalToken = "dev-internal-token"
+	}
+	// Channel access tokens are sent to this host, so production may only talk to real Meta.
+	if c.Meta.GraphBaseURL != "" && c.App.Env == "production" {
+		return fmt.Errorf("META_GRAPH_BASE_URL must not be set when APP_ENV=production")
 	}
 	if c.MediaProxy.TokenSecret == "" {
 		if c.App.Env == "development" {

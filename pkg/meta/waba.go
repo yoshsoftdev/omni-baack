@@ -63,7 +63,7 @@ func (c *Client) GetWABA(ctx context.Context, wabaID, accessToken string) (*WABA
 	// fails the entire GET and hides fields that system-user tokens can read
 	// (status, business_verification_status, owner_business_info).
 	endpoint := fmt.Sprintf(
-		"https://graph.facebook.com/%s/%s?fields=id,name,timezone_id,message_template_namespace,status,business_verification_status,owner_business_info{id,name}",
+		c.graphBase()+"/%s/%s?fields=id,name,timezone_id,message_template_namespace,status,business_verification_status,owner_business_info{id,name}",
 		c.apiVersion,
 		wabaID,
 	)
@@ -73,7 +73,7 @@ func (c *Client) GetWABA(ctx context.Context, wabaID, accessToken string) (*WABA
 // GetWABAPrimaryFunding fetches only primary_funding_id (BSP / billing-sensitive field).
 func (c *Client) GetWABAPrimaryFunding(ctx context.Context, wabaID, accessToken string) (string, error) {
 	endpoint := fmt.Sprintf(
-		"https://graph.facebook.com/%s/%s?fields=primary_funding_id",
+		c.graphBase()+"/%s/%s?fields=primary_funding_id",
 		c.apiVersion,
 		wabaID,
 	)
@@ -92,7 +92,7 @@ func (c *Client) GetWABAPrimaryFunding(ctx context.Context, wabaID, accessToken 
 // GetWABAHealthStatus fetches messaging health (works for Tech Provider tokens).
 func (c *Client) GetWABAHealthStatus(ctx context.Context, wabaID, accessToken string) (*WABAHealthStatus, error) {
 	endpoint := fmt.Sprintf(
-		"https://graph.facebook.com/%s/%s?fields=health_status",
+		c.graphBase()+"/%s/%s?fields=health_status",
 		c.apiVersion,
 		wabaID,
 	)
@@ -110,7 +110,7 @@ func (c *Client) GetWABAHealthStatus(ctx context.Context, wabaID, accessToken st
 
 func (c *Client) GetBusiness(ctx context.Context, businessID, accessToken string) (*Business, error) {
 	endpoint := fmt.Sprintf(
-		"https://graph.facebook.com/%s/%s?fields=id,name,verification_status",
+		c.graphBase()+"/%s/%s?fields=id,name,verification_status",
 		c.apiVersion,
 		businessID,
 	)
@@ -118,7 +118,7 @@ func (c *Client) GetBusiness(ctx context.Context, businessID, accessToken string
 }
 
 func (c *Client) Ping(ctx context.Context, accessToken string) error {
-	endpoint := fmt.Sprintf("https://graph.facebook.com/%s/me?fields=id", c.apiVersion)
+	endpoint := fmt.Sprintf(c.graphBase()+"/%s/me?fields=id", c.apiVersion)
 	_, err := decodeGET[struct {
 		ID string `json:"id"`
 	}](c, ctx, endpoint, accessToken)
@@ -131,7 +131,7 @@ type subscribedAppsResponse struct {
 
 // SubscribeAppToWABA registers this app to receive webhooks for the WABA (required for CoEx).
 func (c *Client) SubscribeAppToWABA(ctx context.Context, wabaID, accessToken string) error {
-	endpoint := fmt.Sprintf("https://graph.facebook.com/%s/%s/subscribed_apps", c.apiVersion, wabaID)
+	endpoint := fmt.Sprintf(c.graphBase()+"/%s/%s/subscribed_apps", c.apiVersion, wabaID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader("{}"))
 	if err != nil {
 		return err

@@ -66,3 +66,26 @@ func TestGetEnv(t *testing.T) {
 		t.Errorf("getEnv set = %q", got)
 	}
 }
+
+// Channel access tokens go to the Graph host, so production must never point it elsewhere.
+func TestValidate_GraphBaseURLForbiddenInProduction(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost:5432/test?sslmode=disable")
+	t.Setenv("JWT_ACCESS_SECRET", "a")
+	t.Setenv("JWT_REFRESH_SECRET", "b")
+	t.Setenv("MEDIA_TOKEN_SECRET", "c")
+	t.Setenv("META_GRAPH_BASE_URL", "http://fake-graph:8080")
+
+	t.Setenv("APP_ENV", "production")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for META_GRAPH_BASE_URL in production")
+	}
+
+	t.Setenv("APP_ENV", "staging")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("staging Load() error = %v", err)
+	}
+	if cfg.Meta.GraphBaseURL != "http://fake-graph:8080" {
+		t.Errorf("GraphBaseURL = %q", cfg.Meta.GraphBaseURL)
+	}
+}

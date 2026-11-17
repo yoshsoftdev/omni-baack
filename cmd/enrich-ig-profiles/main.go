@@ -87,6 +87,7 @@ func main() {
 	}
 
 	client := metaclient.NewClient(cfg.Meta.APIVersion)
+	client.SetBaseURL(cfg.Meta.GraphBaseURL)
 	updated := 0
 	for _, item := range targets {
 		token, err := cipher.Decrypt(item.TokenEnc)
