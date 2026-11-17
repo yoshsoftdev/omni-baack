@@ -357,6 +357,7 @@ func Run(role Role) {
 
 	reportRepo := report.NewRepository(db)
 	reportService := report.NewService(reportRepo, teamRepo, rbacService)
+	reportService.SetInboxAnalytics(report.NewInboxAnalyticsRepository(db))
 
 	dashboardRepo := dashboard.NewRepository(db)
 	dashboardService := dashboard.NewService(dashboardRepo, teamRepo, workspaceService, rbacService, &dashboardSyncAdapter{channelSyncService})

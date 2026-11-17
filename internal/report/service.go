@@ -13,9 +13,10 @@ import (
 
 // Service (ReportService) provides campaign reporting and dashboard aggregates.
 type Service struct {
-	reports Repository
-	teams   team.Repository
-	rbac    *rbac.Service
+	reports        Repository
+	teams          team.Repository
+	rbac           *rbac.Service
+	inboxAnalytics InboxAnalyticsStore
 }
 
 func NewService(reports Repository, teams team.Repository, rbacSvc *rbac.Service) *Service {

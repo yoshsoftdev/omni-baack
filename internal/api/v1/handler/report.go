@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"strings"
+	"time"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/omnichannel/omni-chan-v2/internal/api/response"
 	"github.com/omnichannel/omni-chan-v2/internal/api/v1/dto"
@@ -121,4 +124,38 @@ func (h *ReportHandler) ListLinkClicks(c *fiber.Ctx) error {
 		return mapError(c, err)
 	}
 	return response.OK(c, "ok", dto.NewPageResponse(page))
+}
+
+// InboxAnalytics: inbox volume, first response and resolution times, and per-agent work (9.3).
+// Query: from, to (RFC3339, at most 92 days), tz (IANA, default UTC), channel_id (optional).
+func (h *ReportHandler) InboxAnalytics(c *fiber.Ctx) error {
+	actor, err := requireActor(c)
+	if err != nil {
+		return response.Unauthorized(c, "unauthorized")
+	}
+	from, err := parseTimeQuery(c, "from")
+	if err != nil {
+		return response.BadRequest(c, "from query must be RFC3339")
+	}
+	to, err := parseTimeQuery(c, "to")
+	if err != nil {
+		return response.BadRequest(c, "to query must be RFC3339")
+	}
+	loc := time.UTC
+	if tz := strings.TrimSpace(c.Query("tz")); tz != "" {
+		if loc, err = time.LoadLocation(tz); err != nil {
+			return response.BadRequest(c, "tz must be an IANA time zone, e.g. Asia/Jakarta")
+		}
+	}
+	channelID, err := optionalUUIDQuery(c, "channel_id")
+	if err != nil {
+		return response.BadRequest(c, "invalid channel_id")
+	}
+	out, err := h.svc.GetInboxAnalytics(c.Context(), actor.TeamID, actor.UserID, actor.Role, report.InboxAnalyticsQuery{
+		From: from, To: to, Location: loc, ChannelID: channelID,
+	})
+	if err != nil {
+		return mapError(c, err)
+	}
+	return response.OK(c, "ok", out)
 }

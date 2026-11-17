@@ -247,6 +247,7 @@ func Register(router fiber.Router, deps Deps) {
 		reports := protected.Group("/reports")
 		reports.Get("/dashboard", deps.Report.Dashboard)
 		reports.Get("/daily", deps.Report.DailyTrend)
+		reports.Get("/inbox", deps.Report.InboxAnalytics)
 		reports.Get("/campaigns", deps.Report.ListCampaigns)
 		reports.Get("/campaigns/:id", deps.Report.GetCampaign)
 		reports.Get("/campaigns/:id/clicks", deps.Report.ListLinkClicks)
